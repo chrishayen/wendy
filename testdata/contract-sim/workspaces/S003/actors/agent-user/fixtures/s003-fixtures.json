@@ -1,0 +1,338 @@
+{
+  "scenario_id": "S003",
+  "actor": "agent-user",
+  "fixture_branches": [
+    {
+      "id": "queued_cancel_branch",
+      "starts_after": "public_invoke_async_ok",
+      "observable_state": "public invocation response returned a cancel link before the job reached running state"
+    },
+    {
+      "id": "succeeded_artifact_branch",
+      "starts_after": "public_invoke_async_ok",
+      "observable_state": "public status polling reaches succeeded and returns artifact links"
+    }
+  ],
+  "fixtures": [
+    {
+      "id": "public_tools_list_ok",
+      "request": {
+        "method": "GET",
+        "path": "/v1/tools",
+        "headers": {"Authorization": "Bearer token_s003_agent"}
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "ok": true,
+          "data": {
+            "items": [
+              {
+                "id": "cap_image_generate_gpu",
+                "name": "GPU image generation",
+                "description": "Generate an image using a GPU-backed provider.",
+                "execution_mode": "async",
+                "input_schema": {
+                  "type": "object",
+                  "required": ["prompt"],
+                  "properties": {
+                    "prompt": {"type": "string"},
+                    "width": {"type": "integer"},
+                    "height": {"type": "integer"},
+                    "seed": {"type": "integer"}
+                  }
+                },
+                "output_schema": {
+                  "type": "object",
+                  "properties": {
+                    "artifact_refs": {"type": "array", "items": {"type": "string"}}
+                  }
+                },
+                "resource_hints": [{"selector": "gpu", "required": true}],
+                "artifact_hints": [{"media_type": "image/png", "count": "one"}],
+                "links": {
+                  "invoke": {"method": "POST", "href": "/v1/tools/cap_image_generate_gpu/invoke", "description": "Invoke tool.", "idempotency": "required", "side_effects": "external"},
+                  "details": {"method": "GET", "href": "/v1/tools/cap_image_generate_gpu", "description": "Read tool details.", "idempotency": "none", "side_effects": "read"}
+                }
+              }
+            ],
+            "next_cursor": null
+          },
+          "links": {},
+          "meta": {"request_id": "req_s003_tools_list", "schema_version": "v1"}
+        }
+      }
+    },
+    {
+      "id": "public_tool_detail_ok",
+      "request": {
+        "method": "GET",
+        "path": "/v1/tools/cap_image_generate_gpu",
+        "headers": {"Authorization": "Bearer token_s003_agent"}
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "ok": true,
+          "data": {
+            "id": "cap_image_generate_gpu",
+            "name": "GPU image generation",
+            "description": "Generate an image using a GPU-backed provider.",
+            "execution_mode": "async",
+            "input_schema": {
+              "type": "object",
+              "required": ["prompt"],
+              "properties": {
+                "prompt": {"type": "string"},
+                "width": {"type": "integer"},
+                "height": {"type": "integer"},
+                "seed": {"type": "integer"}
+              }
+            },
+            "output_schema": {
+              "type": "object",
+              "properties": {
+                "artifact_refs": {"type": "array", "items": {"type": "string"}}
+              }
+            },
+            "resource_hints": [{"selector": "gpu", "required": true}],
+            "artifact_hints": [{"media_type": "image/png", "count": "one"}],
+            "links": {
+              "invoke": {"method": "POST", "href": "/v1/tools/cap_image_generate_gpu/invoke", "description": "Invoke tool.", "idempotency": "required", "side_effects": "external"},
+              "details": {"method": "GET", "href": "/v1/tools/cap_image_generate_gpu", "description": "Read tool details.", "idempotency": "none", "side_effects": "read"}
+            }
+          },
+          "links": {},
+          "meta": {"request_id": "req_s003_tool_detail", "schema_version": "v1"}
+        }
+      }
+    },
+    {
+      "id": "public_invoke_async_ok",
+      "request": {
+        "method": "POST",
+        "path": "/v1/tools/cap_image_generate_gpu/invoke",
+        "headers": {
+          "Authorization": "Bearer token_s003_agent",
+          "Idempotency-Key": "idem_s003_0001",
+          "Content-Type": "application/json"
+        },
+        "body": {
+          "input": {
+            "prompt": "a clean product photo of a red ceramic mug",
+            "width": 1024,
+            "height": 1024
+          },
+          "preferred_mode": "async",
+          "dry_run": false
+        }
+      },
+      "response": {
+        "status": 202,
+        "body": {
+          "ok": true,
+          "data": {"mode": "async", "job_id": "job_s003_0001"},
+          "links": {
+            "status": {"method": "GET", "href": "/v1/agent/jobs/job_s003_0001", "description": "Read job status.", "idempotency": "none", "side_effects": "read"},
+            "cancel": {"method": "POST", "href": "/v1/agent/jobs/job_s003_0001/cancel", "description": "Cancel job.", "idempotency": "required", "side_effects": "write"},
+            "logs": {"method": "GET", "href": "/v1/agent/jobs/job_s003_0001/logs", "description": "Read logs.", "idempotency": "none", "side_effects": "read"},
+            "artifacts": {"method": "GET", "href": "/v1/agent/jobs/job_s003_0001/artifacts", "description": "List artifacts.", "idempotency": "none", "side_effects": "read"}
+          },
+          "meta": {"request_id": "req_s003_invoke", "schema_version": "v1"}
+        }
+      }
+    },
+    {
+      "id": "public_cancel_queued_ok",
+      "request": {
+        "method": "POST",
+        "path": "/v1/agent/jobs/job_s003_0001/cancel",
+        "headers": {
+          "Authorization": "Bearer token_s003_agent",
+          "Idempotency-Key": "idem_s003_cancel_queued"
+        },
+        "precondition": "queued_cancel_branch"
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "ok": true,
+          "data": {
+            "job_id": "job_s003_0001",
+            "state": "canceled",
+            "created_at": "2026-06-05T20:00:00Z",
+            "updated_at": "2026-06-05T20:00:01Z",
+            "status_message": "canceled by requester",
+            "input_summary": {"prompt_present": true, "width": 1024, "height": 1024},
+            "artifact_refs": [],
+            "log_cursor": null,
+            "terminal_error": {"code": "canceled", "message": "canceled by requester", "retryable": false},
+            "links": {}
+          },
+          "links": {},
+          "meta": {"request_id": "req_s003_agent_cancel_queued", "schema_version": "v1"}
+        }
+      }
+    },
+    {
+      "id": "public_job_running",
+      "request": {
+        "method": "GET",
+        "path": "/v1/agent/jobs/job_s003_0001",
+        "headers": {"Authorization": "Bearer token_s003_agent"},
+        "precondition": "succeeded_artifact_branch: public status polling returned running with log_cursor cursor_s003_logs_0001"
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "ok": true,
+          "data": {
+            "job_id": "job_s003_0001",
+            "state": "running",
+            "created_at": "2026-06-05T20:00:00Z",
+            "updated_at": "2026-06-05T20:00:03Z",
+            "status_message": "running",
+            "input_summary": {"prompt_present": true, "width": 1024, "height": 1024},
+            "artifact_refs": [],
+            "log_cursor": "cursor_s003_logs_0001",
+            "terminal_error": null,
+            "links": {
+              "logs": {"method": "GET", "href": "/v1/agent/jobs/job_s003_0001/logs", "description": "Read logs.", "idempotency": "none", "side_effects": "read"},
+              "artifacts": {"method": "GET", "href": "/v1/agent/jobs/job_s003_0001/artifacts", "description": "List artifacts.", "idempotency": "none", "side_effects": "read"}
+            }
+          },
+          "links": {},
+          "meta": {"request_id": "req_s003_agent_job_running", "schema_version": "v1"}
+        }
+      }
+    },
+    {
+      "id": "public_job_succeeded",
+      "request": {
+        "method": "GET",
+        "path": "/v1/agent/jobs/job_s003_0001",
+        "headers": {"Authorization": "Bearer token_s003_agent"},
+        "precondition": "succeeded_artifact_branch after public status polling reaches succeeded"
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "ok": true,
+          "data": {
+            "job_id": "job_s003_0001",
+            "state": "succeeded",
+            "created_at": "2026-06-05T20:00:00Z",
+            "updated_at": "2026-06-05T20:00:46Z",
+            "status_message": "completed",
+            "input_summary": {"prompt_present": true, "width": 1024, "height": 1024},
+            "artifact_refs": ["art_s003_0001"],
+            "log_cursor": "cursor_s003_logs_0002",
+            "terminal_error": null,
+            "links": {
+              "logs": {"method": "GET", "href": "/v1/agent/jobs/job_s003_0001/logs", "description": "Read logs.", "idempotency": "none", "side_effects": "read"},
+              "artifacts": {"method": "GET", "href": "/v1/agent/jobs/job_s003_0001/artifacts", "description": "List artifacts.", "idempotency": "none", "side_effects": "read"}
+            }
+          },
+          "links": {},
+          "meta": {"request_id": "req_s003_agent_job", "schema_version": "v1"}
+        }
+      }
+    },
+    {
+      "id": "public_logs_first_page",
+      "request": {
+        "method": "GET",
+        "path": "/v1/agent/jobs/job_s003_0001/logs",
+        "headers": {"Authorization": "Bearer token_s003_agent"},
+        "query": {"cursor": "cursor_s003_logs_0001", "limit": "50"},
+        "precondition": "public_job_running returned log_cursor cursor_s003_logs_0001"
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "ok": true,
+          "data": {
+            "items": [
+              {"timestamp": "2026-06-05T20:00:01Z", "level": "info", "message": "job accepted", "fields": {}},
+              {"timestamp": "2026-06-05T20:00:03Z", "level": "info", "message": "job running", "fields": {}}
+            ],
+            "next_cursor": "cursor_s003_logs_0002"
+          },
+          "links": {},
+          "meta": {"request_id": "req_s003_agent_logs", "schema_version": "v1"}
+        }
+      }
+    },
+    {
+      "id": "public_logs_final_page",
+      "request": {
+        "method": "GET",
+        "path": "/v1/agent/jobs/job_s003_0001/logs",
+        "headers": {"Authorization": "Bearer token_s003_agent"},
+        "query": {"cursor": "cursor_s003_logs_0002", "limit": "50"},
+        "precondition": "public_logs_first_page returned next_cursor cursor_s003_logs_0002"
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "ok": true,
+          "data": {"items": [], "next_cursor": null},
+          "links": {},
+          "meta": {"request_id": "req_s003_agent_logs_final", "schema_version": "v1"}
+        }
+      }
+    },
+    {
+      "id": "public_artifact_list_ok",
+      "request": {
+        "method": "GET",
+        "path": "/v1/agent/jobs/job_s003_0001/artifacts",
+        "headers": {"Authorization": "Bearer token_s003_agent"},
+        "precondition": "public_job_succeeded returned an artifacts link"
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "ok": true,
+          "data": {
+            "items": [
+              {
+                "artifact_id": "art_s003_0001",
+                "name": "job_s003_0001.png",
+                "media_type": "image/png",
+                "size": 68,
+                "checksum": "sha256:4b5c5c92cec3b23e6a294fc0eea43234ef5126c5a64f4c6c531ac8430ab0b844",
+                "created_at": "2026-06-05T20:00:45Z",
+                "producer_ref": "job_s003_0001",
+                "links": {
+                  "content": {"method": "GET", "href": "/v1/artifacts/art_s003_0001/content", "description": "Read artifact content.", "idempotency": "none", "side_effects": "read"}
+                }
+              }
+            ],
+            "next_cursor": null
+          },
+          "links": {},
+          "meta": {"request_id": "req_s003_agent_artifacts", "schema_version": "v1"}
+        }
+      }
+    },
+    {
+      "id": "public_artifact_content_ok",
+      "request": {
+        "method": "GET",
+        "path": "/v1/artifacts/art_s003_0001/content",
+        "headers": {"Authorization": "Bearer token_s003_agent"},
+        "precondition": "public_artifact_list_ok returned a content link for art_s003_0001"
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "Content-Type": "image/png",
+          "Content-Length": "68",
+          "Digest": "sha-256=S1xcks7Dsj5qKU/A7qQyNO9RJsWmT0xsUxrIQwqwuEQ="
+        },
+        "body_fixture": "artifact_png_s003_0001.base64"
+      }
+    }
+  ]
+}

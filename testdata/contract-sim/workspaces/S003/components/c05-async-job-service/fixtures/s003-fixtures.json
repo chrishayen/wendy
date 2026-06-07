@@ -1,0 +1,1549 @@
+{
+  "scenario_id": "S003",
+  "component": "c05-async-job-service",
+  "fixtures": [
+    {
+      "id": "job_policy_context_queued",
+      "request": {
+        "method": "GET",
+        "path": "/v1/jobs/job_s003_0001/policy-context",
+        "headers": {"Authorization": "Bearer token_s003_gateway"},
+        "precondition": "job_s003_0001 is queued"
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "ok": true,
+          "data": {
+            "resource_kind": "job",
+            "job_id": "job_s003_0001",
+            "owner_subject_id": "sub_agent_s003",
+            "requester_id": "sub_agent_s003",
+            "job_state": "queued",
+            "policy_state": "active"
+          },
+          "links": {},
+          "meta": {"request_id": "req_s003_job_policy_context", "schema_version": "v1"}
+        }
+      }
+    },
+    {
+      "id": "job_policy_context_running",
+      "request": {
+        "method": "GET",
+        "path": "/v1/jobs/job_s003_0001/policy-context",
+        "headers": {"Authorization": "Bearer token_s003_gateway"},
+        "precondition": "job_s003_0001 is running"
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "ok": true,
+          "data": {
+            "resource_kind": "job",
+            "job_id": "job_s003_0001",
+            "owner_subject_id": "sub_agent_s003",
+            "requester_id": "sub_agent_s003",
+            "job_state": "running",
+            "policy_state": "active"
+          },
+          "links": {},
+          "meta": {"request_id": "req_s003_job_policy_context_running", "schema_version": "v1"}
+        }
+      }
+    },
+    {
+      "id": "job_policy_context_succeeded",
+      "request": {
+        "method": "GET",
+        "path": "/v1/jobs/job_s003_0001/policy-context",
+        "headers": {"Authorization": "Bearer token_s003_gateway"},
+        "precondition": "job_s003_0001 is succeeded"
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "ok": true,
+          "data": {
+            "resource_kind": "job",
+            "job_id": "job_s003_0001",
+            "owner_subject_id": "sub_agent_s003",
+            "requester_id": "sub_agent_s003",
+            "job_state": "succeeded",
+            "policy_state": "terminal"
+          },
+          "links": {},
+          "meta": {"request_id": "req_s003_job_policy_context_succeeded", "schema_version": "v1"}
+        }
+      }
+    },
+    {
+      "id": "job_logs_final_page",
+      "request": {
+        "method": "GET",
+        "path": "/v1/jobs/job_s003_0001/logs",
+        "headers": {"Authorization": "Bearer token_s003_gateway"},
+        "query": {"cursor": "cursor_s003_logs_0002", "limit": "50"},
+        "precondition": "req_s003_job_logs_read returned next_cursor cursor_s003_logs_0002 and no later happy-path log exists"
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "ok": true,
+          "data": {"items": [], "next_cursor": null},
+          "links": {},
+          "meta": {"request_id": "req_s003_job_logs_final", "schema_version": "v1"}
+        }
+      }
+    },
+    {
+      "id": "agent_projection_queued",
+      "request": {
+        "method": "GET",
+        "path": "/v1/jobs/job_s003_0001/agent-projection",
+        "headers": {"Authorization": "Bearer token_s003_gateway"},
+        "precondition": "job_s003_0001 is queued"
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "ok": true,
+          "data": {
+            "job_id": "job_s003_0001",
+            "state": "queued",
+            "created_at": "2026-06-05T20:00:00Z",
+            "updated_at": "2026-06-05T20:00:00Z",
+            "status_message": null,
+            "input_summary": {"prompt_present": true, "width": 1024, "height": 1024},
+            "artifact_refs": [],
+            "log_cursor": null,
+            "terminal_error": null,
+            "links": {}
+          },
+          "links": {},
+          "meta": {"request_id": "req_s003_agent_job_queued", "schema_version": "v1"}
+        }
+      }
+    },
+    {
+      "id": "agent_projection_running",
+      "request": {
+        "method": "GET",
+        "path": "/v1/jobs/job_s003_0001/agent-projection",
+        "headers": {"Authorization": "Bearer token_s003_gateway"},
+        "precondition": "job_s003_0001 is running"
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "ok": true,
+          "data": {
+            "job_id": "job_s003_0001",
+            "state": "running",
+            "created_at": "2026-06-05T20:00:00Z",
+            "updated_at": "2026-06-05T20:00:03Z",
+            "status_message": "running",
+            "input_summary": {"prompt_present": true, "width": 1024, "height": 1024},
+            "artifact_refs": [],
+            "log_cursor": "cursor_s003_logs_0001",
+            "terminal_error": null,
+            "links": {}
+          },
+          "links": {},
+          "meta": {"request_id": "req_s003_agent_job_running", "schema_version": "v1"}
+        }
+      }
+    },
+    {
+      "id": "agent_projection_canceled",
+      "request": {
+        "method": "GET",
+        "path": "/v1/jobs/job_s003_0001/agent-projection",
+        "headers": {"Authorization": "Bearer token_s003_gateway"},
+        "precondition": "job_s003_0001 is canceled"
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "ok": true,
+          "data": {
+            "job_id": "job_s003_0001",
+            "state": "canceled",
+            "created_at": "2026-06-05T20:00:00Z",
+            "updated_at": "2026-06-05T20:00:01Z",
+            "status_message": "canceled by requester",
+            "input_summary": {"prompt_present": true, "width": 1024, "height": 1024},
+            "artifact_refs": [],
+            "log_cursor": null,
+            "terminal_error": {"code": "canceled", "message": "canceled by requester", "retryable": false},
+            "links": {}
+          },
+          "links": {},
+          "meta": {"request_id": "req_s003_agent_job_canceled", "schema_version": "v1"}
+        }
+      }
+    },
+    {
+      "id": "agent_projection_succeeded",
+      "request": {
+        "method": "GET",
+        "path": "/v1/jobs/job_s003_0001/agent-projection",
+        "headers": {"Authorization": "Bearer token_s003_gateway"},
+        "precondition": "checkpoint_after_completion"
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "ok": true,
+          "data": {
+            "job_id": "job_s003_0001",
+            "state": "succeeded",
+            "created_at": "2026-06-05T20:00:00Z",
+            "updated_at": "2026-06-05T20:00:46Z",
+            "status_message": "completed",
+            "input_summary": {"prompt_present": true, "width": 1024, "height": 1024},
+            "artifact_refs": ["art_s003_0001"],
+            "log_cursor": "cursor_s003_logs_0002",
+            "terminal_error": null,
+            "links": {}
+          },
+          "links": {},
+          "meta": {"request_id": "req_s003_agent_job", "schema_version": "v1"}
+        }
+      }
+    },
+    {
+      "id": "job_log_provider_failure",
+      "request": {
+        "method": "POST",
+        "path": "/v1/jobs/job_s003_0001/logs",
+        "headers": {"Authorization": "Bearer token_s003_runner"},
+	        "body": {
+	          "worker_id": "runner_s003_0001",
+	          "entries": [
+	            {"timestamp": "2026-06-05T20:00:08Z", "level": "error", "message": "provider invocation failed", "fields": {"code": "provider_unavailable"}}
+	          ]
+	        },
+	        "precondition": "provider_backend_down_before_invoke branch after runner observes provider_unavailable"
+	      },
+      "response": {
+        "status": 200,
+        "body": {
+          "ok": true,
+          "data": {
+            "items": [
+              {"timestamp": "2026-06-05T20:00:08Z", "level": "error", "message": "provider invocation failed", "fields": {"code": "provider_unavailable"}}
+            ],
+            "next_cursor": "cursor_s003_logs_provider_failure"
+          },
+          "links": {},
+          "meta": {"request_id": "req_s003_job_log_provider_failure", "schema_version": "v1"}
+        }
+      }
+    },
+    {
+      "id": "job_fail_provider_unavailable",
+      "request": {
+        "method": "POST",
+        "path": "/v1/jobs/job_s003_0001/fail",
+        "headers": {"Authorization": "Bearer token_s003_runner"},
+	        "body": {
+	          "worker_id": "runner_s003_0001",
+	          "error": {"code": "provider_unavailable", "message": "ComfyUI backend is unavailable", "retryable": true}
+	        },
+	        "precondition": "job_log_provider_failure appended diagnostic log and active worker claim remains valid"
+	      },
+      "response": {
+        "status": 200,
+        "body": {
+          "ok": true,
+          "data": {
+            "job_id": "job_s003_0001",
+            "state": "failed",
+            "updated_at": "2026-06-05T20:00:08Z",
+            "status_message": "ComfyUI backend is unavailable",
+            "artifact_refs": [],
+            "terminal_error": {"code": "provider_unavailable", "message": "ComfyUI backend is unavailable", "retryable": true},
+            "links": {}
+          },
+          "links": {},
+          "meta": {"request_id": "req_s003_job_fail_provider", "schema_version": "v1"}
+        }
+      }
+    },
+    {
+      "id": "job_log_provider_timeout",
+      "request": {
+        "method": "POST",
+        "path": "/v1/jobs/job_s003_0001/logs",
+        "headers": {"Authorization": "Bearer token_s003_runner"},
+	        "body": {
+	          "worker_id": "runner_s003_0001",
+	          "entries": [
+	            {"timestamp": "2026-06-05T20:15:08Z", "level": "error", "message": "provider invocation timed out", "fields": {"code": "provider_timeout"}}
+	          ]
+	        },
+	        "precondition": "provider_generation_exceeds_timeout branch after timeout liveness heartbeats kept C05 claim active"
+	      },
+      "response": {
+        "status": 200,
+        "body": {
+          "ok": true,
+          "data": {
+            "items": [
+              {"timestamp": "2026-06-05T20:15:08Z", "level": "error", "message": "provider invocation timed out", "fields": {"code": "provider_timeout"}}
+            ],
+            "next_cursor": "cursor_s003_logs_provider_timeout"
+          },
+          "links": {},
+          "meta": {"request_id": "req_s003_job_log_provider_timeout", "schema_version": "v1"}
+        }
+      }
+    },
+    {
+      "id": "job_fail_provider_timeout",
+      "request": {
+        "method": "POST",
+        "path": "/v1/jobs/job_s003_0001/fail",
+        "headers": {"Authorization": "Bearer token_s003_runner"},
+	        "body": {
+	          "worker_id": "runner_s003_0001",
+	          "error": {"code": "provider_timeout", "message": "provider invocation timed out", "retryable": true}
+	        },
+	        "precondition": "job_log_provider_timeout appended diagnostic log and active worker claim remains valid"
+	      },
+      "response": {
+        "status": 200,
+        "body": {
+          "ok": true,
+          "data": {
+            "job_id": "job_s003_0001",
+            "state": "failed",
+            "updated_at": "2026-06-05T20:15:08Z",
+            "status_message": "provider invocation timed out",
+            "artifact_refs": [],
+            "terminal_error": {"code": "provider_timeout", "message": "provider invocation timed out", "retryable": true},
+            "links": {}
+          },
+          "links": {},
+          "meta": {"request_id": "req_s003_job_fail_provider_timeout", "schema_version": "v1"}
+        }
+      }
+    },
+    {
+      "id": "job_create_ok",
+      "request": {
+        "method": "POST",
+        "path": "/v1/jobs",
+        "headers": {
+          "Authorization": "Bearer token_s003_gateway",
+          "Idempotency-Key": "idem_s003_c05_create_job"
+        },
+        "body": {
+          "requester_id": "sub_agent_s003",
+          "capability_id": "cap_image_generate_gpu",
+          "input_summary": {"prompt_present": true, "width": 1024, "height": 1024},
+          "metadata": {
+            "execution_plan": {
+              "capability_id": "cap_image_generate_gpu",
+              "subject_id": "sub_agent_s003",
+              "input": {
+                "prompt": "a clean product photo of a red ceramic mug",
+                "width": 1024,
+                "height": 1024
+              },
+              "route": {
+                "capability_id": "cap_image_generate_gpu",
+                "service_id": "svc_comfyui_gpu",
+                "provider_endpoint": "http://node_linux_gpu:8188",
+                "provider_health_path": "/v1/provider/health",
+                "provider_invoke_path": "/v1/provider/capabilities/cap_image_generate_gpu/invoke",
+                "node_id": "node_linux_gpu",
+                "node_managed": true,
+                "service_start_mode": "on_demand",
+                "resource_hints": [{"selector": "gpu", "required": true, "quantity": 1}],
+                "artifact_hints": [{"media_type": "image/png", "count": "one"}]
+              },
+              "resource_selector": "gpu",
+              "timeout_seconds": 900,
+              "artifact_hints": [{"media_type": "image/png", "count": "one"}],
+              "provider_context": {}
+            }
+          }
+        }
+      },
+      "response": {
+        "status": 201,
+        "body": {
+          "ok": true,
+          "data": {
+            "job_id": "job_s003_0001",
+            "state": "queued",
+            "created_at": "2026-06-05T20:00:00Z",
+            "updated_at": "2026-06-05T20:00:00Z",
+            "input_summary": {"prompt_present": true, "width": 1024, "height": 1024},
+            "metadata": {
+              "execution_plan": {
+                "capability_id": "cap_image_generate_gpu",
+                "subject_id": "sub_agent_s003",
+                "input": {
+                  "prompt": "a clean product photo of a red ceramic mug",
+                  "width": 1024,
+                  "height": 1024
+                },
+                "route": {
+                  "capability_id": "cap_image_generate_gpu",
+                  "service_id": "svc_comfyui_gpu",
+                  "provider_endpoint": "http://node_linux_gpu:8188",
+                  "provider_health_path": "/v1/provider/health",
+                  "provider_invoke_path": "/v1/provider/capabilities/cap_image_generate_gpu/invoke",
+                  "node_id": "node_linux_gpu",
+                  "node_managed": true,
+                  "service_start_mode": "on_demand",
+                  "resource_hints": [{"selector": "gpu", "required": true, "quantity": 1}],
+                  "artifact_hints": [{"media_type": "image/png", "count": "one"}]
+                },
+                "resource_selector": "gpu",
+                "timeout_seconds": 900,
+                "artifact_hints": [{"media_type": "image/png", "count": "one"}],
+                "provider_context": {}
+              }
+            },
+            "resource_refs": [],
+            "artifact_refs": [],
+            "log_cursor": null,
+            "terminal_error": null,
+            "links": {}
+          },
+          "links": {},
+          "meta": {"request_id": "req_s003_job_create", "schema_version": "v1"}
+        }
+      }
+    },
+    {
+      "id": "job_create_idempotency_replay",
+      "request": {
+        "method": "POST",
+        "path": "/v1/jobs",
+        "headers": {
+          "Authorization": "Bearer token_s003_gateway",
+          "Idempotency-Key": "idem_s003_c05_create_job"
+        },
+        "body": {
+          "requester_id": "sub_agent_s003",
+          "capability_id": "cap_image_generate_gpu",
+          "input_summary": {"prompt_present": true, "width": 1024, "height": 1024},
+          "metadata": {
+            "execution_plan": {
+              "capability_id": "cap_image_generate_gpu",
+              "subject_id": "sub_agent_s003",
+              "input": {
+                "prompt": "a clean product photo of a red ceramic mug",
+                "width": 1024,
+                "height": 1024
+              },
+              "route": {
+                "capability_id": "cap_image_generate_gpu",
+                "service_id": "svc_comfyui_gpu",
+                "provider_endpoint": "http://node_linux_gpu:8188",
+                "provider_health_path": "/v1/provider/health",
+                "provider_invoke_path": "/v1/provider/capabilities/cap_image_generate_gpu/invoke",
+                "node_id": "node_linux_gpu",
+                "node_managed": true,
+                "service_start_mode": "on_demand",
+                "resource_hints": [{"selector": "gpu", "required": true, "quantity": 1}],
+                "artifact_hints": [{"media_type": "image/png", "count": "one"}]
+              },
+              "resource_selector": "gpu",
+              "timeout_seconds": 900,
+              "artifact_hints": [{"media_type": "image/png", "count": "one"}],
+              "provider_context": {}
+            }
+          }
+        },
+        "precondition": "same idempotency key and equivalent create body already created job_s003_0001"
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "ok": true,
+          "data": {
+            "job_id": "job_s003_0001",
+            "state": "queued",
+            "created_at": "2026-06-05T20:00:00Z",
+            "updated_at": "2026-06-05T20:00:00Z",
+            "input_summary": {"prompt_present": true, "width": 1024, "height": 1024},
+            "metadata": {
+              "execution_plan": {
+                "capability_id": "cap_image_generate_gpu",
+                "subject_id": "sub_agent_s003",
+                "input": {
+                  "prompt": "a clean product photo of a red ceramic mug",
+                  "width": 1024,
+                  "height": 1024
+                },
+                "route": {
+                  "capability_id": "cap_image_generate_gpu",
+                  "service_id": "svc_comfyui_gpu",
+                  "provider_endpoint": "http://node_linux_gpu:8188",
+                  "provider_health_path": "/v1/provider/health",
+                  "provider_invoke_path": "/v1/provider/capabilities/cap_image_generate_gpu/invoke",
+                  "node_id": "node_linux_gpu",
+                  "node_managed": true,
+                  "service_start_mode": "on_demand",
+                  "resource_hints": [{"selector": "gpu", "required": true, "quantity": 1}],
+                  "artifact_hints": [{"media_type": "image/png", "count": "one"}]
+                },
+                "resource_selector": "gpu",
+                "timeout_seconds": 900,
+                "artifact_hints": [{"media_type": "image/png", "count": "one"}],
+                "provider_context": {}
+              }
+            },
+            "resource_refs": [],
+            "artifact_refs": [],
+            "log_cursor": null,
+            "terminal_error": null,
+            "links": {}
+          },
+          "links": {},
+          "meta": {"request_id": "req_s003_job_create_replay", "schema_version": "v1"}
+        }
+      }
+    },
+    {
+      "id": "job_create_idempotency_conflict",
+      "request": {
+        "method": "POST",
+        "path": "/v1/jobs",
+        "headers": {
+          "Authorization": "Bearer token_s003_gateway",
+          "Idempotency-Key": "idem_s003_c05_create_job"
+        },
+        "body": {
+          "requester_id": "sub_agent_s003",
+          "capability_id": "cap_image_generate_gpu",
+          "input_summary": {"prompt_present": true, "width": 512, "height": 512},
+          "metadata": {
+            "execution_plan": {
+              "capability_id": "cap_image_generate_gpu",
+              "subject_id": "sub_agent_s003",
+              "input": {"prompt": "different prompt", "width": 512, "height": 512},
+              "route": {"capability_id": "cap_image_generate_gpu", "service_id": "svc_comfyui_gpu"},
+              "resource_selector": "gpu",
+              "timeout_seconds": 900
+            }
+          }
+        },
+        "precondition": "same idempotency key already used for different create body"
+      },
+      "response": {
+        "status": 409,
+        "body": {
+          "ok": false,
+          "error": {"code": "idempotency_conflict", "message": "idempotency key was reused with different job content", "retryable": false},
+          "links": {},
+          "meta": {"request_id": "req_s003_job_idempotency_conflict", "schema_version": "v1"}
+        }
+      }
+    },
+    {
+      "id": "job_claim_ok",
+      "request": {
+        "method": "POST",
+        "path": "/v1/jobs/job_s003_0001/claim",
+        "headers": {"Authorization": "Bearer token_s003_runner"},
+        "body": {"worker_id": "runner_s003_0001", "lease_seconds": 60}
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "ok": true,
+          "data": {
+            "job_id": "job_s003_0001",
+            "state": "claimed",
+            "created_at": "2026-06-05T20:00:00Z",
+            "updated_at": "2026-06-05T20:00:01Z",
+            "claim": {
+              "worker_id": "runner_s003_0001",
+              "claimed_at": "2026-06-05T20:00:01Z",
+              "expires_at": "2026-06-05T20:01:01Z"
+            },
+            "metadata": {
+              "execution_plan": {
+                "capability_id": "cap_image_generate_gpu",
+                "subject_id": "sub_agent_s003",
+                "input": {
+                  "prompt": "a clean product photo of a red ceramic mug",
+                  "width": 1024,
+                  "height": 1024
+                },
+                "route": {
+                  "capability_id": "cap_image_generate_gpu",
+                  "service_id": "svc_comfyui_gpu",
+                  "provider_endpoint": "http://node_linux_gpu:8188",
+                  "provider_health_path": "/v1/provider/health",
+                  "provider_invoke_path": "/v1/provider/capabilities/cap_image_generate_gpu/invoke",
+                  "node_id": "node_linux_gpu",
+                  "node_managed": true,
+                  "service_start_mode": "on_demand",
+                  "resource_hints": [{"selector": "gpu", "required": true, "quantity": 1}],
+                  "artifact_hints": [{"media_type": "image/png", "count": "one"}]
+                },
+                "resource_selector": "gpu",
+                "timeout_seconds": 900,
+                "artifact_hints": [{"media_type": "image/png", "count": "one"}],
+                "provider_context": {}
+              }
+            },
+            "artifact_refs": [],
+            "log_cursor": null,
+            "terminal_error": null,
+            "links": {}
+          },
+          "links": {},
+          "meta": {"request_id": "req_s003_job_claim", "schema_version": "v1"}
+        }
+      }
+    },
+    {
+      "id": "job_heartbeat_running",
+      "request": {
+        "method": "POST",
+        "path": "/v1/jobs/job_s003_0001/heartbeat",
+        "headers": {"Authorization": "Bearer token_s003_runner"},
+        "body": {
+          "worker_id": "runner_s003_0001",
+          "transition_to": "running",
+          "status_message": "running provider invocation"
+        }
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "ok": true,
+          "data": {
+            "job_id": "job_s003_0001",
+            "state": "running",
+            "updated_at": "2026-06-05T20:00:03Z",
+            "status_message": "running provider invocation",
+            "claim": {
+              "worker_id": "runner_s003_0001",
+              "claimed_at": "2026-06-05T20:00:01Z",
+              "expires_at": "2026-06-05T20:01:03Z"
+            },
+            "artifact_refs": [],
+            "log_cursor": "cursor_s003_logs_0001",
+            "terminal_error": null,
+            "links": {}
+          },
+          "links": {},
+          "meta": {"request_id": "req_s003_job_heartbeat_running", "schema_version": "v1"}
+        }
+      }
+    },
+    {
+      "id": "job_heartbeat_waiting_for_gpu_lease",
+      "request": {
+        "method": "POST",
+        "path": "/v1/jobs/job_s003_0001/heartbeat",
+        "headers": {"Authorization": "Bearer token_s003_runner"},
+        "body": {
+          "worker_id": "runner_s003_0001",
+          "status_message": "waiting for gpu lease"
+        }
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "ok": true,
+          "data": {
+            "job_id": "job_s003_0001",
+            "state": "claimed",
+            "updated_at": "2026-06-05T20:00:02Z",
+            "status_message": "waiting for gpu lease",
+            "claim": {
+              "worker_id": "runner_s003_0001",
+              "claimed_at": "2026-06-05T20:00:01Z",
+              "expires_at": "2026-06-05T20:01:02Z"
+            },
+            "artifact_refs": [],
+            "log_cursor": null,
+            "terminal_error": null,
+            "links": {}
+          },
+          "links": {},
+          "meta": {"request_id": "req_s003_job_heartbeat_waiting", "schema_version": "v1"}
+        }
+      }
+    },
+    {
+      "id": "job_heartbeat_provider_timeout_liveness",
+      "event_list": {
+        "schema_version": "event-list.v1",
+        "replay_kind": "deterministic_request_response_sequence",
+        "ordered": true,
+        "precondition": "job_s003_0001 is running and claimed by runner_s003_0001 before provider timeout wait",
+        "purpose": "Keep the C05 job claim writable during the 900-second provider timeout branch.",
+        "request_template": {
+          "method": "POST",
+          "path": "/v1/jobs/job_s003_0001/heartbeat",
+          "headers": {"Authorization": "Bearer token_s003_runner"},
+          "body": {"worker_id": "runner_s003_0001", "status_message": "waiting for provider completion"}
+        },
+        "response_template": {
+          "status": 200,
+          "body": {
+            "ok": true,
+            "data": {
+              "job_id": "job_s003_0001",
+              "state": "running",
+              "updated_at": "${timestamp}",
+              "status_message": "waiting for provider completion",
+	              "claim": {
+	                "worker_id": "runner_s003_0001",
+	                "claimed_at": "2026-06-05T20:00:01Z",
+	                "expires_at": "${expires_at}"
+	              },
+	              "artifact_refs": [],
+	              "log_cursor": "cursor_s003_logs_0002",
+	              "terminal_error": null,
+	              "links": {}
+            },
+            "links": {},
+            "meta": {"request_id": "${request_id}", "schema_version": "v1"}
+          }
+        },
+        "event_fields": ["timestamp", "request_id", "expires_at"],
+        "state_transition": "each event refreshes the C05 claim to expires_at and keeps job state running",
+        "events": [
+          {"timestamp": "2026-06-05T20:00:37Z", "request_id": "req_s003_job_heartbeat_provider_timeout_0001", "expires_at": "2026-06-05T20:01:37Z"},
+          {"timestamp": "2026-06-05T20:01:07Z", "request_id": "req_s003_job_heartbeat_provider_timeout_0002", "expires_at": "2026-06-05T20:02:07Z"},
+          {"timestamp": "2026-06-05T20:01:37Z", "request_id": "req_s003_job_heartbeat_provider_timeout_0003", "expires_at": "2026-06-05T20:02:37Z"},
+          {"timestamp": "2026-06-05T20:02:07Z", "request_id": "req_s003_job_heartbeat_provider_timeout_0004", "expires_at": "2026-06-05T20:03:07Z"},
+          {"timestamp": "2026-06-05T20:02:37Z", "request_id": "req_s003_job_heartbeat_provider_timeout_0005", "expires_at": "2026-06-05T20:03:37Z"},
+          {"timestamp": "2026-06-05T20:03:07Z", "request_id": "req_s003_job_heartbeat_provider_timeout_0006", "expires_at": "2026-06-05T20:04:07Z"},
+          {"timestamp": "2026-06-05T20:03:37Z", "request_id": "req_s003_job_heartbeat_provider_timeout_0007", "expires_at": "2026-06-05T20:04:37Z"},
+          {"timestamp": "2026-06-05T20:04:07Z", "request_id": "req_s003_job_heartbeat_provider_timeout_0008", "expires_at": "2026-06-05T20:05:07Z"},
+          {"timestamp": "2026-06-05T20:04:37Z", "request_id": "req_s003_job_heartbeat_provider_timeout_0009", "expires_at": "2026-06-05T20:05:37Z"},
+          {"timestamp": "2026-06-05T20:05:07Z", "request_id": "req_s003_job_heartbeat_provider_timeout_0010", "expires_at": "2026-06-05T20:06:07Z"},
+          {"timestamp": "2026-06-05T20:05:37Z", "request_id": "req_s003_job_heartbeat_provider_timeout_0011", "expires_at": "2026-06-05T20:06:37Z"},
+          {"timestamp": "2026-06-05T20:06:07Z", "request_id": "req_s003_job_heartbeat_provider_timeout_0012", "expires_at": "2026-06-05T20:07:07Z"},
+          {"timestamp": "2026-06-05T20:06:37Z", "request_id": "req_s003_job_heartbeat_provider_timeout_0013", "expires_at": "2026-06-05T20:07:37Z"},
+          {"timestamp": "2026-06-05T20:07:07Z", "request_id": "req_s003_job_heartbeat_provider_timeout_0014", "expires_at": "2026-06-05T20:08:07Z"},
+          {"timestamp": "2026-06-05T20:07:37Z", "request_id": "req_s003_job_heartbeat_provider_timeout_0015", "expires_at": "2026-06-05T20:08:37Z"},
+          {"timestamp": "2026-06-05T20:08:07Z", "request_id": "req_s003_job_heartbeat_provider_timeout_0016", "expires_at": "2026-06-05T20:09:07Z"},
+          {"timestamp": "2026-06-05T20:08:37Z", "request_id": "req_s003_job_heartbeat_provider_timeout_0017", "expires_at": "2026-06-05T20:09:37Z"},
+          {"timestamp": "2026-06-05T20:09:07Z", "request_id": "req_s003_job_heartbeat_provider_timeout_0018", "expires_at": "2026-06-05T20:10:07Z"},
+          {"timestamp": "2026-06-05T20:09:37Z", "request_id": "req_s003_job_heartbeat_provider_timeout_0019", "expires_at": "2026-06-05T20:10:37Z"},
+          {"timestamp": "2026-06-05T20:10:07Z", "request_id": "req_s003_job_heartbeat_provider_timeout_0020", "expires_at": "2026-06-05T20:11:07Z"},
+          {"timestamp": "2026-06-05T20:10:37Z", "request_id": "req_s003_job_heartbeat_provider_timeout_0021", "expires_at": "2026-06-05T20:11:37Z"},
+          {"timestamp": "2026-06-05T20:11:07Z", "request_id": "req_s003_job_heartbeat_provider_timeout_0022", "expires_at": "2026-06-05T20:12:07Z"},
+          {"timestamp": "2026-06-05T20:11:37Z", "request_id": "req_s003_job_heartbeat_provider_timeout_0023", "expires_at": "2026-06-05T20:12:37Z"},
+          {"timestamp": "2026-06-05T20:12:07Z", "request_id": "req_s003_job_heartbeat_provider_timeout_0024", "expires_at": "2026-06-05T20:13:07Z"},
+          {"timestamp": "2026-06-05T20:12:37Z", "request_id": "req_s003_job_heartbeat_provider_timeout_0025", "expires_at": "2026-06-05T20:13:37Z"},
+          {"timestamp": "2026-06-05T20:13:07Z", "request_id": "req_s003_job_heartbeat_provider_timeout_0026", "expires_at": "2026-06-05T20:14:07Z"},
+          {"timestamp": "2026-06-05T20:13:37Z", "request_id": "req_s003_job_heartbeat_provider_timeout_0027", "expires_at": "2026-06-05T20:14:37Z"},
+          {"timestamp": "2026-06-05T20:14:07Z", "request_id": "req_s003_job_heartbeat_provider_timeout_0028", "expires_at": "2026-06-05T20:15:07Z"},
+          {"timestamp": "2026-06-05T20:14:37Z", "request_id": "req_s003_job_heartbeat_provider_timeout_0029", "expires_at": "2026-06-05T20:15:37Z"}
+        ],
+        "resulting_claim_expires_at": "2026-06-05T20:15:37Z"
+      }
+    },
+    {
+      "id": "job_heartbeat_claim_renewed",
+      "request": {
+        "method": "POST",
+        "path": "/v1/jobs/job_s003_0001/heartbeat",
+        "headers": {"Authorization": "Bearer token_s003_runner"},
+        "body": {
+          "worker_id": "runner_s003_0001",
+          "status_message": "monitoring provider invocation"
+        },
+        "precondition": "lease-expiration branch keeps C05 claim alive but sends no C06 heartbeat"
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "ok": true,
+          "data": {
+            "job_id": "job_s003_0001",
+            "state": "running",
+            "updated_at": "2026-06-05T20:00:32Z",
+            "status_message": "monitoring provider invocation",
+            "claim": {
+              "worker_id": "runner_s003_0001",
+              "claimed_at": "2026-06-05T20:00:01Z",
+              "expires_at": "2026-06-05T20:01:32Z"
+            },
+            "artifact_refs": [],
+            "log_cursor": "cursor_s003_logs_0002",
+            "terminal_error": null,
+            "links": {}
+          },
+          "links": {},
+          "meta": {"request_id": "req_s003_job_heartbeat_claim_renewed", "schema_version": "v1"}
+        }
+      }
+    },
+    {
+      "id": "job_log_claimed",
+      "request": {
+        "method": "POST",
+        "path": "/v1/jobs/job_s003_0001/logs",
+        "headers": {"Authorization": "Bearer token_s003_runner"},
+        "body": {
+          "worker_id": "runner_s003_0001",
+          "entries": [
+            {"timestamp": "2026-06-05T20:00:01Z", "level": "info", "message": "claimed job", "fields": {}}
+          ]
+        }
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "ok": true,
+          "data": {
+            "items": [
+              {"timestamp": "2026-06-05T20:00:01Z", "level": "info", "message": "claimed job", "fields": {}}
+            ],
+            "next_cursor": "cursor_s003_logs_0001"
+          },
+          "links": {},
+          "meta": {"request_id": "req_s003_job_log_claimed", "schema_version": "v1"}
+        }
+      }
+    },
+    {
+      "id": "job_log_running",
+      "request": {
+        "method": "POST",
+        "path": "/v1/jobs/job_s003_0001/logs",
+        "headers": {"Authorization": "Bearer token_s003_runner"},
+        "body": {
+          "worker_id": "runner_s003_0001",
+          "entries": [
+            {"timestamp": "2026-06-05T20:00:03Z", "level": "info", "message": "running provider invocation", "fields": {"provider": "svc_comfyui_gpu"}}
+          ]
+        },
+        "precondition": "job_log_claimed returned cursor_s003_logs_0001"
+      },
+      "fixture_metadata": {
+        "cursor_semantics": "cursor_s003_logs_0001 is a first-page read token returned by the running agent projection; cursor_s003_logs_0002 is the next-page token after the first page entries."
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "ok": true,
+          "data": {
+            "items": [
+              {"timestamp": "2026-06-05T20:00:03Z", "level": "info", "message": "running provider invocation", "fields": {"provider": "svc_comfyui_gpu"}}
+            ],
+            "next_cursor": "cursor_s003_logs_0002"
+          },
+          "links": {},
+          "meta": {"request_id": "req_s003_job_log_running", "schema_version": "v1"}
+        }
+      }
+    },
+    {
+      "id": "job_logs_read",
+      "request": {
+        "method": "GET",
+        "path": "/v1/jobs/job_s003_0001/logs",
+        "headers": {"Authorization": "Bearer token_s003_gateway"},
+        "query": {"cursor": "cursor_s003_logs_0001", "limit": "50"},
+        "precondition": "job_log_claimed and job_log_running have both appended"
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "ok": true,
+          "data": {
+            "items": [
+              {"timestamp": "2026-06-05T20:00:01Z", "level": "info", "message": "claimed job", "fields": {}},
+              {"timestamp": "2026-06-05T20:00:03Z", "level": "info", "message": "running provider invocation", "fields": {"provider": "svc_comfyui_gpu"}}
+            ],
+            "next_cursor": "cursor_s003_logs_0002"
+          },
+          "links": {},
+          "meta": {"request_id": "req_s003_job_logs_read", "schema_version": "v1"}
+        }
+      }
+    },
+    {
+      "id": "job_complete_ok",
+      "request": {
+        "method": "POST",
+        "path": "/v1/jobs/job_s003_0001/complete",
+        "headers": {"Authorization": "Bearer token_s003_runner"},
+	        "body": {
+	          "worker_id": "runner_s003_0001",
+	          "artifact_refs": ["art_s003_0001"],
+	          "output": {"artifact_refs": ["art_s003_0001"]}
+	        },
+	        "precondition": "checkpoint_after_artifact"
+	      },
+      "response": {
+        "status": 200,
+        "body": {
+          "ok": true,
+          "data": {
+            "job_id": "job_s003_0001",
+            "state": "succeeded",
+            "updated_at": "2026-06-05T20:00:46Z",
+            "status_message": "completed",
+            "artifact_refs": ["art_s003_0001"],
+            "terminal_error": null,
+            "links": {}
+          },
+          "links": {},
+          "meta": {"request_id": "req_s003_job_complete", "schema_version": "v1"}
+        }
+      }
+    },
+    {
+      "id": "job_complete_worker_mismatch",
+      "request": {
+        "method": "POST",
+        "path": "/v1/jobs/job_s003_0001/complete",
+        "headers": {"Authorization": "Bearer token_s003_runner"},
+        "body": {"worker_id": "runner_s003_other", "artifact_refs": ["art_s003_0001"], "output": {"artifact_refs": ["art_s003_0001"]}},
+        "precondition": "job_s003_0001 is running and claimed by runner_s003_0001"
+      },
+      "response": {
+        "status": 403,
+        "body": {
+          "ok": false,
+          "error": {"code": "forbidden", "message": "worker_id does not match the active job claim", "retryable": false},
+          "links": {},
+          "meta": {"request_id": "req_s003_job_complete_worker_mismatch", "schema_version": "v1"}
+        }
+      }
+    },
+    {
+      "id": "job_complete_expired_claim",
+      "request": {
+        "method": "POST",
+        "path": "/v1/jobs/job_s003_0001/complete",
+        "headers": {"Authorization": "Bearer token_s003_runner"},
+        "body": {"worker_id": "runner_s003_0001", "artifact_refs": ["art_s003_0001"], "output": {"artifact_refs": ["art_s003_0001"]}},
+        "precondition": "C05 worker claim expired before completion"
+      },
+      "response": {
+        "status": 409,
+        "body": {
+          "ok": false,
+          "error": {"code": "claim_expired", "message": "worker claim has expired", "retryable": true},
+          "links": {},
+          "meta": {"request_id": "req_s003_job_complete_claim_expired", "schema_version": "v1"}
+        }
+      }
+    },
+    {
+      "id": "job_cancel_queued",
+      "request": {
+        "method": "POST",
+        "path": "/v1/jobs/job_s003_0001/cancel",
+        "headers": {
+          "Authorization": "Bearer token_s003_gateway",
+          "Idempotency-Key": "idem_s003_c05_cancel_queued"
+        },
+        "body": {"requester_id": "sub_agent_s003", "reason": "canceled by requester"},
+        "precondition": "checkpoint_after_public_invoke_before_claim"
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "ok": true,
+          "data": {
+            "job_id": "job_s003_0001",
+            "state": "canceled",
+            "created_at": "2026-06-05T20:00:00Z",
+            "updated_at": "2026-06-05T20:00:01Z",
+            "status_message": "canceled by requester",
+            "input_summary": {"prompt_present": true, "width": 1024, "height": 1024},
+            "artifact_refs": [],
+            "log_cursor": null,
+            "terminal_error": {"code": "canceled", "message": "canceled by requester", "retryable": false},
+            "links": {}
+          },
+          "links": {},
+          "meta": {"request_id": "req_s003_job_cancel_queued", "schema_version": "v1"}
+        }
+      }
+    },
+    {
+      "id": "job_cancel_queued_replay",
+      "request": {
+        "method": "POST",
+        "path": "/v1/jobs/job_s003_0001/cancel",
+        "headers": {
+          "Authorization": "Bearer token_s003_gateway",
+          "Idempotency-Key": "idem_s003_c05_cancel_queued"
+        },
+        "body": {"requester_id": "sub_agent_s003", "reason": "canceled by requester"},
+        "precondition": "same cancel idempotency key and request fingerprint already canceled queued job"
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "ok": true,
+          "data": {
+            "job_id": "job_s003_0001",
+            "state": "canceled",
+            "created_at": "2026-06-05T20:00:00Z",
+            "updated_at": "2026-06-05T20:00:01Z",
+            "status_message": "canceled by requester",
+            "input_summary": {"prompt_present": true, "width": 1024, "height": 1024},
+            "artifact_refs": [],
+            "log_cursor": null,
+            "terminal_error": {"code": "canceled", "message": "canceled by requester", "retryable": false},
+            "links": {}
+          },
+          "links": {},
+          "meta": {"request_id": "req_s003_job_cancel_queued_replay", "schema_version": "v1"}
+        }
+      }
+    },
+    {
+      "id": "job_cancel_idempotency_conflict",
+      "request": {
+        "method": "POST",
+        "path": "/v1/jobs/job_s003_0001/cancel",
+        "headers": {
+          "Authorization": "Bearer token_s003_gateway",
+          "Idempotency-Key": "idem_s003_c05_cancel_queued"
+        },
+        "body": {"requester_id": "sub_agent_s003", "reason": "different reason"},
+        "precondition": "same cancel idempotency key already used for canceled by requester"
+      },
+      "response": {
+        "status": 409,
+        "body": {
+          "ok": false,
+          "error": {"code": "idempotency_conflict", "message": "idempotency key was reused with different request content", "retryable": false},
+          "links": {},
+          "meta": {"request_id": "req_s003_job_cancel_idempotency_conflict", "schema_version": "v1"}
+        }
+      }
+    },
+    {
+      "id": "job_log_lease_expired",
+      "request": {
+        "method": "POST",
+        "path": "/v1/jobs/job_s003_0001/logs",
+        "headers": {"Authorization": "Bearer token_s003_runner"},
+        "body": {
+          "worker_id": "runner_s003_0001",
+          "entries": [
+            {"timestamp": "2026-06-05T20:01:04Z", "level": "error", "message": "resource lease expired", "fields": {"lease_id": "lease_s003_0001"}}
+          ]
+        },
+        "precondition": "checkpoint_after_lease_expired_no_heartbeat"
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "ok": true,
+          "data": {
+            "items": [
+              {"timestamp": "2026-06-05T20:01:04Z", "level": "error", "message": "resource lease expired", "fields": {"lease_id": "lease_s003_0001"}}
+            ],
+            "next_cursor": "cursor_s003_logs_lease_expired"
+          },
+          "links": {},
+          "meta": {"request_id": "req_s003_job_log_lease_expired", "schema_version": "v1"}
+        }
+      }
+    },
+    {
+      "id": "job_fail_lease_expired",
+      "request": {
+        "method": "POST",
+        "path": "/v1/jobs/job_s003_0001/fail",
+        "headers": {"Authorization": "Bearer token_s003_runner"},
+        "body": {
+          "worker_id": "runner_s003_0001",
+          "error": {"code": "lease_expired", "message": "resource lease expired before completion", "retryable": true}
+        },
+        "precondition": "checkpoint_after_lease_expired_no_heartbeat"
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "ok": true,
+          "data": {
+            "job_id": "job_s003_0001",
+            "state": "failed",
+            "updated_at": "2026-06-05T20:01:04Z",
+            "status_message": "resource lease expired before completion",
+            "artifact_refs": [],
+            "terminal_error": {"code": "lease_expired", "message": "resource lease expired before completion", "retryable": true},
+            "links": {}
+          },
+          "links": {},
+          "meta": {"request_id": "req_s003_job_fail_lease_expired", "schema_version": "v1"}
+        }
+      }
+    },
+    {
+      "id": "agent_projection_provider_timeout",
+      "request": {
+        "method": "GET",
+        "path": "/v1/jobs/job_s003_0001/agent-projection",
+        "headers": {"Authorization": "Bearer token_s003_gateway"},
+        "precondition": "job_s003_0001 failed with terminal_error provider_timeout"
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "ok": true,
+          "data": {
+            "job_id": "job_s003_0001",
+            "state": "failed",
+            "created_at": "2026-06-05T20:00:00Z",
+            "updated_at": "2026-06-05T20:15:08Z",
+            "status_message": "provider invocation timed out",
+            "input_summary": {"prompt_present": true, "width": 1024, "height": 1024},
+            "artifact_refs": [],
+            "log_cursor": "cursor_s003_logs_provider_timeout",
+            "terminal_error": {"code": "provider_timeout", "message": "provider invocation timed out", "retryable": true},
+            "links": {}
+          },
+          "links": {},
+          "meta": {"request_id": "req_s003_agent_job_provider_timeout", "schema_version": "v1"}
+        }
+      }
+    },
+    {
+      "id": "agent_projection_provider_failure",
+      "request": {
+        "method": "GET",
+        "path": "/v1/jobs/job_s003_0001/agent-projection",
+        "headers": {"Authorization": "Bearer token_s003_gateway"},
+        "precondition": "job_s003_0001 failed with terminal_error provider_unavailable"
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "ok": true,
+          "data": {
+            "job_id": "job_s003_0001",
+            "state": "failed",
+            "created_at": "2026-06-05T20:00:00Z",
+            "updated_at": "2026-06-05T20:00:08Z",
+            "status_message": "ComfyUI backend is unavailable",
+            "input_summary": {"prompt_present": true, "width": 1024, "height": 1024},
+            "artifact_refs": [],
+            "log_cursor": "cursor_s003_logs_provider_failure",
+            "terminal_error": {"code": "provider_unavailable", "message": "ComfyUI backend is unavailable", "retryable": true},
+            "links": {}
+          },
+          "links": {},
+          "meta": {"request_id": "req_s003_agent_job_provider_failed", "schema_version": "v1"}
+        }
+      }
+    },
+    {
+      "id": "agent_projection_lease_expired",
+      "request": {
+        "method": "GET",
+        "path": "/v1/jobs/job_s003_0001/agent-projection",
+        "headers": {"Authorization": "Bearer token_s003_gateway"},
+        "precondition": "job_s003_0001 failed with terminal_error lease_expired"
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "ok": true,
+          "data": {
+            "job_id": "job_s003_0001",
+            "state": "failed",
+            "created_at": "2026-06-05T20:00:00Z",
+            "updated_at": "2026-06-05T20:01:04Z",
+            "status_message": "resource lease expired before completion",
+            "input_summary": {"prompt_present": true, "width": 1024, "height": 1024},
+            "artifact_refs": [],
+            "log_cursor": "cursor_s003_logs_lease_expired",
+            "terminal_error": {"code": "lease_expired", "message": "resource lease expired before completion", "retryable": true},
+            "links": {}
+          },
+          "links": {},
+          "meta": {"request_id": "req_s003_agent_job_lease_expired", "schema_version": "v1"}
+        }
+      }
+    },
+    {
+      "id": "job_invalid_transition",
+      "request": {
+        "method": "POST",
+        "path": "/v1/jobs/job_s003_0001/heartbeat",
+        "headers": {"Authorization": "Bearer token_s003_runner"},
+        "body": {"worker_id": "runner_s003_0001", "transition_to": "succeeded", "status_message": "invalid transition"},
+        "precondition": "job_s003_0001 is claimed but not running"
+      },
+      "response": {
+        "status": 400,
+        "body": {
+          "ok": false,
+          "error": {"code": "validation_failed", "message": "transition_to must be running when heartbeat changes state", "retryable": false},
+          "links": {},
+          "meta": {"request_id": "req_s003_job_invalid_transition", "schema_version": "v1"}
+        }
+      }
+    },
+    {
+      "id": "job_worker_unauthorized",
+      "request": {
+        "method": "POST",
+        "path": "/v1/jobs/job_s003_0001/heartbeat",
+        "headers": {},
+        "body": {"worker_id": "runner_s003_0001"}
+      },
+      "response": {
+        "status": 401,
+        "body": {
+          "ok": false,
+          "error": {"code": "unauthorized", "message": "job worker operation requires a valid runner credential", "retryable": false},
+          "links": {},
+          "meta": {"request_id": "req_s003_job_worker_unauthorized", "schema_version": "v1"}
+        }
+      }
+    },
+    {
+      "id": "job_append_log_worker_mismatch",
+      "request": {
+        "method": "POST",
+        "path": "/v1/jobs/job_s003_0001/logs",
+        "headers": {"Authorization": "Bearer token_s003_runner"},
+        "body": {"worker_id": "runner_s003_other", "entries": [{"timestamp": "2026-06-05T20:00:02Z", "level": "info", "message": "attempted append from another worker", "fields": {}}]},
+        "precondition": "job_s003_0001 is claimed by runner_s003_0001"
+      },
+      "response": {
+        "status": 403,
+        "body": {
+          "ok": false,
+          "error": {"code": "forbidden", "message": "worker_id does not match the active job claim", "retryable": false},
+          "links": {},
+          "meta": {"request_id": "req_s003_job_log_worker_mismatch", "schema_version": "v1"}
+        }
+      }
+    },
+    {
+      "id": "job_append_log_expired_claim",
+      "request": {
+        "method": "POST",
+        "path": "/v1/jobs/job_s003_0001/logs",
+        "headers": {"Authorization": "Bearer token_s003_runner"},
+        "body": {"worker_id": "runner_s003_0001", "entries": [{"timestamp": "2026-06-05T20:01:02Z", "level": "error", "message": "append after expired claim", "fields": {}}]},
+        "precondition": "C05 claim expired before append-log"
+      },
+      "response": {
+        "status": 409,
+        "body": {
+          "ok": false,
+          "error": {"code": "claim_expired", "message": "worker claim has expired", "retryable": true},
+          "links": {},
+          "meta": {"request_id": "req_s003_job_log_claim_expired", "schema_version": "v1"}
+        }
+      }
+    },
+    {
+      "id": "job_gateway_unauthorized",
+      "request": {
+        "method": "GET",
+        "path": "/v1/jobs/job_s003_0001/policy-context",
+        "headers": {}
+      },
+      "response": {
+        "status": 401,
+        "body": {
+          "ok": false,
+          "error": {"code": "unauthorized", "message": "job component operation requires a valid gateway credential", "retryable": false},
+          "links": {},
+          "meta": {"request_id": "req_s003_job_gateway_unauthorized", "schema_version": "v1"}
+        }
+      }
+    },
+    {
+      "id": "job_gateway_forbidden",
+      "request": {
+        "method": "GET",
+        "path": "/v1/jobs/job_s003_0001/policy-context",
+        "headers": {"Authorization": "Bearer token_s003_agent"}
+      },
+      "response": {
+        "status": 403,
+        "body": {
+          "ok": false,
+          "error": {"code": "forbidden", "message": "caller is not authorized for this job operation", "retryable": false},
+          "links": {},
+          "meta": {"request_id": "req_s003_job_forbidden", "schema_version": "v1"}
+        }
+      }
+    },
+    {
+      "id": "job_not_found",
+      "request": {
+        "method": "GET",
+        "path": "/v1/jobs/job_s003_missing/agent-projection",
+        "headers": {"Authorization": "Bearer token_s003_gateway"}
+      },
+      "response": {
+        "status": 404,
+        "body": {
+          "ok": false,
+          "error": {"code": "not_found", "message": "job not found", "retryable": false},
+          "links": {},
+          "meta": {"request_id": "req_s003_job_not_found", "schema_version": "v1"}
+        }
+      }
+    },
+    {
+      "id": "job_claim_same_worker_replay",
+      "request": {
+        "method": "POST",
+        "path": "/v1/jobs/job_s003_0001/claim",
+        "headers": {"Authorization": "Bearer token_s003_runner"},
+        "body": {"worker_id": "runner_s003_0001", "lease_seconds": 60},
+        "precondition": "runner_s003_0001 already holds the active C05 claim"
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "ok": true,
+          "data": {
+            "job_id": "job_s003_0001",
+            "state": "claimed",
+            "created_at": "2026-06-05T20:00:00Z",
+            "updated_at": "2026-06-05T20:00:01Z",
+            "claim": {"worker_id": "runner_s003_0001", "claimed_at": "2026-06-05T20:00:01Z", "expires_at": "2026-06-05T20:01:01Z"},
+            "metadata": {
+              "execution_plan": {
+                "capability_id": "cap_image_generate_gpu",
+                "subject_id": "sub_agent_s003",
+                "input": {
+                  "prompt": "a clean product photo of a red ceramic mug",
+                  "width": 1024,
+                  "height": 1024
+                },
+                "route": {
+                  "capability_id": "cap_image_generate_gpu",
+                  "service_id": "svc_comfyui_gpu",
+                  "provider_endpoint": "http://node_linux_gpu:8188",
+                  "provider_health_path": "/v1/provider/health",
+                  "provider_invoke_path": "/v1/provider/capabilities/cap_image_generate_gpu/invoke",
+                  "node_id": "node_linux_gpu",
+                  "node_managed": true,
+                  "service_start_mode": "on_demand",
+                  "resource_hints": [{"selector": "gpu", "required": true, "quantity": 1}],
+                  "artifact_hints": [{"media_type": "image/png", "count": "one"}]
+                },
+                "resource_selector": "gpu",
+                "timeout_seconds": 900,
+                "artifact_hints": [{"media_type": "image/png", "count": "one"}],
+                "provider_context": {}
+              }
+            },
+            "artifact_refs": [],
+            "log_cursor": null,
+            "terminal_error": null,
+            "links": {}
+          },
+          "links": {},
+          "meta": {"request_id": "req_s003_job_claim_same_worker_replay", "schema_version": "v1"}
+        }
+      }
+    },
+    {
+      "id": "job_claim_worker_conflict",
+      "request": {
+        "method": "POST",
+        "path": "/v1/jobs/job_s003_0001/claim",
+        "headers": {"Authorization": "Bearer token_s003_runner"},
+        "body": {"worker_id": "runner_s003_other", "lease_seconds": 60},
+        "precondition": "runner_s003_0001 holds an active C05 claim"
+      },
+      "response": {
+        "status": 409,
+        "body": {
+          "ok": false,
+          "error": {"code": "worker_conflict", "message": "job is already claimed by another worker", "retryable": true},
+          "links": {},
+          "meta": {"request_id": "req_s003_job_worker_conflict", "schema_version": "v1"}
+        }
+      }
+    },
+    {
+      "id": "job_claim_expired_reclaim",
+      "request": {
+        "method": "POST",
+        "path": "/v1/jobs/job_s003_0001/claim",
+        "headers": {"Authorization": "Bearer token_s003_runner"},
+        "body": {"worker_id": "runner_s003_0002", "lease_seconds": 60},
+        "precondition": "previous C05 claim expired before reclaim"
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "ok": true,
+          "data": {
+            "job_id": "job_s003_0001",
+            "state": "claimed",
+            "created_at": "2026-06-05T20:00:00Z",
+            "updated_at": "2026-06-05T20:02:02Z",
+            "claim": {"worker_id": "runner_s003_0002", "claimed_at": "2026-06-05T20:02:02Z", "expires_at": "2026-06-05T20:03:02Z"},
+            "metadata": {
+              "execution_plan": {
+                "capability_id": "cap_image_generate_gpu",
+                "subject_id": "sub_agent_s003",
+                "input": {
+                  "prompt": "a clean product photo of a red ceramic mug",
+                  "width": 1024,
+                  "height": 1024
+                },
+                "route": {
+                  "capability_id": "cap_image_generate_gpu",
+                  "service_id": "svc_comfyui_gpu",
+                  "provider_endpoint": "http://node_linux_gpu:8188",
+                  "provider_health_path": "/v1/provider/health",
+                  "provider_invoke_path": "/v1/provider/capabilities/cap_image_generate_gpu/invoke",
+                  "node_id": "node_linux_gpu",
+                  "node_managed": true,
+                  "service_start_mode": "on_demand",
+                  "resource_hints": [{"selector": "gpu", "required": true, "quantity": 1}],
+                  "artifact_hints": [{"media_type": "image/png", "count": "one"}]
+                },
+                "resource_selector": "gpu",
+                "timeout_seconds": 900,
+                "artifact_hints": [{"media_type": "image/png", "count": "one"}],
+                "provider_context": {}
+              }
+            },
+            "artifact_refs": [],
+            "log_cursor": null,
+            "terminal_error": null,
+            "links": {}
+          },
+          "links": {},
+          "meta": {"request_id": "req_s003_job_claim_expired_reclaim", "schema_version": "v1"}
+        }
+      }
+    },
+    {
+      "id": "job_claim_terminal_conflict",
+      "request": {
+        "method": "POST",
+        "path": "/v1/jobs/job_s003_0001/claim",
+        "headers": {"Authorization": "Bearer token_s003_runner"},
+        "body": {"worker_id": "runner_s003_0001", "lease_seconds": 60},
+        "precondition": "job_s003_0001 is terminal"
+      },
+      "response": {
+        "status": 409,
+        "body": {
+          "ok": false,
+          "error": {"code": "job_terminal", "message": "job is already terminal", "retryable": false},
+          "links": {},
+          "meta": {"request_id": "req_s003_job_claim_terminal", "schema_version": "v1"}
+        }
+      }
+    },
+    {
+      "id": "job_cancel_running_conflict",
+      "request": {
+        "method": "POST",
+        "path": "/v1/jobs/job_s003_0001/cancel",
+        "headers": {"Authorization": "Bearer token_s003_gateway", "Idempotency-Key": "idem_s003_c05_cancel_running"},
+        "body": {"requester_id": "sub_agent_s003", "reason": "canceled by requester"},
+        "precondition": "job_s003_0001 is running"
+      },
+      "response": {
+        "status": 400,
+        "body": {
+          "ok": false,
+          "error": {"code": "validation_failed", "message": "running cancellation is not defined for S003", "retryable": false},
+          "links": {},
+          "meta": {"request_id": "req_s003_job_cancel_running_conflict", "schema_version": "v1"}
+        }
+      }
+    },
+    {
+      "id": "job_complete_terminal_conflict",
+      "request": {
+        "method": "POST",
+        "path": "/v1/jobs/job_s003_0001/complete",
+        "headers": {"Authorization": "Bearer token_s003_runner"},
+        "body": {"worker_id": "runner_s003_0001", "output": {"artifact_refs": ["art_s003_0001"]}},
+        "precondition": "job_s003_0001 is already terminal"
+      },
+      "response": {
+        "status": 409,
+        "body": {
+          "ok": false,
+          "error": {"code": "job_terminal", "message": "job is already terminal", "retryable": false},
+          "links": {},
+          "meta": {"request_id": "req_s003_job_complete_terminal", "schema_version": "v1"}
+        }
+      }
+    },
+    {
+      "id": "job_fail_worker_mismatch",
+      "request": {
+        "method": "POST",
+        "path": "/v1/jobs/job_s003_0001/fail",
+        "headers": {"Authorization": "Bearer token_s003_runner"},
+        "body": {"worker_id": "runner_s003_other", "error": {"code": "provider_unavailable", "message": "ComfyUI backend is unavailable", "retryable": true}},
+        "precondition": "job_s003_0001 is running and claimed by runner_s003_0001"
+      },
+      "response": {
+        "status": 403,
+        "body": {
+          "ok": false,
+          "error": {"code": "forbidden", "message": "worker_id does not match the active job claim", "retryable": false},
+          "links": {},
+          "meta": {"request_id": "req_s003_job_fail_worker_mismatch", "schema_version": "v1"}
+        }
+      }
+    },
+    {
+      "id": "job_fail_expired_claim",
+      "request": {
+        "method": "POST",
+        "path": "/v1/jobs/job_s003_0001/fail",
+        "headers": {"Authorization": "Bearer token_s003_runner"},
+        "body": {"worker_id": "runner_s003_0001", "error": {"code": "provider_timeout", "message": "provider invocation timed out", "retryable": true}},
+        "precondition": "C05 worker claim expired before fail"
+      },
+      "response": {
+        "status": 409,
+        "body": {
+          "ok": false,
+          "error": {"code": "claim_expired", "message": "worker claim has expired", "retryable": true},
+          "links": {},
+          "meta": {"request_id": "req_s003_job_fail_claim_expired", "schema_version": "v1"}
+        }
+      }
+    },
+    {
+      "id": "job_fail_terminal_conflict",
+      "request": {
+        "method": "POST",
+        "path": "/v1/jobs/job_s003_0001/fail",
+        "headers": {"Authorization": "Bearer token_s003_runner"},
+        "body": {"worker_id": "runner_s003_0001", "error": {"code": "provider_timeout", "message": "provider invocation timed out", "retryable": true}},
+        "precondition": "job_s003_0001 is already terminal"
+      },
+      "response": {
+        "status": 409,
+        "body": {
+          "ok": false,
+          "error": {"code": "job_terminal", "message": "job is already terminal", "retryable": false},
+          "links": {},
+          "meta": {"request_id": "req_s003_job_fail_terminal", "schema_version": "v1"}
+        }
+      }
+    }
+  ]
+}

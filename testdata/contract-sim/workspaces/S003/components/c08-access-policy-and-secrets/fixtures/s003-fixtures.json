@@ -1,0 +1,836 @@
+{
+  "scenario_id": "S003",
+  "component": "c08-access-policy-and-secrets",
+  "fixtures": [
+    {
+      "id": "auth_agent_valid",
+      "request": {
+        "method": "POST",
+        "path": "/v1/auth/verify",
+        "body": {"credential": "Bearer token_s003_agent", "context": {"surface": "public_api"}}
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "ok": true,
+          "data": {"valid": true, "subject_id": "sub_agent_s003", "scopes": ["agent"]},
+          "links": {},
+          "meta": {"request_id": "req_s003_auth", "schema_version": "v1"}
+        }
+      }
+    },
+    {
+      "id": "auth_gateway_valid",
+      "request": {
+        "method": "POST",
+        "path": "/v1/auth/verify",
+        "body": {"credential": "Bearer token_s003_gateway", "context": {"surface": "component_api"}}
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "ok": true,
+          "data": {"valid": true, "subject_id": "sub_gateway_s003", "scopes": ["component"]},
+          "links": {},
+          "meta": {"request_id": "req_s003_auth_gateway", "schema_version": "v1"}
+        }
+      }
+    },
+    {
+      "id": "auth_runner_valid",
+      "request": {
+        "method": "POST",
+        "path": "/v1/auth/verify",
+        "body": {"credential": "Bearer token_s003_runner", "context": {"surface": "worker_api"}}
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "ok": true,
+          "data": {"valid": true, "subject_id": "sub_runner_s003", "scopes": ["worker"]},
+          "links": {},
+          "meta": {"request_id": "req_s003_auth_runner_verify", "schema_version": "v1"}
+        }
+      }
+    },
+    {
+      "id": "auth_unknown_token",
+      "request": {
+        "method": "POST",
+        "path": "/v1/auth/verify",
+        "body": {"credential": "Bearer token_unknown", "context": {"surface": "public_api"}}
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "ok": true,
+          "data": {"valid": false, "subject_id": null, "scopes": []},
+          "links": {},
+          "meta": {"request_id": "req_s003_auth_invalid", "schema_version": "v1"}
+        }
+      }
+    },
+    {
+      "id": "auth_malformed_credential",
+      "request": {
+        "method": "POST",
+        "path": "/v1/auth/verify",
+        "body": {"credential": "bearer token_s003_agent", "context": {"surface": "public_api"}}
+      },
+      "response": {
+        "status": 401,
+        "body": {
+          "ok": false,
+          "error": {"code": "unauthorized", "message": "credential could not be parsed", "retryable": false},
+          "links": {},
+          "meta": {"request_id": "req_s003_auth_malformed", "schema_version": "v1"}
+        }
+      }
+    },
+    {
+      "id": "auth_malformed_empty_token",
+      "request": {
+        "method": "POST",
+        "path": "/v1/auth/verify",
+        "body": {"credential": "Bearer ", "context": {"surface": "public_api"}}
+      },
+      "response": {
+        "status": 401,
+        "body": {
+          "ok": false,
+          "error": {"code": "unauthorized", "message": "credential could not be parsed", "retryable": false},
+          "links": {},
+          "meta": {"request_id": "req_s003_auth_malformed_empty_token", "schema_version": "v1"}
+        }
+      }
+    },
+    {
+      "id": "auth_malformed_extra_whitespace",
+      "request": {
+        "method": "POST",
+        "path": "/v1/auth/verify",
+        "body": {"credential": "Bearer  token_s003_agent", "context": {"surface": "public_api"}}
+      },
+      "response": {
+        "status": 401,
+        "body": {
+          "ok": false,
+          "error": {"code": "unauthorized", "message": "credential could not be parsed", "retryable": false},
+          "links": {},
+          "meta": {"request_id": "req_s003_auth_malformed_extra_whitespace", "schema_version": "v1"}
+        }
+      }
+    },
+    {
+      "id": "auth_malformed_unsupported_scheme",
+      "request": {
+        "method": "POST",
+        "path": "/v1/auth/verify",
+        "body": {"credential": "Basic token_s003_agent", "context": {"surface": "public_api"}}
+      },
+      "response": {
+        "status": 401,
+        "body": {
+          "ok": false,
+          "error": {"code": "unauthorized", "message": "credential could not be parsed", "retryable": false},
+          "links": {},
+          "meta": {"request_id": "req_s003_auth_malformed_unsupported_scheme", "schema_version": "v1"}
+        }
+      }
+    },
+    {
+      "id": "auth_malformed_token_whitespace",
+      "request": {
+        "method": "POST",
+        "path": "/v1/auth/verify",
+        "body": {"credential": "Bearer token_s003_agent ", "context": {"surface": "public_api"}}
+      },
+      "response": {
+        "status": 401,
+        "body": {
+          "ok": false,
+          "error": {"code": "unauthorized", "message": "credential could not be parsed", "retryable": false},
+          "links": {},
+          "meta": {"request_id": "req_s003_auth_malformed_token_whitespace", "schema_version": "v1"}
+        }
+      }
+    },
+    {
+      "id": "policy_tool_discover_allow",
+      "request": {
+        "method": "POST",
+        "path": "/v1/policy/check",
+        "body": {
+          "subject_id": "sub_agent_s003",
+          "action": "tool.discover",
+          "resource": "tools",
+          "context": {"operation": "listTools"}
+        }
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "ok": true,
+          "data": {"allowed": true, "reason": "allowed_by_s003_fixture"},
+          "links": {},
+          "meta": {"request_id": "req_s003_policy_discover", "schema_version": "v1"}
+        }
+      }
+    },
+    {
+      "id": "policy_tool_discover_capability_allow",
+      "request": {
+        "method": "POST",
+        "path": "/v1/policy/check",
+        "body": {
+          "subject_id": "sub_agent_s003",
+          "action": "tool.discover",
+          "resource": "cap_image_generate_gpu",
+          "context": {"capability_id": "cap_image_generate_gpu"}
+        }
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "ok": true,
+          "data": {"allowed": true, "reason": "allowed_by_s003_fixture"},
+          "links": {},
+          "meta": {"request_id": "req_s003_policy_discover_cap_image_generate_gpu", "schema_version": "v1"}
+        }
+      }
+    },
+    {
+      "id": "policy_tool_discover_capability_deny",
+      "request": {
+        "method": "POST",
+        "path": "/v1/policy/check",
+        "body": {
+          "subject_id": "sub_other_s003",
+          "action": "tool.discover",
+          "resource": "cap_image_generate_gpu",
+          "context": {"capability_id": "cap_image_generate_gpu"}
+        }
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "ok": true,
+          "data": {"allowed": false, "reason": "policy_denied"},
+          "links": {},
+          "meta": {"request_id": "req_s003_policy_discover_cap_image_generate_gpu_denied", "schema_version": "v1"}
+        }
+      }
+    },
+    {
+      "id": "policy_tool_invoke_allow",
+      "request": {
+        "method": "POST",
+        "path": "/v1/policy/check",
+        "body": {
+          "subject_id": "sub_agent_s003",
+          "action": "tool.invoke",
+          "resource": "cap_image_generate_gpu",
+          "context": {"capability_id": "cap_image_generate_gpu"}
+        }
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "ok": true,
+          "data": {"allowed": true, "reason": "allowed_by_s003_fixture"},
+          "links": {},
+          "meta": {"request_id": "req_s003_policy_invoke", "schema_version": "v1"}
+        }
+      }
+    },
+    {
+      "id": "policy_worker_job_execute_allow",
+      "request": {
+        "method": "POST",
+        "path": "/v1/policy/check",
+        "body": {
+          "subject_id": "sub_runner_s003",
+          "action": "job.execute",
+          "resource": "job_s003_0001",
+          "context": {"job_id": "job_s003_0001", "requester_id": "sub_agent_s003", "owner_subject_id": "sub_agent_s003", "worker_id": "runner_s003_0001"}
+        }
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "ok": true,
+          "data": {"allowed": true, "reason": "allowed_by_s003_fixture"},
+          "links": {},
+          "meta": {"request_id": "req_s003_policy_worker_job_execute", "schema_version": "v1"}
+        }
+      }
+    },
+    {
+      "id": "policy_worker_lease_request_allow",
+      "request": {
+        "method": "POST",
+        "path": "/v1/policy/check",
+        "body": {
+          "subject_id": "sub_runner_s003",
+          "action": "lease.request",
+          "resource": "gpu",
+          "context": {"holder_id": "job_s003_0001", "resource_selector": "gpu"}
+        }
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "ok": true,
+          "data": {"allowed": true, "reason": "allowed_by_s003_fixture"},
+          "links": {},
+          "meta": {"request_id": "req_s003_policy_worker_lease_request", "schema_version": "v1"}
+        }
+      }
+    },
+    {
+      "id": "policy_worker_lease_release_allow",
+      "request": {
+        "method": "POST",
+        "path": "/v1/policy/check",
+        "body": {
+          "subject_id": "sub_runner_s003",
+          "action": "lease.release",
+          "resource": "lease_s003_0001",
+          "context": {"lease_id": "lease_s003_0001", "holder_id": "job_s003_0001", "resource_selector": "gpu"}
+        }
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "ok": true,
+          "data": {"allowed": true, "reason": "allowed_by_s003_fixture"},
+          "links": {},
+          "meta": {"request_id": "req_s003_policy_worker_lease_release", "schema_version": "v1"}
+        }
+      }
+    },
+    {
+      "id": "policy_worker_artifact_register_allow",
+      "request": {
+        "method": "POST",
+        "path": "/v1/policy/check",
+        "body": {
+          "subject_id": "sub_runner_s003",
+          "action": "artifact.register",
+          "resource": "job_s003_0001",
+          "context": {"job_id": "job_s003_0001", "producer_ref": "job_s003_0001", "owner_subject_id": "sub_agent_s003"}
+        }
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "ok": true,
+          "data": {"allowed": true, "reason": "allowed_by_s003_fixture"},
+          "links": {},
+          "meta": {"request_id": "req_s003_policy_worker_artifact_register", "schema_version": "v1"}
+        }
+      }
+    },
+    {
+      "id": "policy_worker_node_read_allow",
+      "request": {
+        "method": "POST",
+        "path": "/v1/policy/check",
+        "body": {
+          "subject_id": "sub_runner_s003",
+          "action": "node.read",
+          "resource": "node_linux_gpu",
+          "context": {"node_id": "node_linux_gpu", "service_id": "svc_comfyui_gpu"}
+        }
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "ok": true,
+          "data": {"allowed": true, "reason": "allowed_by_s003_fixture"},
+          "links": {},
+          "meta": {"request_id": "req_s003_policy_worker_node_read", "schema_version": "v1"}
+        }
+      }
+    },
+    {
+      "id": "policy_worker_node_service_start_allow",
+      "request": {
+        "method": "POST",
+        "path": "/v1/policy/check",
+        "body": {
+          "subject_id": "sub_runner_s003",
+          "action": "node.service.start",
+          "resource": "svc_comfyui_gpu",
+          "context": {"service_id": "svc_comfyui_gpu", "node_id": "node_linux_gpu"}
+        }
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "ok": true,
+          "data": {"allowed": true, "reason": "allowed_by_s003_fixture"},
+          "links": {},
+          "meta": {"request_id": "req_s003_policy_worker_node_service_start", "schema_version": "v1"}
+        }
+      }
+    },
+    {
+      "id": "policy_worker_provider_invoke_allow",
+      "request": {
+        "method": "POST",
+        "path": "/v1/policy/check",
+        "body": {
+          "subject_id": "sub_runner_s003",
+          "action": "provider.invoke",
+          "resource": "cap_image_generate_gpu",
+          "context": {"capability_id": "cap_image_generate_gpu", "service_id": "svc_comfyui_gpu", "job_id": "job_s003_0001"}
+        }
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "ok": true,
+          "data": {"allowed": true, "reason": "allowed_by_s003_fixture"},
+          "links": {},
+          "meta": {"request_id": "req_s003_policy_worker_provider_invoke", "schema_version": "v1"}
+        }
+      }
+    },
+    {
+      "id": "policy_job_read_owner_allow",
+      "request": {
+        "method": "POST",
+        "path": "/v1/policy/check",
+        "body": {
+          "subject_id": "sub_agent_s003",
+          "action": "job.read",
+          "resource": "job_s003_0001",
+          "context": {
+            "job_id": "job_s003_0001",
+            "requester_id": "sub_agent_s003",
+            "owner_subject_id": "sub_agent_s003"
+          }
+        }
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "ok": true,
+          "data": {"allowed": true, "reason": "allowed_by_s003_fixture"},
+          "links": {},
+          "meta": {"request_id": "req_s003_policy_job_read", "schema_version": "v1"}
+        }
+      }
+    },
+    {
+      "id": "policy_job_read_missing_owner_deny",
+      "request": {
+        "method": "POST",
+        "path": "/v1/policy/check",
+        "body": {
+          "subject_id": "sub_agent_s003",
+          "action": "job.read",
+          "resource": "job_s003_0001",
+          "context": {
+            "job_id": "job_s003_0001",
+            "requester_id": "sub_agent_s003"
+          }
+        }
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "ok": true,
+          "data": {"allowed": false, "reason": "missing_context"},
+          "links": {},
+          "meta": {"request_id": "req_s003_policy_job_missing_owner", "schema_version": "v1"}
+        }
+      }
+    },
+    {
+      "id": "policy_gateway_auth_verify_allow",
+      "request": {
+        "method": "POST",
+        "path": "/v1/policy/check",
+        "body": {
+          "subject_id": "sub_gateway_s003",
+          "action": "auth.verify",
+          "resource": "credentials",
+          "context": {"surface": "component_api"}
+        }
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "ok": true,
+          "data": {"allowed": true, "reason": "allowed_by_s003_fixture"},
+          "links": {},
+          "meta": {"request_id": "req_s003_policy_gateway_auth_verify", "schema_version": "v1"}
+        }
+      }
+    },
+    {
+      "id": "policy_gateway_policy_check_allow",
+      "request": {
+        "method": "POST",
+        "path": "/v1/policy/check",
+        "body": {
+          "subject_id": "sub_gateway_s003",
+          "action": "policy.check",
+          "resource": "policy",
+          "context": {"surface": "component_api"}
+        }
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "ok": true,
+          "data": {"allowed": true, "reason": "allowed_by_s003_fixture"},
+          "links": {},
+          "meta": {"request_id": "req_s003_policy_gateway_policy_check", "schema_version": "v1"}
+        }
+      }
+    },
+    {
+      "id": "policy_gateway_catalog_read_allow",
+      "request": {
+        "method": "POST",
+        "path": "/v1/policy/check",
+        "body": {
+          "subject_id": "sub_gateway_s003",
+          "action": "catalog.read",
+          "resource": "cap_image_generate_gpu",
+          "context": {"capability_id": "cap_image_generate_gpu"}
+        }
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "ok": true,
+          "data": {"allowed": true, "reason": "allowed_by_s003_fixture"},
+          "links": {},
+          "meta": {"request_id": "req_s003_policy_gateway_catalog_read", "schema_version": "v1"}
+        }
+      }
+    },
+    {
+      "id": "policy_gateway_catalog_route_read_allow",
+      "request": {
+        "method": "POST",
+        "path": "/v1/policy/check",
+        "body": {
+          "subject_id": "sub_gateway_s003",
+          "action": "catalog.route.read",
+          "resource": "cap_image_generate_gpu",
+          "context": {"capability_id": "cap_image_generate_gpu"}
+        }
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "ok": true,
+          "data": {"allowed": true, "reason": "allowed_by_s003_fixture"},
+          "links": {},
+          "meta": {"request_id": "req_s003_policy_gateway_catalog_route_read", "schema_version": "v1"}
+        }
+      }
+    },
+    {
+      "id": "policy_gateway_job_create_allow",
+      "request": {
+        "method": "POST",
+        "path": "/v1/policy/check",
+        "body": {
+          "subject_id": "sub_gateway_s003",
+          "action": "job.create",
+          "resource": "cap_image_generate_gpu",
+          "context": {"capability_id": "cap_image_generate_gpu"}
+        }
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "ok": true,
+          "data": {"allowed": true, "reason": "allowed_by_s003_fixture"},
+          "links": {},
+          "meta": {"request_id": "req_s003_policy_gateway_job_create", "schema_version": "v1"}
+        }
+      }
+    },
+    {
+      "id": "policy_gateway_job_read_allow",
+      "request": {
+        "method": "POST",
+        "path": "/v1/policy/check",
+        "body": {
+          "subject_id": "sub_gateway_s003",
+          "action": "job.read",
+          "resource": "job_s003_0001",
+          "context": {"job_id": "job_s003_0001", "requester_id": "sub_agent_s003", "owner_subject_id": "sub_agent_s003"}
+        }
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "ok": true,
+          "data": {"allowed": true, "reason": "allowed_by_s003_fixture"},
+          "links": {},
+          "meta": {"request_id": "req_s003_policy_gateway_job_read", "schema_version": "v1"}
+        }
+      }
+    },
+    {
+      "id": "policy_job_cancel_queued_allow",
+      "request": {
+        "method": "POST",
+        "path": "/v1/policy/check",
+        "body": {
+          "subject_id": "sub_agent_s003",
+          "action": "job.cancel",
+          "resource": "job_s003_0001",
+          "context": {"job_id": "job_s003_0001", "requester_id": "sub_agent_s003", "owner_subject_id": "sub_agent_s003", "job_state": "queued"}
+        }
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "ok": true,
+          "data": {"allowed": true, "reason": "allowed_by_s003_fixture"},
+          "links": {},
+          "meta": {"request_id": "req_s003_policy_job_cancel_queued", "schema_version": "v1"}
+        }
+      }
+    },
+    {
+      "id": "policy_job_cancel_running_deny",
+      "request": {
+        "method": "POST",
+        "path": "/v1/policy/check",
+        "body": {
+          "subject_id": "sub_agent_s003",
+          "action": "job.cancel",
+          "resource": "job_s003_0001",
+          "context": {"job_id": "job_s003_0001", "requester_id": "sub_agent_s003", "owner_subject_id": "sub_agent_s003", "job_state": "running"}
+        }
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "ok": true,
+          "data": {"allowed": false, "reason": "policy_denied"},
+          "links": {},
+          "meta": {"request_id": "req_s003_policy_job_cancel_running_denied", "schema_version": "v1"}
+        }
+      }
+    },
+    {
+      "id": "policy_job_cancel_missing_state_deny",
+      "request": {
+        "method": "POST",
+        "path": "/v1/policy/check",
+        "body": {
+          "subject_id": "sub_agent_s003",
+          "action": "job.cancel",
+          "resource": "job_s003_0001",
+          "context": {"job_id": "job_s003_0001", "requester_id": "sub_agent_s003", "owner_subject_id": "sub_agent_s003"}
+        }
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "ok": true,
+          "data": {"allowed": false, "reason": "missing_context"},
+          "links": {},
+          "meta": {"request_id": "req_s003_policy_job_cancel_missing_state", "schema_version": "v1"}
+        }
+      }
+    },
+    {
+      "id": "policy_job_artifacts_collection_allow",
+      "request": {
+        "method": "POST",
+        "path": "/v1/policy/check",
+        "body": {
+          "subject_id": "sub_agent_s003",
+          "action": "artifact.read",
+          "resource": "job_artifacts:job_s003_0001",
+          "context": {
+            "job_id": "job_s003_0001",
+            "producer_ref": "job_s003_0001",
+            "owner_subject_id": "sub_agent_s003"
+          }
+        }
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "ok": true,
+          "data": {"allowed": true, "reason": "allowed_by_s003_fixture"},
+          "links": {},
+          "meta": {"request_id": "req_s003_policy_job_artifacts_read", "schema_version": "v1"}
+        }
+      }
+    },
+    {
+      "id": "policy_artifact_read_allow",
+      "request": {
+        "method": "POST",
+        "path": "/v1/policy/check",
+        "body": {
+          "subject_id": "sub_agent_s003",
+          "action": "artifact.read",
+          "resource": "art_s003_0001",
+          "context": {
+            "artifact_id": "art_s003_0001",
+            "owner_subject_id": "sub_agent_s003",
+            "producer_ref": "job_s003_0001",
+            "job_id": "job_s003_0001"
+          }
+        }
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "ok": true,
+          "data": {"allowed": true, "reason": "allowed_by_s003_fixture"},
+          "links": {},
+          "meta": {"request_id": "req_s003_policy_artifact_read", "schema_version": "v1"}
+        }
+      }
+    },
+    {
+      "id": "policy_artifact_read_missing_owner_deny",
+      "request": {
+        "method": "POST",
+        "path": "/v1/policy/check",
+        "body": {
+          "subject_id": "sub_agent_s003",
+          "action": "artifact.read",
+          "resource": "art_s003_0001",
+          "context": {"artifact_id": "art_s003_0001", "producer_ref": "job_s003_0001", "job_id": "job_s003_0001"}
+        }
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "ok": true,
+          "data": {"allowed": false, "reason": "missing_context"},
+          "links": {},
+          "meta": {"request_id": "req_s003_policy_artifact_missing_owner", "schema_version": "v1"}
+        }
+      }
+    },
+    {
+      "id": "policy_job_artifacts_collection_missing_owner_deny",
+      "request": {
+        "method": "POST",
+        "path": "/v1/policy/check",
+        "body": {
+          "subject_id": "sub_agent_s003",
+          "action": "artifact.read",
+          "resource": "job_artifacts:job_s003_0001",
+          "context": {"job_id": "job_s003_0001", "producer_ref": "job_s003_0001"}
+        }
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "ok": true,
+          "data": {"allowed": false, "reason": "missing_context"},
+          "links": {},
+          "meta": {"request_id": "req_s003_policy_job_artifacts_missing_owner", "schema_version": "v1"}
+        }
+      }
+    },
+    {
+      "id": "policy_denied",
+      "request": {
+        "method": "POST",
+        "path": "/v1/policy/check",
+        "body": {
+          "subject_id": "sub_other_s003",
+          "action": "job.read",
+          "resource": "job_s003_0001",
+          "context": {"job_id": "job_s003_0001", "requester_id": "sub_agent_s003", "owner_subject_id": "sub_agent_s003"}
+        }
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "ok": true,
+          "data": {"allowed": false, "reason": "policy_denied"},
+          "links": {},
+          "meta": {"request_id": "req_s003_policy_denied", "schema_version": "v1"}
+        }
+      }
+    },
+    {
+      "id": "policy_missing_context_deny",
+      "request": {
+        "method": "POST",
+        "path": "/v1/policy/check",
+        "body": {
+          "subject_id": "sub_agent_s003",
+          "action": "job.read",
+          "resource": "job_s003_0001",
+          "context": {}
+        }
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "ok": true,
+          "data": {"allowed": false, "reason": "missing_context"},
+          "links": {},
+          "meta": {"request_id": "req_s003_policy_missing_context", "schema_version": "v1"}
+        }
+      }
+    },
+    {
+      "id": "policy_unknown_action_deny",
+      "request": {
+        "method": "POST",
+        "path": "/v1/policy/check",
+        "body": {
+          "subject_id": "sub_agent_s003",
+          "action": "unknown.action",
+          "resource": "job_s003_0001",
+          "context": {"job_id": "job_s003_0001", "requester_id": "sub_agent_s003", "owner_subject_id": "sub_agent_s003"}
+        }
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "ok": true,
+          "data": {"allowed": false, "reason": "unknown_action"},
+          "links": {},
+          "meta": {"request_id": "req_s003_policy_unknown_action", "schema_version": "v1"}
+        }
+      }
+    },
+    {
+      "id": "policy_unknown_resource_deny",
+      "request": {
+        "method": "POST",
+        "path": "/v1/policy/check",
+        "body": {
+          "subject_id": "sub_agent_s003",
+          "action": "job.read",
+          "resource": "unknown:job_s003_0001",
+          "context": {"job_id": "job_s003_0001", "requester_id": "sub_agent_s003", "owner_subject_id": "sub_agent_s003"}
+        }
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "ok": true,
+          "data": {"allowed": false, "reason": "unknown_resource"},
+          "links": {},
+          "meta": {"request_id": "req_s003_policy_unknown_resource", "schema_version": "v1"}
+        }
+      }
+    }
+  ],
+  "out_of_scope": ["secrets materialization is not exercised by S003"]
+}

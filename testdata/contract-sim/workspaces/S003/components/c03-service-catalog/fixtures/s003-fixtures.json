@@ -1,0 +1,383 @@
+{
+  "scenario_id": "S003",
+  "component": "c03-service-catalog",
+  "fixtures": [
+    {
+      "id": "catalog_list_ok",
+      "request": {
+        "method": "GET",
+        "path": "/v1/catalog/capabilities",
+        "query": {"limit": "50", "visible_capability_ids": ["cap_image_generate_gpu"]}
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "ok": true,
+          "data": {
+            "items": [
+              {
+                "capability": {
+                  "id": "cap_image_generate_gpu",
+                  "service_id": "svc_comfyui_gpu",
+                  "name": "GPU image generation",
+                  "description": "Generate an image using a GPU-backed provider.",
+                  "execution_mode": "async",
+                  "input_schema": {
+                    "type": "object",
+                    "required": ["prompt"],
+                    "properties": {
+                      "prompt": {"type": "string"},
+                      "width": {"type": "integer"},
+                      "height": {"type": "integer"},
+                      "seed": {"type": "integer"}
+                    }
+                  },
+                  "output_schema": {
+                    "type": "object",
+                    "properties": {
+                      "artifact_refs": {"type": "array", "items": {"type": "string"}}
+                    }
+                  },
+                  "examples": [],
+                  "side_effects": "external",
+                  "resource_hints": [{"selector": "gpu", "required": true, "quantity": 1}],
+                  "artifact_hints": [{"media_type": "image/png", "count": "one"}],
+                  "timeout_hint": "15m"
+                },
+                "route": {
+                  "capability_id": "cap_image_generate_gpu",
+                  "service_id": "svc_comfyui_gpu",
+                  "provider_endpoint": "http://node_linux_gpu:8188",
+                  "provider_health_path": "/v1/provider/health",
+                  "provider_invoke_path": "/v1/provider/capabilities/cap_image_generate_gpu/invoke",
+                  "node_id": "node_linux_gpu",
+                  "node_managed": true,
+                  "service_start_mode": "on_demand",
+                  "resource_hints": [{"selector": "gpu", "required": true, "quantity": 1}],
+                  "artifact_hints": [{"media_type": "image/png", "count": "one"}]
+                },
+                "service": {
+                  "id": "svc_comfyui_gpu",
+                  "name": "ComfyUI GPU Provider",
+                  "description": "Node-managed image generation provider.",
+                  "version": "v1",
+                  "provider_kind": "comfyui",
+                  "tags": ["image", "gpu"]
+                }
+              }
+            ],
+            "next_cursor": null
+          },
+          "links": {},
+          "meta": {"request_id": "req_s003_catalog_list", "schema_version": "v1"}
+        }
+      }
+    },
+    {
+      "id": "catalog_detail_lookup_ok",
+      "request": {
+        "method": "GET",
+        "path": "/v1/catalog/capabilities",
+        "query": {"capability_id": "cap_image_generate_gpu"}
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "ok": true,
+          "data": {
+            "items": [
+              {
+                "capability": {
+                  "id": "cap_image_generate_gpu",
+                  "service_id": "svc_comfyui_gpu",
+                  "name": "GPU image generation",
+                  "description": "Generate an image using a GPU-backed provider.",
+                  "execution_mode": "async",
+                  "input_schema": {
+                    "type": "object",
+                    "required": ["prompt"],
+                    "properties": {
+                      "prompt": {"type": "string"},
+                      "width": {"type": "integer"},
+                      "height": {"type": "integer"},
+                      "seed": {"type": "integer"}
+                    }
+                  },
+                  "output_schema": {
+                    "type": "object",
+                    "properties": {
+                      "artifact_refs": {"type": "array", "items": {"type": "string"}}
+                    }
+                  },
+                  "examples": [],
+                  "side_effects": "external",
+                  "resource_hints": [{"selector": "gpu", "required": true, "quantity": 1}],
+                  "artifact_hints": [{"media_type": "image/png", "count": "one"}],
+                  "timeout_hint": "15m"
+                },
+                "route": {
+                  "capability_id": "cap_image_generate_gpu",
+                  "service_id": "svc_comfyui_gpu",
+                  "provider_endpoint": "http://node_linux_gpu:8188",
+                  "provider_health_path": "/v1/provider/health",
+                  "provider_invoke_path": "/v1/provider/capabilities/cap_image_generate_gpu/invoke",
+                  "node_id": "node_linux_gpu",
+                  "node_managed": true,
+                  "service_start_mode": "on_demand",
+                  "resource_hints": [{"selector": "gpu", "required": true, "quantity": 1}],
+                  "artifact_hints": [{"media_type": "image/png", "count": "one"}]
+                },
+                "service": {
+                  "id": "svc_comfyui_gpu",
+                  "name": "ComfyUI GPU Provider",
+                  "description": "Node-managed image generation provider.",
+                  "version": "v1",
+                  "provider_kind": "comfyui",
+                  "tags": ["image", "gpu"]
+                }
+              }
+            ],
+            "next_cursor": null
+          },
+          "links": {},
+          "meta": {"request_id": "req_s003_catalog_detail_lookup", "schema_version": "v1"}
+        }
+      }
+    },
+    {
+      "id": "catalog_visible_repeated_query_ok",
+      "request": {
+        "method": "GET",
+        "path": "/v1/catalog/capabilities",
+        "query": {"visible_capability_ids": ["cap_other", "cap_image_generate_gpu"]},
+        "wire_query": "visible_capability_ids=cap_other&visible_capability_ids=cap_image_generate_gpu"
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "ok": true,
+          "data": {
+            "items": [
+              {
+                "capability": {
+                  "id": "cap_image_generate_gpu",
+                  "service_id": "svc_comfyui_gpu",
+                  "name": "GPU image generation",
+                  "description": "Generate an image using a GPU-backed provider.",
+                  "execution_mode": "async",
+                  "input_schema": {
+                    "type": "object",
+                    "required": ["prompt"],
+                    "properties": {
+                      "prompt": {"type": "string"},
+                      "width": {"type": "integer"},
+                      "height": {"type": "integer"},
+                      "seed": {"type": "integer"}
+                    }
+                  },
+                  "output_schema": {
+                    "type": "object",
+                    "properties": {
+                      "artifact_refs": {"type": "array", "items": {"type": "string"}}
+                    }
+                  },
+                  "examples": [],
+                  "side_effects": "external",
+                  "resource_hints": [{"selector": "gpu", "required": true, "quantity": 1}],
+                  "artifact_hints": [{"media_type": "image/png", "count": "one"}],
+                  "timeout_hint": "15m"
+                },
+                "route": {
+                  "capability_id": "cap_image_generate_gpu",
+                  "service_id": "svc_comfyui_gpu",
+                  "provider_endpoint": "http://node_linux_gpu:8188",
+                  "provider_health_path": "/v1/provider/health",
+                  "provider_invoke_path": "/v1/provider/capabilities/cap_image_generate_gpu/invoke",
+                  "node_id": "node_linux_gpu",
+                  "node_managed": true,
+                  "service_start_mode": "on_demand",
+                  "resource_hints": [{"selector": "gpu", "required": true, "quantity": 1}],
+                  "artifact_hints": [{"media_type": "image/png", "count": "one"}]
+                },
+                "service": {
+                  "id": "svc_comfyui_gpu",
+                  "name": "ComfyUI GPU Provider",
+                  "description": "Node-managed image generation provider.",
+                  "version": "v1",
+                  "provider_kind": "comfyui",
+                  "tags": ["image", "gpu"]
+                }
+              }
+            ],
+            "next_cursor": null
+          },
+          "links": {},
+          "meta": {"request_id": "req_s003_catalog_visible_repeated", "schema_version": "v1"}
+        }
+      }
+    },
+    {
+      "id": "catalog_intersection_match",
+      "request": {
+        "method": "GET",
+        "path": "/v1/catalog/capabilities",
+        "query": {
+          "capability_id": "cap_image_generate_gpu",
+          "visible_capability_ids": ["cap_other", "cap_image_generate_gpu"]
+        },
+        "wire_query": "capability_id=cap_image_generate_gpu&visible_capability_ids=cap_other&visible_capability_ids=cap_image_generate_gpu"
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "ok": true,
+          "data": {
+            "items": [
+              {
+                "capability": {
+                  "id": "cap_image_generate_gpu",
+                  "service_id": "svc_comfyui_gpu",
+                  "name": "GPU image generation",
+                  "description": "Generate an image using a GPU-backed provider.",
+                  "execution_mode": "async",
+                  "input_schema": {
+                    "type": "object",
+                    "required": ["prompt"],
+                    "properties": {
+                      "prompt": {"type": "string"},
+                      "width": {"type": "integer"},
+                      "height": {"type": "integer"},
+                      "seed": {"type": "integer"}
+                    }
+                  },
+                  "output_schema": {
+                    "type": "object",
+                    "properties": {
+                      "artifact_refs": {"type": "array", "items": {"type": "string"}}
+                    }
+                  },
+                  "examples": [],
+                  "side_effects": "external",
+                  "resource_hints": [{"selector": "gpu", "required": true, "quantity": 1}],
+                  "artifact_hints": [{"media_type": "image/png", "count": "one"}],
+                  "timeout_hint": "15m"
+                },
+                "route": {
+                  "capability_id": "cap_image_generate_gpu",
+                  "service_id": "svc_comfyui_gpu",
+                  "provider_endpoint": "http://node_linux_gpu:8188",
+                  "provider_health_path": "/v1/provider/health",
+                  "provider_invoke_path": "/v1/provider/capabilities/cap_image_generate_gpu/invoke",
+                  "node_id": "node_linux_gpu",
+                  "node_managed": true,
+                  "service_start_mode": "on_demand",
+                  "resource_hints": [{"selector": "gpu", "required": true, "quantity": 1}],
+                  "artifact_hints": [{"media_type": "image/png", "count": "one"}]
+                },
+                "service": {
+                  "id": "svc_comfyui_gpu",
+                  "name": "ComfyUI GPU Provider",
+                  "description": "Node-managed image generation provider.",
+                  "version": "v1",
+                  "provider_kind": "comfyui",
+                  "tags": ["image", "gpu"]
+                }
+              }
+            ],
+            "next_cursor": null
+          },
+          "links": {},
+          "meta": {"request_id": "req_s003_catalog_intersection_match", "schema_version": "v1"}
+        }
+      }
+    },
+    {
+      "id": "catalog_filtered_empty",
+      "request": {
+        "method": "GET",
+        "path": "/v1/catalog/capabilities",
+        "query": {
+          "capability_id": "cap_image_generate_gpu",
+          "visible_capability_ids": ["cap_other"]
+        }
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "ok": true,
+          "data": {"items": [], "next_cursor": null},
+          "links": {},
+          "meta": {"request_id": "req_s003_catalog_filtered_empty", "schema_version": "v1"}
+        }
+      }
+    },
+    {
+      "id": "catalog_route_ok",
+      "request": {
+        "method": "GET",
+        "path": "/v1/catalog/capabilities/cap_image_generate_gpu/route"
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "ok": true,
+          "data": {
+            "capability_id": "cap_image_generate_gpu",
+            "service_id": "svc_comfyui_gpu",
+            "provider_endpoint": "http://node_linux_gpu:8188",
+            "provider_health_path": "/v1/provider/health",
+            "provider_invoke_path": "/v1/provider/capabilities/cap_image_generate_gpu/invoke",
+            "node_id": "node_linux_gpu",
+            "node_managed": true,
+            "service_start_mode": "on_demand",
+            "resource_hints": [{"selector": "gpu", "required": true, "quantity": 1}],
+            "artifact_hints": [{"media_type": "image/png", "count": "one"}]
+          },
+          "links": {},
+          "meta": {"request_id": "req_s003_catalog_route", "schema_version": "v1"}
+        }
+      }
+    },
+    {
+      "id": "catalog_route_not_found",
+      "request": {
+        "method": "GET",
+        "path": "/v1/catalog/capabilities/unknown/route"
+      },
+      "response": {
+        "status": 404,
+        "body": {
+          "ok": false,
+          "error": {
+            "code": "not_found",
+            "message": "capability not found",
+            "retryable": false
+          },
+          "links": {},
+          "meta": {"request_id": "req_s003_catalog_not_found", "schema_version": "v1"}
+        }
+      }
+    },
+    {
+      "id": "catalog_invalid_cursor",
+      "request": {
+        "method": "GET",
+        "path": "/v1/catalog/capabilities",
+        "query": {"cursor": "cursor_s003_invalid"}
+      },
+      "response": {
+        "status": 400,
+        "body": {
+          "ok": false,
+          "error": {
+            "code": "invalid_cursor",
+            "message": "cursor is invalid or expired",
+            "retryable": false
+          },
+          "links": {},
+          "meta": {"request_id": "req_s003_catalog_invalid_cursor", "schema_version": "v1"}
+        }
+      }
+    }
+  ]
+}

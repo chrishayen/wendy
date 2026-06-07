@@ -1,0 +1,604 @@
+{
+  "scenario_id": "S003",
+  "component": "c06-resource-lease-service",
+  "fixtures": [
+    {
+      "id": "lease_grant_ok",
+      "request": {
+        "method": "POST",
+        "path": "/v1/lease-requests",
+        "headers": {"Authorization": "Bearer token_s003_runner"},
+        "body": {
+          "requester_id": "job_s003_0001",
+          "resource_selector": "gpu",
+          "priority": 0,
+          "heartbeat_timeout_seconds": 60
+        }
+      },
+      "response": {
+        "status": 201,
+        "body": {
+          "ok": true,
+          "data": {
+            "request_id": "lease_req_s003_0001",
+            "state": "granted",
+            "resource_selector": "gpu",
+            "queue_position": null,
+            "lease": {
+              "lease_id": "lease_s003_0001",
+              "resource_id": "res_gpu_0",
+              "holder_id": "job_s003_0001",
+              "expires_at": "2026-06-05T20:01:02Z",
+              "links": {
+                "heartbeat": {"method": "POST", "href": "/v1/leases/lease_s003_0001/heartbeat", "description": "Refresh lease."},
+                "release": {"method": "POST", "href": "/v1/leases/lease_s003_0001/release", "description": "Release lease."}
+              }
+            },
+            "created_at": "2026-06-05T20:00:02Z",
+            "updated_at": "2026-06-05T20:00:02Z"
+          },
+          "links": {},
+          "meta": {"request_id": "req_s003_lease_grant", "schema_version": "v1"}
+        }
+      }
+    },
+    {
+      "id": "lease_heartbeat_ok",
+      "request": {
+        "method": "POST",
+        "path": "/v1/leases/lease_s003_0001/heartbeat",
+        "headers": {"Authorization": "Bearer token_s003_runner"},
+        "body": {"holder_id": "job_s003_0001"}
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "ok": true,
+          "data": {
+            "lease_id": "lease_s003_0001",
+            "resource_id": "res_gpu_0",
+            "holder_id": "job_s003_0001",
+            "expires_at": "2026-06-05T20:01:32Z",
+            "links": {
+              "heartbeat": {"method": "POST", "href": "/v1/leases/lease_s003_0001/heartbeat", "description": "Refresh lease."},
+              "release": {"method": "POST", "href": "/v1/leases/lease_s003_0001/release", "description": "Release lease."}
+            }
+          },
+          "links": {},
+          "meta": {"request_id": "req_s003_lease_heartbeat", "schema_version": "v1"}
+        }
+      }
+    },
+    {
+      "id": "lease_release_ok",
+      "request": {
+        "method": "POST",
+        "path": "/v1/leases/lease_s003_0001/release",
+        "headers": {
+          "Authorization": "Bearer token_s003_runner",
+          "Idempotency-Key": "idem_s003_lease_release"
+        },
+        "body": {"holder_id": "job_s003_0001", "reason": "job completed"}
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "ok": true,
+          "data": {
+            "lease_id": "lease_s003_0001",
+            "resource_id": "res_gpu_0",
+            "holder_id": "job_s003_0001",
+            "expires_at": "2026-06-05T20:00:46Z",
+            "released_at": "2026-06-05T20:00:46Z",
+            "released_by": "sub_runner_s003",
+            "release_reason": "job completed",
+            "links": {}
+          },
+          "links": {},
+          "meta": {"request_id": "req_s003_lease_release", "schema_version": "v1"}
+        }
+      }
+    },
+    {
+      "id": "lease_release_replay",
+      "request": {
+        "method": "POST",
+        "path": "/v1/leases/lease_s003_0001/release",
+        "headers": {
+          "Authorization": "Bearer token_s003_runner",
+          "Idempotency-Key": "idem_s003_lease_release"
+        },
+        "body": {"holder_id": "job_s003_0001", "reason": "job completed"},
+        "precondition": "same release idempotency record already exists"
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "ok": true,
+          "data": {
+            "lease_id": "lease_s003_0001",
+            "resource_id": "res_gpu_0",
+            "holder_id": "job_s003_0001",
+            "expires_at": "2026-06-05T20:00:46Z",
+            "released_at": "2026-06-05T20:00:46Z",
+            "released_by": "sub_runner_s003",
+            "release_reason": "job completed",
+            "links": {}
+          },
+          "links": {},
+          "meta": {"request_id": "req_s003_lease_release_replay", "schema_version": "v1"}
+        }
+      },
+      "owned_audit_assertion": {
+        "dedupe_key": "idem_s003_lease_release",
+        "expected_lease_released_events_after_replay": 1
+      }
+    },
+    {
+      "id": "lease_release_provider_failure",
+      "request": {
+        "method": "POST",
+        "path": "/v1/leases/lease_s003_0001/release",
+        "headers": {
+          "Authorization": "Bearer token_s003_runner",
+          "Idempotency-Key": "idem_s003_lease_release_provider_failure"
+        },
+        "body": {"holder_id": "job_s003_0001", "reason": "provider failed"}
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "ok": true,
+          "data": {
+            "lease_id": "lease_s003_0001",
+            "resource_id": "res_gpu_0",
+            "holder_id": "job_s003_0001",
+            "expires_at": "2026-06-05T20:00:08Z",
+            "released_at": "2026-06-05T20:00:08Z",
+            "released_by": "sub_runner_s003",
+            "release_reason": "provider failed",
+            "links": {}
+          },
+          "links": {},
+          "meta": {"request_id": "req_s003_lease_release_provider_failure", "schema_version": "v1"}
+        }
+      }
+    },
+    {
+      "id": "lease_release_provider_failure_audit_event",
+      "owned_event": {
+        "event_id": "audit_s003_lease_release_provider_failure",
+        "event_type": "lease.released",
+        "lease_id": "lease_s003_0001",
+        "resource_id": "res_gpu_0",
+        "holder_id": "job_s003_0001",
+        "actor_subject_id": "sub_runner_s003",
+        "release_reason": "provider failed",
+        "occurred_at": "2026-06-05T20:00:08Z",
+        "idempotency_key": "idem_s003_lease_release_provider_failure"
+      }
+    },
+    {
+      "id": "lease_pending_ok",
+      "request": {
+        "method": "POST",
+        "path": "/v1/lease-requests",
+        "headers": {"Authorization": "Bearer token_s003_runner"},
+        "body": {
+          "requester_id": "job_s003_0002",
+          "resource_selector": "gpu",
+          "priority": 0,
+          "heartbeat_timeout_seconds": 60
+        }
+      },
+      "response": {
+        "status": 201,
+        "body": {
+          "ok": true,
+          "data": {
+            "request_id": "lease_req_s003_0002",
+            "state": "pending",
+            "resource_selector": "gpu",
+            "queue_position": 1,
+            "lease": null,
+            "created_at": "2026-06-05T20:00:03Z",
+            "updated_at": "2026-06-05T20:00:03Z",
+            "links": {
+              "status": {"method": "GET", "href": "/v1/lease-requests/lease_req_s003_0002", "description": "Read lease request."},
+              "cancel": {"method": "POST", "href": "/v1/lease-requests/lease_req_s003_0002/cancel", "description": "Cancel request."}
+            }
+          },
+          "links": {},
+          "meta": {"request_id": "req_s003_lease_pending", "schema_version": "v1"}
+        }
+      }
+    },
+    {
+      "id": "lease_pending_cancel",
+      "request": {
+        "method": "POST",
+        "path": "/v1/lease-requests/lease_req_s003_0002/cancel",
+        "headers": {"Authorization": "Bearer token_s003_runner"}
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "ok": true,
+          "data": {
+            "request_id": "lease_req_s003_0002",
+            "state": "canceled",
+            "resource_selector": "gpu",
+            "queue_position": null,
+            "lease": null,
+            "created_at": "2026-06-05T20:00:03Z",
+            "updated_at": "2026-06-05T20:00:10Z",
+            "links": {}
+          },
+          "links": {},
+          "meta": {"request_id": "req_s003_lease_pending_cancel", "schema_version": "v1"}
+        }
+      }
+    },
+    {
+      "id": "lease_pending_cancel_replay",
+      "request": {
+        "method": "POST",
+        "path": "/v1/lease-requests/lease_req_s003_0002/cancel",
+        "headers": {"Authorization": "Bearer token_s003_runner"},
+        "precondition": "lease_req_s003_0002 was already canceled by the same cancel request"
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "ok": true,
+          "data": {
+            "request_id": "lease_req_s003_0002",
+            "state": "canceled",
+            "resource_selector": "gpu",
+            "queue_position": null,
+            "lease": null,
+            "created_at": "2026-06-05T20:00:03Z",
+            "updated_at": "2026-06-05T20:00:10Z",
+            "links": {}
+          },
+          "links": {},
+          "meta": {"request_id": "req_s003_lease_pending_cancel_replay", "schema_version": "v1"}
+        }
+      }
+    },
+    {
+      "id": "lease_holder_mismatch",
+      "request": {
+        "method": "POST",
+        "path": "/v1/leases/lease_s003_0001/heartbeat",
+        "headers": {"Authorization": "Bearer token_s003_runner"},
+        "body": {"holder_id": "job_s003_other"},
+        "precondition": "lease_s003_0001 is active and held by job_s003_0001"
+      },
+      "response": {
+        "status": 403,
+        "body": {
+          "ok": false,
+          "error": {
+            "code": "forbidden",
+            "message": "holder mismatch",
+            "retryable": false
+          },
+          "links": {},
+          "meta": {"request_id": "req_s003_lease_holder_mismatch", "schema_version": "v1"}
+        }
+      }
+    },
+    {
+      "id": "lease_heartbeat_expired",
+      "request": {
+        "method": "POST",
+        "path": "/v1/leases/lease_s003_0001/heartbeat",
+        "headers": {"Authorization": "Bearer token_s003_runner"},
+        "body": {"holder_id": "job_s003_0001"},
+        "precondition": "no C06 heartbeat was sent after grant; now is 2026-06-05T20:01:03Z"
+      },
+      "response": {
+        "status": 409,
+        "body": {
+          "ok": false,
+          "error": {
+            "code": "lease_expired",
+            "message": "lease heartbeat rejected because lease has expired",
+            "retryable": false
+          },
+          "links": {},
+          "meta": {"request_id": "req_s003_lease_heartbeat_expired", "schema_version": "v1"}
+        }
+      }
+    },
+    {
+      "id": "lease_release_expired",
+      "request": {
+        "method": "POST",
+        "path": "/v1/leases/lease_s003_0001/release",
+        "headers": {
+          "Authorization": "Bearer token_s003_runner",
+          "Idempotency-Key": "idem_s003_lease_release_expired"
+        },
+        "body": {"holder_id": "job_s003_0001", "reason": "lease expired"},
+        "precondition": "no C06 heartbeat was sent after grant; now is 2026-06-05T20:01:03Z"
+      },
+      "response": {
+        "status": 409,
+        "body": {
+          "ok": false,
+          "error": {
+            "code": "lease_expired",
+            "message": "lease release rejected because lease has expired",
+            "retryable": false
+          },
+          "links": {},
+          "meta": {"request_id": "req_s003_lease_release_expired", "schema_version": "v1"}
+        }
+      }
+    },
+    {
+      "id": "lease_request_status_pending",
+      "request": {
+        "method": "GET",
+        "path": "/v1/lease-requests/lease_req_s003_0002",
+        "headers": {"Authorization": "Bearer token_s003_runner"},
+        "precondition": "lease_req_s003_0002 is pending"
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "ok": true,
+          "data": {
+            "request_id": "lease_req_s003_0002",
+            "state": "pending",
+            "resource_selector": "gpu",
+            "queue_position": 1,
+            "lease": null,
+            "created_at": "2026-06-05T20:00:03Z",
+            "updated_at": "2026-06-05T20:00:03Z",
+            "links": {
+              "status": {"method": "GET", "href": "/v1/lease-requests/lease_req_s003_0002", "description": "Read lease request."},
+              "cancel": {"method": "POST", "href": "/v1/lease-requests/lease_req_s003_0002/cancel", "description": "Cancel request."}
+            }
+          },
+          "links": {},
+          "meta": {"request_id": "req_s003_lease_request_status", "schema_version": "v1"}
+        }
+      }
+    },
+    {
+      "id": "lease_release_idempotency_conflict",
+      "request": {
+        "method": "POST",
+        "path": "/v1/leases/lease_s003_0001/release",
+        "headers": {
+          "Authorization": "Bearer token_s003_runner",
+          "Idempotency-Key": "idem_s003_lease_release"
+        },
+        "body": {"holder_id": "job_s003_0001", "reason": "different reason"},
+        "precondition": "same release idempotency key already used for job completed"
+      },
+      "response": {
+        "status": 409,
+        "body": {
+          "ok": false,
+          "error": {"code": "idempotency_conflict", "message": "idempotency key was reused with different request content", "retryable": false},
+          "links": {},
+          "meta": {"request_id": "req_s003_lease_release_idempotency_conflict", "schema_version": "v1"}
+        }
+      }
+    },
+    {
+      "id": "lease_unknown_selector",
+      "request": {
+        "method": "POST",
+        "path": "/v1/lease-requests",
+        "headers": {"Authorization": "Bearer token_s003_runner"},
+        "body": {
+          "requester_id": "job_s003_0003",
+          "resource_selector": "quantum_gpu",
+          "priority": 0,
+          "heartbeat_timeout_seconds": 60
+        }
+      },
+      "response": {
+        "status": 409,
+        "body": {
+          "ok": false,
+          "error": {"code": "resource_unavailable", "message": "resource selector is unavailable", "retryable": true},
+          "links": {},
+          "meta": {"request_id": "req_s003_lease_unknown_selector", "schema_version": "v1"}
+        }
+      }
+    },
+    {
+      "id": "lease_resource_unavailable",
+      "request": {
+        "method": "POST",
+        "path": "/v1/lease-requests",
+        "headers": {"Authorization": "Bearer token_s003_runner"},
+        "body": {
+          "requester_id": "job_s003_0004",
+          "resource_selector": "gpu",
+          "priority": 0,
+          "heartbeat_timeout_seconds": 60
+        },
+        "precondition": "queue admission is disabled because no GPU resource can be leased"
+      },
+      "response": {
+        "status": 503,
+        "body": {
+          "ok": false,
+          "error": {"code": "resource_unavailable", "message": "resource selector has no available leasing capacity", "retryable": true},
+          "links": {},
+          "meta": {"request_id": "req_s003_lease_resource_unavailable", "schema_version": "v1"}
+        }
+      }
+    },
+    {
+      "id": "lease_provider_timeout_liveness",
+      "event_list": {
+        "schema_version": "event-list.v1",
+        "replay_kind": "deterministic_request_response_sequence",
+        "ordered": true,
+        "precondition": "lease_s003_0001 is active and held by job_s003_0001 while provider invocation is waiting for completion",
+        "event_fields": ["timestamp", "request_id", "expires_at"],
+        "state_transition": "Each event renews the C06 lease and updates expires_at to the event's expires_at value.",
+        "fixture_ready_representation": "Each event is a standalone replay case when expanded with request_template and response_template. The event timestamp supplies the request time, request_id supplies response.meta.request_id, and expires_at supplies response.body.data.expires_at.",
+        "purpose": "Keep the C06 resource lease active during the 900-second provider timeout branch.",
+        "request_template": {
+          "method": "POST",
+          "path": "/v1/leases/lease_s003_0001/heartbeat",
+          "headers": {"Authorization": "Bearer token_s003_runner"},
+          "body": {"holder_id": "job_s003_0001"}
+        },
+        "response_template": {
+          "status": 200,
+          "body": {
+            "ok": true,
+            "data": {
+              "lease_id": "lease_s003_0001",
+              "resource_id": "res_gpu_0",
+              "holder_id": "job_s003_0001",
+              "expires_at": "${expires_at}",
+              "links": {
+                "heartbeat": {"method": "POST", "href": "/v1/leases/lease_s003_0001/heartbeat", "description": "Refresh lease."},
+                "release": {"method": "POST", "href": "/v1/leases/lease_s003_0001/release", "description": "Release lease."}
+              }
+            },
+            "links": {},
+            "meta": {"request_id": "${request_id}", "schema_version": "v1"}
+          }
+        },
+        "events": [
+          {"timestamp": "2026-06-05T20:00:37Z", "request_id": "req_s003_lease_heartbeat_provider_timeout_0001", "expires_at": "2026-06-05T20:01:37Z"},
+          {"timestamp": "2026-06-05T20:01:07Z", "request_id": "req_s003_lease_heartbeat_provider_timeout_0002", "expires_at": "2026-06-05T20:02:07Z"},
+          {"timestamp": "2026-06-05T20:01:37Z", "request_id": "req_s003_lease_heartbeat_provider_timeout_0003", "expires_at": "2026-06-05T20:02:37Z"},
+          {"timestamp": "2026-06-05T20:02:07Z", "request_id": "req_s003_lease_heartbeat_provider_timeout_0004", "expires_at": "2026-06-05T20:03:07Z"},
+          {"timestamp": "2026-06-05T20:02:37Z", "request_id": "req_s003_lease_heartbeat_provider_timeout_0005", "expires_at": "2026-06-05T20:03:37Z"},
+          {"timestamp": "2026-06-05T20:03:07Z", "request_id": "req_s003_lease_heartbeat_provider_timeout_0006", "expires_at": "2026-06-05T20:04:07Z"},
+          {"timestamp": "2026-06-05T20:03:37Z", "request_id": "req_s003_lease_heartbeat_provider_timeout_0007", "expires_at": "2026-06-05T20:04:37Z"},
+          {"timestamp": "2026-06-05T20:04:07Z", "request_id": "req_s003_lease_heartbeat_provider_timeout_0008", "expires_at": "2026-06-05T20:05:07Z"},
+          {"timestamp": "2026-06-05T20:04:37Z", "request_id": "req_s003_lease_heartbeat_provider_timeout_0009", "expires_at": "2026-06-05T20:05:37Z"},
+          {"timestamp": "2026-06-05T20:05:07Z", "request_id": "req_s003_lease_heartbeat_provider_timeout_0010", "expires_at": "2026-06-05T20:06:07Z"},
+          {"timestamp": "2026-06-05T20:05:37Z", "request_id": "req_s003_lease_heartbeat_provider_timeout_0011", "expires_at": "2026-06-05T20:06:37Z"},
+          {"timestamp": "2026-06-05T20:06:07Z", "request_id": "req_s003_lease_heartbeat_provider_timeout_0012", "expires_at": "2026-06-05T20:07:07Z"},
+          {"timestamp": "2026-06-05T20:06:37Z", "request_id": "req_s003_lease_heartbeat_provider_timeout_0013", "expires_at": "2026-06-05T20:07:37Z"},
+          {"timestamp": "2026-06-05T20:07:07Z", "request_id": "req_s003_lease_heartbeat_provider_timeout_0014", "expires_at": "2026-06-05T20:08:07Z"},
+          {"timestamp": "2026-06-05T20:07:37Z", "request_id": "req_s003_lease_heartbeat_provider_timeout_0015", "expires_at": "2026-06-05T20:08:37Z"},
+          {"timestamp": "2026-06-05T20:08:07Z", "request_id": "req_s003_lease_heartbeat_provider_timeout_0016", "expires_at": "2026-06-05T20:09:07Z"},
+          {"timestamp": "2026-06-05T20:08:37Z", "request_id": "req_s003_lease_heartbeat_provider_timeout_0017", "expires_at": "2026-06-05T20:09:37Z"},
+          {"timestamp": "2026-06-05T20:09:07Z", "request_id": "req_s003_lease_heartbeat_provider_timeout_0018", "expires_at": "2026-06-05T20:10:07Z"},
+          {"timestamp": "2026-06-05T20:09:37Z", "request_id": "req_s003_lease_heartbeat_provider_timeout_0019", "expires_at": "2026-06-05T20:10:37Z"},
+          {"timestamp": "2026-06-05T20:10:07Z", "request_id": "req_s003_lease_heartbeat_provider_timeout_0020", "expires_at": "2026-06-05T20:11:07Z"},
+          {"timestamp": "2026-06-05T20:10:37Z", "request_id": "req_s003_lease_heartbeat_provider_timeout_0021", "expires_at": "2026-06-05T20:11:37Z"},
+          {"timestamp": "2026-06-05T20:11:07Z", "request_id": "req_s003_lease_heartbeat_provider_timeout_0022", "expires_at": "2026-06-05T20:12:07Z"},
+          {"timestamp": "2026-06-05T20:11:37Z", "request_id": "req_s003_lease_heartbeat_provider_timeout_0023", "expires_at": "2026-06-05T20:12:37Z"},
+          {"timestamp": "2026-06-05T20:12:07Z", "request_id": "req_s003_lease_heartbeat_provider_timeout_0024", "expires_at": "2026-06-05T20:13:07Z"},
+          {"timestamp": "2026-06-05T20:12:37Z", "request_id": "req_s003_lease_heartbeat_provider_timeout_0025", "expires_at": "2026-06-05T20:13:37Z"},
+          {"timestamp": "2026-06-05T20:13:07Z", "request_id": "req_s003_lease_heartbeat_provider_timeout_0026", "expires_at": "2026-06-05T20:14:07Z"},
+          {"timestamp": "2026-06-05T20:13:37Z", "request_id": "req_s003_lease_heartbeat_provider_timeout_0027", "expires_at": "2026-06-05T20:14:37Z"},
+          {"timestamp": "2026-06-05T20:14:07Z", "request_id": "req_s003_lease_heartbeat_provider_timeout_0028", "expires_at": "2026-06-05T20:15:07Z"},
+          {"timestamp": "2026-06-05T20:14:37Z", "request_id": "req_s003_lease_heartbeat_provider_timeout_0029", "expires_at": "2026-06-05T20:15:37Z"}
+        ],
+        "resulting_lease_expires_at": "2026-06-05T20:15:37Z"
+      }
+    },
+    {
+      "id": "lease_release_ok_audit_event",
+      "owned_event": {
+        "event_id": "audit_s003_lease_release_ok",
+        "event_type": "lease.released",
+        "lease_id": "lease_s003_0001",
+        "resource_id": "res_gpu_0",
+        "holder_id": "job_s003_0001",
+        "actor_subject_id": "sub_runner_s003",
+        "release_reason": "job completed",
+        "occurred_at": "2026-06-05T20:00:46Z",
+        "idempotency_key": "idem_s003_lease_release"
+      }
+    },
+    {
+      "id": "lease_release_provider_timeout",
+      "request": {
+        "method": "POST",
+        "path": "/v1/leases/lease_s003_0001/release",
+        "headers": {
+          "Authorization": "Bearer token_s003_runner",
+          "Idempotency-Key": "idem_s003_lease_release_provider_timeout"
+        },
+        "body": {"holder_id": "job_s003_0001", "reason": "provider timed out"},
+        "precondition": "lease_provider_timeout_liveness kept lease active until 2026-06-05T20:15:37Z"
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "ok": true,
+          "data": {
+            "lease_id": "lease_s003_0001",
+            "resource_id": "res_gpu_0",
+            "holder_id": "job_s003_0001",
+            "expires_at": "2026-06-05T20:15:08Z",
+            "released_at": "2026-06-05T20:15:08Z",
+            "released_by": "sub_runner_s003",
+            "release_reason": "provider timed out",
+            "links": {}
+          },
+          "links": {},
+          "meta": {"request_id": "req_s003_lease_release_provider_timeout", "schema_version": "v1"}
+        }
+      }
+    },
+    {
+      "id": "lease_release_provider_timeout_audit_event",
+      "owned_event": {
+        "event_id": "audit_s003_lease_release_provider_timeout",
+        "event_type": "lease.released",
+        "lease_id": "lease_s003_0001",
+        "resource_id": "res_gpu_0",
+        "holder_id": "job_s003_0001",
+        "actor_subject_id": "sub_runner_s003",
+        "release_reason": "provider timed out",
+        "occurred_at": "2026-06-05T20:15:08Z",
+        "idempotency_key": "idem_s003_lease_release_provider_timeout"
+      }
+    },
+    {
+      "id": "lease_release_replay_audit_dedupe",
+      "request": {
+        "method": "POST",
+        "path": "/v1/leases/lease_s003_0001/release",
+        "headers": {
+          "Authorization": "Bearer token_s003_runner",
+          "Idempotency-Key": "idem_s003_lease_release_provider_timeout"
+        },
+        "body": {"holder_id": "job_s003_0001", "reason": "provider timed out"},
+        "precondition": "same release idempotency record already returned lease_release_provider_timeout"
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "ok": true,
+          "data": {
+            "lease_id": "lease_s003_0001",
+            "resource_id": "res_gpu_0",
+            "holder_id": "job_s003_0001",
+            "expires_at": "2026-06-05T20:15:08Z",
+            "released_at": "2026-06-05T20:15:08Z",
+            "released_by": "sub_runner_s003",
+            "release_reason": "provider timed out",
+            "links": {}
+          },
+          "links": {},
+          "meta": {"request_id": "req_s003_lease_release_provider_timeout_replay", "schema_version": "v1"}
+        }
+      },
+      "owned_audit_assertion": {
+        "dedupe_key": "idem_s003_lease_release_provider_timeout",
+        "expected_lease_released_events_after_replay": 1
+      }
+    }
+  ]
+}

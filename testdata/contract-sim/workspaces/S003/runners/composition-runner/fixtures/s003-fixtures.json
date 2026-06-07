@@ -1,0 +1,162 @@
+{
+  "scenario_id": "S003",
+  "runner": "composition-runner",
+  "fixture_scope": "Runner orchestration over addressed public/component contracts. C06 audit events are not runner fixtures.",
+  "fixtures": [
+    {
+      "id": "c05_claim_ok",
+      "request": {"method": "POST", "path": "/v1/jobs/job_s003_0001/claim", "headers": {"Authorization": "Bearer token_s003_runner"}, "body": {"worker_id": "runner_s003_0001", "lease_seconds": 60}},
+      "response": {"status": 200, "body": {"ok": true, "data": {"job_id": "job_s003_0001", "state": "claimed", "created_at": "2026-06-05T20:00:00Z", "updated_at": "2026-06-05T20:00:01Z", "claim": {"worker_id": "runner_s003_0001", "claimed_at": "2026-06-05T20:00:01Z", "expires_at": "2026-06-05T20:01:01Z"}, "metadata": {"execution_plan": {"capability_id": "cap_image_generate_gpu", "subject_id": "sub_agent_s003", "input": {"prompt": "a clean product photo of a red ceramic mug", "width": 1024, "height": 1024}, "route": {"capability_id": "cap_image_generate_gpu", "service_id": "svc_comfyui_gpu", "provider_endpoint": "http://node_linux_gpu:8188", "provider_health_path": "/v1/provider/health", "provider_invoke_path": "/v1/provider/capabilities/cap_image_generate_gpu/invoke", "node_id": "node_linux_gpu", "node_managed": true, "service_start_mode": "on_demand", "resource_hints": [{"selector": "gpu", "required": true, "quantity": 1}], "artifact_hints": [{"media_type": "image/png", "count": "one"}]}, "resource_selector": "gpu", "timeout_seconds": 900, "artifact_hints": [{"media_type": "image/png", "count": "one"}], "provider_context": {}}}, "artifact_refs": [], "log_cursor": null, "terminal_error": null, "links": {}}, "links": {}, "meta": {"request_id": "req_s003_job_claim", "schema_version": "v1"}}}
+    },
+    {
+      "id": "happy_path",
+      "precondition": "checkpoint_after_job_create",
+      "orchestration_order": [
+        "c05_claim_ok",
+        "c06_lease_grant_ok",
+        "c05_heartbeat_running_ok",
+        "c09_node_health_ok",
+        "c09_service_stopped",
+        "c09_service_start_accepted",
+        "c09_service_running_ok",
+        "c10_invoke_success",
+        "c10_content_ok",
+        "c07_upload_path",
+        "c05_complete_ok",
+        "c06_lease_release_ok"
+      ],
+      "steps": [
+        {"fixture_ref": "c05_claim_ok"},
+        {"fixture": "c06_lease_grant_ok", "request": {"method": "POST", "path": "/v1/lease-requests", "headers": {"Authorization": "Bearer token_s003_runner"}, "body": {"requester_id": "job_s003_0001", "resource_selector": "gpu", "priority": 0, "heartbeat_timeout_seconds": 60}}, "response": {"status": 201, "body": {"ok": true, "data": {"request_id": "lease_req_s003_0001", "state": "granted", "resource_selector": "gpu", "lease": {"lease_id": "lease_s003_0001", "resource_id": "res_gpu_0", "holder_id": "job_s003_0001", "expires_at": "2026-06-05T20:01:02Z"}}, "links": {}, "meta": {"request_id": "req_s003_lease_grant", "schema_version": "v1"}}}},
+        {"fixture": "c05_heartbeat_running_ok", "request": {"method": "POST", "path": "/v1/jobs/job_s003_0001/heartbeat", "headers": {"Authorization": "Bearer token_s003_runner"}, "body": {"worker_id": "runner_s003_0001", "transition_to": "running", "status_message": "running provider invocation"}}, "response": {"status": 200, "body": {"ok": true, "data": {"job_id": "job_s003_0001", "state": "running", "updated_at": "2026-06-05T20:00:03Z", "status_message": "running provider invocation", "claim": {"worker_id": "runner_s003_0001", "expires_at": "2026-06-05T20:01:03Z"}, "artifact_refs": [], "terminal_error": null}, "links": {}, "meta": {"request_id": "req_s003_job_heartbeat_running", "schema_version": "v1"}}}},
+        {"fixture": "c09_node_health_ok", "request": {"method": "GET", "path": "/v1/node/health", "headers": {"Authorization": "Bearer token_s003_runner"}}, "response": {"status": 200, "body": {"ok": true, "data": {"status": "healthy", "version": "v1", "checked_at": "2026-06-05T20:00:04Z", "details": {}}, "links": {}, "meta": {"request_id": "req_s003_node_health", "schema_version": "v1"}}}},
+        {"fixture": "c09_service_stopped", "request": {"method": "GET", "path": "/v1/node/services/svc_comfyui_gpu", "headers": {"Authorization": "Bearer token_s003_runner"}}, "response": {"status": 200, "body": {"ok": true, "data": {"service_id": "svc_comfyui_gpu", "status": "stopped", "runtime_adapter": "docker", "provider_endpoint": "http://node_linux_gpu:8188"}, "links": {}, "meta": {"request_id": "req_s003_node_service_stopped", "schema_version": "v1"}}}},
+        {"fixture": "c09_service_start_accepted", "request": {"method": "POST", "path": "/v1/node/services/svc_comfyui_gpu/start", "headers": {"Authorization": "Bearer token_s003_runner", "Idempotency-Key": "idem_s003_node_start"}}, "response": {"status": 202, "body": {"ok": true, "data": {"service_id": "svc_comfyui_gpu", "status": "starting", "runtime_adapter": "docker", "provider_endpoint": "http://node_linux_gpu:8188"}, "links": {}, "meta": {"request_id": "req_s003_node_start", "schema_version": "v1"}}}},
+        {"fixture": "c09_service_running_ok", "request": {"method": "GET", "path": "/v1/node/services/svc_comfyui_gpu", "headers": {"Authorization": "Bearer token_s003_runner"}}, "response": {"status": 200, "body": {"ok": true, "data": {"service_id": "svc_comfyui_gpu", "status": "running", "runtime_adapter": "docker", "provider_endpoint": "http://node_linux_gpu:8188"}, "links": {}, "meta": {"request_id": "req_s003_node_service_ready", "schema_version": "v1"}}}},
+        {"fixture": "c10_invoke_success", "request": {"method": "POST", "path": "/v1/provider/capabilities/cap_image_generate_gpu/invoke", "headers": {"Authorization": "Bearer token_s003_runner"}, "body": {"input": {"prompt": "a clean product photo of a red ceramic mug", "width": 1024, "height": 1024}, "context": {"subject_id": "sub_agent_s003", "request_id": "req_s003_provider_0001", "job_id": "job_s003_0001", "resource_lease_id": "lease_s003_0001", "dry_run": false}}}, "response": {"status": 200, "body": {"ok": true, "data": {"output": {"result": "image_generated", "media_type": "image/png", "filename": "job_s003_0001.png"}, "content_refs": [{"content_ref": "pcr_s003_0001", "name": "job_s003_0001.png", "media_type": "image/png", "size": 68, "checksum": "sha256:4b5c5c92cec3b23e6a294fc0eea43234ef5126c5a64f4c6c531ac8430ab0b844", "expires_at": "2026-06-05T20:15:00Z"}]}, "links": {}, "meta": {"request_id": "req_s003_provider_invoke", "schema_version": "v1"}}}},
+        {"fixture": "c10_content_ok", "request": {"method": "GET", "path": "/v1/provider/artifacts/pcr_s003_0001/content", "headers": {"Authorization": "Bearer token_s003_runner"}}, "response": {"status": 200, "headers": {"Content-Type": "image/png", "Content-Length": "68", "Digest": "sha-256=S1xcks7Dsj5qKU/A7qQyNO9RJsWmT0xsUxrIQwqwuEQ="}, "body_fixture": "provider_png_s003_0001.base64"}},
+        {"fixture_ref": "c07_upload_path"},
+        {"fixture_ref": "c05_complete_ok"},
+        {"fixture": "c06_lease_release_ok", "request": {"method": "POST", "path": "/v1/leases/lease_s003_0001/release", "headers": {"Authorization": "Bearer token_s003_runner", "Idempotency-Key": "idem_s003_lease_release"}, "body": {"holder_id": "job_s003_0001", "reason": "job completed"}}, "response": {"status": 200, "body": {"ok": true, "data": {"lease_id": "lease_s003_0001", "resource_id": "res_gpu_0", "holder_id": "job_s003_0001", "released_at": "2026-06-05T20:00:46Z", "release_reason": "job completed", "links": {}}, "links": {}, "meta": {"request_id": "req_s003_lease_release", "schema_version": "v1"}}}}
+      ],
+      "assertions": [
+        "provider content ref pcr_s003_0001 remains runner-only",
+        "C05 completion stores only art_s003_0001",
+        "C07 owns artifact bytes and metadata",
+        "C06 release response is asserted; C06 audit internals are not read"
+      ]
+    },
+    {
+      "id": "c07_upload_path",
+      "precondition": "checkpoint_after_provider_content",
+      "steps": [
+        {
+          "fixture": "c07_upload_create_ok",
+          "request": {"method": "POST", "path": "/v1/artifact-uploads", "headers": {"Authorization": "Bearer token_s003_runner", "Idempotency-Key": "idem_s003_artifact_upload_create"}, "body": {"name": "job_s003_0001.png", "media_type": "image/png", "producer_ref": "job_s003_0001", "owner_subject_id": "sub_agent_s003", "expected_size": 68, "expected_checksum": "sha256:4b5c5c92cec3b23e6a294fc0eea43234ef5126c5a64f4c6c531ac8430ab0b844", "metadata": {"capability_id": "cap_image_generate_gpu"}}},
+          "response": {"status": 201, "body": {"ok": true, "data": {"upload_id": "upload_s003_0001", "state": "created", "artifact_id": null}, "links": {}, "meta": {"request_id": "req_s003_artifact_upload_create", "schema_version": "v1"}}}
+        },
+        {
+          "fixture": "c07_upload_content_ok",
+          "request": {"method": "PUT", "path": "/v1/artifact-uploads/upload_s003_0001/content", "headers": {"Authorization": "Bearer token_s003_runner", "Idempotency-Key": "idem_s003_artifact_upload_content", "Content-Type": "image/png", "Content-Length": "68", "Digest": "sha-256=S1xcks7Dsj5qKU/A7qQyNO9RJsWmT0xsUxrIQwqwuEQ="}, "body_fixture": "provider_png_s003_0001.base64"},
+          "response": {"status": 200, "body": {"ok": true, "data": {"upload_id": "upload_s003_0001", "state": "received", "received_size": 68, "artifact_id": null}, "links": {}, "meta": {"request_id": "req_s003_artifact_upload_content", "schema_version": "v1"}}}
+        },
+        {
+          "fixture": "c07_upload_complete_ok",
+          "request": {"method": "POST", "path": "/v1/artifact-uploads/upload_s003_0001/complete", "headers": {"Authorization": "Bearer token_s003_runner", "Idempotency-Key": "idem_s003_artifact_upload_complete"}, "body": {"checksum": "sha256:4b5c5c92cec3b23e6a294fc0eea43234ef5126c5a64f4c6c531ac8430ab0b844", "size": 68}},
+          "response": {"status": 201, "body": {"ok": true, "data": {"artifact_id": "art_s003_0001", "name": "job_s003_0001.png", "media_type": "image/png", "size": 68, "checksum": "sha256:4b5c5c92cec3b23e6a294fc0eea43234ef5126c5a64f4c6c531ac8430ab0b844", "producer_ref": "job_s003_0001", "owner_subject_id": "sub_agent_s003"}, "links": {}, "meta": {"request_id": "req_s003_artifact_complete", "schema_version": "v1"}}}
+        }
+      ]
+    },
+    {
+      "id": "c05_complete_ok",
+      "request": {"method": "POST", "path": "/v1/jobs/job_s003_0001/complete", "headers": {"Authorization": "Bearer token_s003_runner"}, "body": {"worker_id": "runner_s003_0001", "artifact_refs": ["art_s003_0001"], "output": {"artifact_refs": ["art_s003_0001"]}}},
+      "response": {"status": 200, "body": {"ok": true, "data": {"job_id": "job_s003_0001", "state": "succeeded", "updated_at": "2026-06-05T20:00:46Z", "status_message": "completed", "artifact_refs": ["art_s003_0001"], "terminal_error": null, "links": {}}, "links": {}, "meta": {"request_id": "req_s003_job_complete", "schema_version": "v1"}}}
+    },
+    {
+      "id": "provider_failure_path",
+      "precondition": "provider_backend_down_before_invoke",
+      "orchestration_order": ["c10_invoke_provider_unavailable", "c05_log_provider_failure", "c06_lease_release_provider_failure", "c05_fail_provider_unavailable"],
+      "steps": [
+        {"fixture": "c10_invoke_provider_unavailable", "request": {"method": "POST", "path": "/v1/provider/capabilities/cap_image_generate_gpu/invoke", "headers": {"Authorization": "Bearer token_s003_runner"}, "body": {"input": {"prompt": "a clean product photo of a red ceramic mug", "width": 1024, "height": 1024}, "context": {"subject_id": "sub_agent_s003", "request_id": "req_s003_provider_backend_unavailable", "job_id": "job_s003_0001", "resource_lease_id": "lease_s003_0001", "dry_run": false}}}, "response": {"status": 503, "body": {"ok": false, "error": {"code": "provider_unavailable", "message": "ComfyUI backend is unavailable", "retryable": true}, "links": {}, "meta": {"request_id": "req_s003_provider_backend_unavailable", "schema_version": "v1"}}}},
+        {"fixture": "c05_log_provider_failure", "request": {"method": "POST", "path": "/v1/jobs/job_s003_0001/logs", "headers": {"Authorization": "Bearer token_s003_runner"}, "body": {"worker_id": "runner_s003_0001", "entries": [{"timestamp": "2026-06-05T20:00:08Z", "level": "error", "message": "provider invocation failed", "fields": {"code": "provider_unavailable"}}]}}, "response": {"status": 200, "body": {"ok": true, "data": {"items": [{"timestamp": "2026-06-05T20:00:08Z", "level": "error", "message": "provider invocation failed", "fields": {"code": "provider_unavailable"}}], "next_cursor": "cursor_s003_logs_provider_failure"}, "links": {}, "meta": {"request_id": "req_s003_job_log_provider_failure", "schema_version": "v1"}}}},
+        {"fixture": "c06_lease_release_provider_failure", "request": {"method": "POST", "path": "/v1/leases/lease_s003_0001/release", "headers": {"Authorization": "Bearer token_s003_runner", "Idempotency-Key": "idem_s003_lease_release_provider_failure"}, "body": {"holder_id": "job_s003_0001", "reason": "provider failed"}}, "response": {"status": 200, "body": {"ok": true, "data": {"lease_id": "lease_s003_0001", "resource_id": "res_gpu_0", "holder_id": "job_s003_0001", "released_at": "2026-06-05T20:00:08Z", "release_reason": "provider failed", "links": {}}, "links": {}, "meta": {"request_id": "req_s003_lease_release_provider_failure", "schema_version": "v1"}}}},
+        {"fixture": "c05_fail_provider_unavailable", "request": {"method": "POST", "path": "/v1/jobs/job_s003_0001/fail", "headers": {"Authorization": "Bearer token_s003_runner"}, "body": {"worker_id": "runner_s003_0001", "error": {"code": "provider_unavailable", "message": "ComfyUI backend is unavailable", "retryable": true}}}, "response": {"status": 200, "body": {"ok": true, "data": {"job_id": "job_s003_0001", "state": "failed", "updated_at": "2026-06-05T20:00:08Z", "status_message": "ComfyUI backend is unavailable", "artifact_refs": [], "terminal_error": {"code": "provider_unavailable", "message": "ComfyUI backend is unavailable", "retryable": true}, "links": {}}, "links": {}, "meta": {"request_id": "req_s003_job_fail_provider", "schema_version": "v1"}}}}
+      ]
+    },
+    {
+      "id": "lease_expiration_path",
+      "precondition": "checkpoint_after_lease",
+      "orchestration_order": ["c05_heartbeat_claim_renewed", "c06_lease_heartbeat_expired", "c06_lease_release_expired", "c05_log_lease_expired", "c05_fail_lease_expired"],
+      "steps": [
+        {"fixture": "c05_heartbeat_claim_renewed", "request": {"method": "POST", "path": "/v1/jobs/job_s003_0001/heartbeat", "headers": {"Authorization": "Bearer token_s003_runner"}, "body": {"worker_id": "runner_s003_0001", "status_message": "monitoring provider invocation"}}, "response": {"status": 200, "body": {"ok": true, "data": {"job_id": "job_s003_0001", "state": "running", "updated_at": "2026-06-05T20:00:32Z", "claim": {"worker_id": "runner_s003_0001", "expires_at": "2026-06-05T20:01:32Z"}}, "links": {}, "meta": {"request_id": "req_s003_job_heartbeat_claim_renewed", "schema_version": "v1"}}}},
+        {"fixture": "c06_lease_heartbeat_expired", "request": {"method": "POST", "path": "/v1/leases/lease_s003_0001/heartbeat", "headers": {"Authorization": "Bearer token_s003_runner"}, "body": {"holder_id": "job_s003_0001"}, "at": "2026-06-05T20:01:03Z"}, "response": {"status": 409, "body": {"ok": false, "error": {"code": "lease_expired", "message": "lease heartbeat rejected because lease has expired", "retryable": false}, "links": {}, "meta": {"request_id": "req_s003_lease_heartbeat_expired", "schema_version": "v1"}}}},
+        {"fixture": "c06_lease_release_expired", "request": {"method": "POST", "path": "/v1/leases/lease_s003_0001/release", "headers": {"Authorization": "Bearer token_s003_runner", "Idempotency-Key": "idem_s003_lease_release_expired"}, "body": {"holder_id": "job_s003_0001", "reason": "lease expired"}, "at": "2026-06-05T20:01:03Z"}, "response": {"status": 409, "body": {"ok": false, "error": {"code": "lease_expired", "message": "lease release rejected because lease has expired", "retryable": false}, "links": {}, "meta": {"request_id": "req_s003_lease_release_expired", "schema_version": "v1"}}}},
+        {"fixture": "c05_log_lease_expired", "request": {"method": "POST", "path": "/v1/jobs/job_s003_0001/logs", "headers": {"Authorization": "Bearer token_s003_runner"}, "body": {"worker_id": "runner_s003_0001", "entries": [{"timestamp": "2026-06-05T20:01:04Z", "level": "error", "message": "resource lease expired", "fields": {"lease_id": "lease_s003_0001"}}]}}, "response": {"status": 200, "body": {"ok": true, "data": {"items": [{"timestamp": "2026-06-05T20:01:04Z", "level": "error", "message": "resource lease expired", "fields": {"lease_id": "lease_s003_0001"}}], "next_cursor": "cursor_s003_logs_lease_expired"}, "links": {}, "meta": {"request_id": "req_s003_job_log_lease_expired", "schema_version": "v1"}}}},
+        {"fixture": "c05_fail_lease_expired", "request": {"method": "POST", "path": "/v1/jobs/job_s003_0001/fail", "headers": {"Authorization": "Bearer token_s003_runner"}, "body": {"worker_id": "runner_s003_0001", "error": {"code": "lease_expired", "message": "resource lease expired before completion", "retryable": true}}}, "response": {"status": 200, "body": {"ok": true, "data": {"job_id": "job_s003_0001", "state": "failed", "updated_at": "2026-06-05T20:01:04Z", "status_message": "resource lease expired before completion", "artifact_refs": [], "terminal_error": {"code": "lease_expired", "message": "resource lease expired before completion", "retryable": true}, "links": {}}, "links": {}, "meta": {"request_id": "req_s003_job_fail_lease_expired", "schema_version": "v1"}}}}
+      ]
+    },
+    {
+      "id": "provider_timeout_path",
+      "precondition": "provider_generation_exceeds_timeout",
+      "orchestration_order": ["c05_provider_timeout_liveness_heartbeats", "c06_provider_timeout_liveness_heartbeats", "c10_invoke_timeout", "c05_log_provider_timeout", "c06_lease_release_provider_timeout", "c05_fail_provider_timeout"],
+      "liveness_event_list": {
+        "schema_version": "event-list.v1",
+        "replay_kind": "deterministic_multi_endpoint_request_response_sequence",
+        "ordered": true,
+        "precondition": "job_s003_0001 is running, lease_s003_0001 is active, and provider invocation is waiting for completion",
+        "event_fields": ["timestamp", "c05_request_id", "c06_request_id", "c05_claim_expires_at", "c06_lease_expires_at"],
+        "state_transition": "Each event renews the C05 claim and C06 lease; the branch remains running until the provider timeout response.",
+        "request_templates": {
+          "c05": {"method": "POST", "path": "/v1/jobs/job_s003_0001/heartbeat", "headers": {"Authorization": "Bearer token_s003_runner"}, "body": {"worker_id": "runner_s003_0001", "status_message": "waiting for provider completion"}},
+          "c06": {"method": "POST", "path": "/v1/leases/lease_s003_0001/heartbeat", "headers": {"Authorization": "Bearer token_s003_runner"}, "body": {"holder_id": "job_s003_0001"}}
+        },
+        "response_templates": {
+          "c05": {"status": 200, "body": {"ok": true, "data": {"job_id": "job_s003_0001", "state": "running", "updated_at": "${timestamp}", "status_message": "waiting for provider completion", "claim": {"worker_id": "runner_s003_0001", "claimed_at": "2026-06-05T20:00:01Z", "expires_at": "${c05_claim_expires_at}"}, "artifact_refs": [], "terminal_error": null, "links": {}}, "links": {}, "meta": {"request_id": "${c05_request_id}", "schema_version": "v1"}}},
+          "c06": {"status": 200, "body": {"ok": true, "data": {"lease_id": "lease_s003_0001", "resource_id": "res_gpu_0", "holder_id": "job_s003_0001", "expires_at": "${c06_lease_expires_at}", "links": {}}, "links": {}, "meta": {"request_id": "${c06_request_id}", "schema_version": "v1"}}}
+        },
+        "events": [
+          {"timestamp": "2026-06-05T20:00:37Z", "c05_request_id": "req_s003_job_heartbeat_provider_timeout_0001", "c06_request_id": "req_s003_lease_heartbeat_provider_timeout_0001", "c05_claim_expires_at": "2026-06-05T20:01:37Z", "c06_lease_expires_at": "2026-06-05T20:01:37Z"},
+          {"timestamp": "2026-06-05T20:01:07Z", "c05_request_id": "req_s003_job_heartbeat_provider_timeout_0002", "c06_request_id": "req_s003_lease_heartbeat_provider_timeout_0002", "c05_claim_expires_at": "2026-06-05T20:02:07Z", "c06_lease_expires_at": "2026-06-05T20:02:07Z"},
+          {"timestamp": "2026-06-05T20:01:37Z", "c05_request_id": "req_s003_job_heartbeat_provider_timeout_0003", "c06_request_id": "req_s003_lease_heartbeat_provider_timeout_0003", "c05_claim_expires_at": "2026-06-05T20:02:37Z", "c06_lease_expires_at": "2026-06-05T20:02:37Z"},
+          {"timestamp": "2026-06-05T20:02:07Z", "c05_request_id": "req_s003_job_heartbeat_provider_timeout_0004", "c06_request_id": "req_s003_lease_heartbeat_provider_timeout_0004", "c05_claim_expires_at": "2026-06-05T20:03:07Z", "c06_lease_expires_at": "2026-06-05T20:03:07Z"},
+          {"timestamp": "2026-06-05T20:02:37Z", "c05_request_id": "req_s003_job_heartbeat_provider_timeout_0005", "c06_request_id": "req_s003_lease_heartbeat_provider_timeout_0005", "c05_claim_expires_at": "2026-06-05T20:03:37Z", "c06_lease_expires_at": "2026-06-05T20:03:37Z"},
+          {"timestamp": "2026-06-05T20:03:07Z", "c05_request_id": "req_s003_job_heartbeat_provider_timeout_0006", "c06_request_id": "req_s003_lease_heartbeat_provider_timeout_0006", "c05_claim_expires_at": "2026-06-05T20:04:07Z", "c06_lease_expires_at": "2026-06-05T20:04:07Z"},
+          {"timestamp": "2026-06-05T20:03:37Z", "c05_request_id": "req_s003_job_heartbeat_provider_timeout_0007", "c06_request_id": "req_s003_lease_heartbeat_provider_timeout_0007", "c05_claim_expires_at": "2026-06-05T20:04:37Z", "c06_lease_expires_at": "2026-06-05T20:04:37Z"},
+          {"timestamp": "2026-06-05T20:04:07Z", "c05_request_id": "req_s003_job_heartbeat_provider_timeout_0008", "c06_request_id": "req_s003_lease_heartbeat_provider_timeout_0008", "c05_claim_expires_at": "2026-06-05T20:05:07Z", "c06_lease_expires_at": "2026-06-05T20:05:07Z"},
+          {"timestamp": "2026-06-05T20:04:37Z", "c05_request_id": "req_s003_job_heartbeat_provider_timeout_0009", "c06_request_id": "req_s003_lease_heartbeat_provider_timeout_0009", "c05_claim_expires_at": "2026-06-05T20:05:37Z", "c06_lease_expires_at": "2026-06-05T20:05:37Z"},
+          {"timestamp": "2026-06-05T20:05:07Z", "c05_request_id": "req_s003_job_heartbeat_provider_timeout_0010", "c06_request_id": "req_s003_lease_heartbeat_provider_timeout_0010", "c05_claim_expires_at": "2026-06-05T20:06:07Z", "c06_lease_expires_at": "2026-06-05T20:06:07Z"},
+          {"timestamp": "2026-06-05T20:05:37Z", "c05_request_id": "req_s003_job_heartbeat_provider_timeout_0011", "c06_request_id": "req_s003_lease_heartbeat_provider_timeout_0011", "c05_claim_expires_at": "2026-06-05T20:06:37Z", "c06_lease_expires_at": "2026-06-05T20:06:37Z"},
+          {"timestamp": "2026-06-05T20:06:07Z", "c05_request_id": "req_s003_job_heartbeat_provider_timeout_0012", "c06_request_id": "req_s003_lease_heartbeat_provider_timeout_0012", "c05_claim_expires_at": "2026-06-05T20:07:07Z", "c06_lease_expires_at": "2026-06-05T20:07:07Z"},
+          {"timestamp": "2026-06-05T20:06:37Z", "c05_request_id": "req_s003_job_heartbeat_provider_timeout_0013", "c06_request_id": "req_s003_lease_heartbeat_provider_timeout_0013", "c05_claim_expires_at": "2026-06-05T20:07:37Z", "c06_lease_expires_at": "2026-06-05T20:07:37Z"},
+          {"timestamp": "2026-06-05T20:07:07Z", "c05_request_id": "req_s003_job_heartbeat_provider_timeout_0014", "c06_request_id": "req_s003_lease_heartbeat_provider_timeout_0014", "c05_claim_expires_at": "2026-06-05T20:08:07Z", "c06_lease_expires_at": "2026-06-05T20:08:07Z"},
+          {"timestamp": "2026-06-05T20:07:37Z", "c05_request_id": "req_s003_job_heartbeat_provider_timeout_0015", "c06_request_id": "req_s003_lease_heartbeat_provider_timeout_0015", "c05_claim_expires_at": "2026-06-05T20:08:37Z", "c06_lease_expires_at": "2026-06-05T20:08:37Z"},
+          {"timestamp": "2026-06-05T20:08:07Z", "c05_request_id": "req_s003_job_heartbeat_provider_timeout_0016", "c06_request_id": "req_s003_lease_heartbeat_provider_timeout_0016", "c05_claim_expires_at": "2026-06-05T20:09:07Z", "c06_lease_expires_at": "2026-06-05T20:09:07Z"},
+          {"timestamp": "2026-06-05T20:08:37Z", "c05_request_id": "req_s003_job_heartbeat_provider_timeout_0017", "c06_request_id": "req_s003_lease_heartbeat_provider_timeout_0017", "c05_claim_expires_at": "2026-06-05T20:09:37Z", "c06_lease_expires_at": "2026-06-05T20:09:37Z"},
+          {"timestamp": "2026-06-05T20:09:07Z", "c05_request_id": "req_s003_job_heartbeat_provider_timeout_0018", "c06_request_id": "req_s003_lease_heartbeat_provider_timeout_0018", "c05_claim_expires_at": "2026-06-05T20:10:07Z", "c06_lease_expires_at": "2026-06-05T20:10:07Z"},
+          {"timestamp": "2026-06-05T20:09:37Z", "c05_request_id": "req_s003_job_heartbeat_provider_timeout_0019", "c06_request_id": "req_s003_lease_heartbeat_provider_timeout_0019", "c05_claim_expires_at": "2026-06-05T20:10:37Z", "c06_lease_expires_at": "2026-06-05T20:10:37Z"},
+          {"timestamp": "2026-06-05T20:10:07Z", "c05_request_id": "req_s003_job_heartbeat_provider_timeout_0020", "c06_request_id": "req_s003_lease_heartbeat_provider_timeout_0020", "c05_claim_expires_at": "2026-06-05T20:11:07Z", "c06_lease_expires_at": "2026-06-05T20:11:07Z"},
+          {"timestamp": "2026-06-05T20:10:37Z", "c05_request_id": "req_s003_job_heartbeat_provider_timeout_0021", "c06_request_id": "req_s003_lease_heartbeat_provider_timeout_0021", "c05_claim_expires_at": "2026-06-05T20:11:37Z", "c06_lease_expires_at": "2026-06-05T20:11:37Z"},
+          {"timestamp": "2026-06-05T20:11:07Z", "c05_request_id": "req_s003_job_heartbeat_provider_timeout_0022", "c06_request_id": "req_s003_lease_heartbeat_provider_timeout_0022", "c05_claim_expires_at": "2026-06-05T20:12:07Z", "c06_lease_expires_at": "2026-06-05T20:12:07Z"},
+          {"timestamp": "2026-06-05T20:11:37Z", "c05_request_id": "req_s003_job_heartbeat_provider_timeout_0023", "c06_request_id": "req_s003_lease_heartbeat_provider_timeout_0023", "c05_claim_expires_at": "2026-06-05T20:12:37Z", "c06_lease_expires_at": "2026-06-05T20:12:37Z"},
+          {"timestamp": "2026-06-05T20:12:07Z", "c05_request_id": "req_s003_job_heartbeat_provider_timeout_0024", "c06_request_id": "req_s003_lease_heartbeat_provider_timeout_0024", "c05_claim_expires_at": "2026-06-05T20:13:07Z", "c06_lease_expires_at": "2026-06-05T20:13:07Z"},
+          {"timestamp": "2026-06-05T20:12:37Z", "c05_request_id": "req_s003_job_heartbeat_provider_timeout_0025", "c06_request_id": "req_s003_lease_heartbeat_provider_timeout_0025", "c05_claim_expires_at": "2026-06-05T20:13:37Z", "c06_lease_expires_at": "2026-06-05T20:13:37Z"},
+          {"timestamp": "2026-06-05T20:13:07Z", "c05_request_id": "req_s003_job_heartbeat_provider_timeout_0026", "c06_request_id": "req_s003_lease_heartbeat_provider_timeout_0026", "c05_claim_expires_at": "2026-06-05T20:14:07Z", "c06_lease_expires_at": "2026-06-05T20:14:07Z"},
+          {"timestamp": "2026-06-05T20:13:37Z", "c05_request_id": "req_s003_job_heartbeat_provider_timeout_0027", "c06_request_id": "req_s003_lease_heartbeat_provider_timeout_0027", "c05_claim_expires_at": "2026-06-05T20:14:37Z", "c06_lease_expires_at": "2026-06-05T20:14:37Z"},
+          {"timestamp": "2026-06-05T20:14:07Z", "c05_request_id": "req_s003_job_heartbeat_provider_timeout_0028", "c06_request_id": "req_s003_lease_heartbeat_provider_timeout_0028", "c05_claim_expires_at": "2026-06-05T20:15:07Z", "c06_lease_expires_at": "2026-06-05T20:15:07Z"},
+          {"timestamp": "2026-06-05T20:14:37Z", "c05_request_id": "req_s003_job_heartbeat_provider_timeout_0029", "c06_request_id": "req_s003_lease_heartbeat_provider_timeout_0029", "c05_claim_expires_at": "2026-06-05T20:15:37Z", "c06_lease_expires_at": "2026-06-05T20:15:37Z"}
+        ]
+      },
+      "timeout_invoke": {
+        "fixture": "c10_invoke_timeout",
+        "request": {"method": "POST", "path": "/v1/provider/capabilities/cap_image_generate_gpu/invoke", "headers": {"Authorization": "Bearer token_s003_runner"}, "body": {"input": {"prompt": "a clean product photo of a red ceramic mug", "width": 1024, "height": 1024}, "context": {"subject_id": "sub_agent_s003", "request_id": "req_s003_provider_timeout", "job_id": "job_s003_0001", "resource_lease_id": "lease_s003_0001", "dry_run": false}}},
+        "response": {"status": 504, "body": {"ok": false, "error": {"code": "provider_timeout", "message": "provider invocation timed out", "retryable": true}, "links": {}, "meta": {"request_id": "req_s003_provider_timeout", "schema_version": "v1"}}}
+      },
+      "timeout_cleanup": [
+        {"fixture": "c05_log_provider_timeout", "request": {"method": "POST", "path": "/v1/jobs/job_s003_0001/logs", "headers": {"Authorization": "Bearer token_s003_runner"}, "body": {"worker_id": "runner_s003_0001", "entries": [{"timestamp": "2026-06-05T20:15:08Z", "level": "error", "message": "provider invocation timed out", "fields": {"code": "provider_timeout"}}]}}, "response": {"status": 200, "body": {"ok": true, "data": {"items": [{"timestamp": "2026-06-05T20:15:08Z", "level": "error", "message": "provider invocation timed out", "fields": {"code": "provider_timeout"}}], "next_cursor": "cursor_s003_logs_provider_timeout"}, "links": {}, "meta": {"request_id": "req_s003_job_log_provider_timeout", "schema_version": "v1"}}}},
+        {"fixture": "c06_lease_release_provider_timeout", "request": {"method": "POST", "path": "/v1/leases/lease_s003_0001/release", "headers": {"Authorization": "Bearer token_s003_runner", "Idempotency-Key": "idem_s003_lease_release_provider_timeout"}, "body": {"holder_id": "job_s003_0001", "reason": "provider timed out"}}, "response": {"status": 200, "body": {"ok": true, "data": {"lease_id": "lease_s003_0001", "resource_id": "res_gpu_0", "holder_id": "job_s003_0001", "expires_at": "2026-06-05T20:15:08Z", "released_at": "2026-06-05T20:15:08Z", "released_by": "sub_runner_s003", "release_reason": "provider timed out", "links": {}}, "links": {}, "meta": {"request_id": "req_s003_lease_release_provider_timeout", "schema_version": "v1"}}}},
+        {"fixture": "c05_fail_provider_timeout", "request": {"method": "POST", "path": "/v1/jobs/job_s003_0001/fail", "headers": {"Authorization": "Bearer token_s003_runner"}, "body": {"worker_id": "runner_s003_0001", "error": {"code": "provider_timeout", "message": "provider invocation timed out", "retryable": true}}}, "response": {"status": 200, "body": {"ok": true, "data": {"job_id": "job_s003_0001", "state": "failed", "updated_at": "2026-06-05T20:15:08Z", "status_message": "provider invocation timed out", "artifact_refs": [], "terminal_error": {"code": "provider_timeout", "message": "provider invocation timed out", "retryable": true}, "links": {}}, "links": {}, "meta": {"request_id": "req_s003_job_fail_provider_timeout", "schema_version": "v1"}}}}
+      ],
+      "forbidden_scope": "Runner asserts the C06 release response only; C06 audit events remain C06-owned."
+    }
+  ]
+}

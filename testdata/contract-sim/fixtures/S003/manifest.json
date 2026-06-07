@@ -1,0 +1,65 @@
+{
+  "scenario_id": "S003",
+  "latest_source_run": "runs/S003/run-024.md",
+  "status": "fixture-ready",
+  "actor_context_rule": "This manifest is an extraction/test index only. Do not give it to bounded role-play actors unless a future run explicitly lists it as allowed scenario context.",
+  "fixture_sets": [
+    {
+      "owner": "agent-user",
+      "path": "workspaces/S003/actors/agent-user/fixtures/s003-fixtures.json",
+      "binary_fixtures": ["workspaces/S003/actors/agent-user/fixtures/artifact_png_s003_0001.base64"]
+    },
+    {
+      "owner": "c03-service-catalog",
+      "path": "workspaces/S003/components/c03-service-catalog/fixtures/s003-fixtures.json"
+    },
+    {
+      "owner": "c04-agent-tool-gateway",
+      "path": "workspaces/S003/components/c04-agent-tool-gateway/fixtures/s003-fixtures.json",
+      "binary_fixtures": ["workspaces/S003/components/c04-agent-tool-gateway/fixtures/provider_png_s003_0001.base64"]
+    },
+    {
+      "owner": "c05-async-job-service",
+      "path": "workspaces/S003/components/c05-async-job-service/fixtures/s003-fixtures.json"
+    },
+    {
+      "owner": "c06-resource-lease-service",
+      "path": "workspaces/S003/components/c06-resource-lease-service/fixtures/s003-fixtures.json"
+    },
+    {
+      "owner": "c07-artifact-store",
+      "path": "workspaces/S003/components/c07-artifact-store/fixtures/s003-fixtures.json",
+      "binary_fixtures": ["workspaces/S003/components/c07-artifact-store/fixtures/provider_png_s003_0001.base64"]
+    },
+    {
+      "owner": "c08-access-policy-and-secrets",
+      "path": "workspaces/S003/components/c08-access-policy-and-secrets/fixtures/s003-fixtures.json"
+    },
+    {
+      "owner": "c09-runtime-node-agent",
+      "path": "workspaces/S003/components/c09-runtime-node-agent/fixtures/s003-fixtures.json"
+    },
+    {
+      "owner": "c10-comfyui-provider",
+      "path": "workspaces/S003/components/c10-comfyui-provider/fixtures/s003-fixtures.json",
+      "binary_fixtures": ["workspaces/S003/components/c10-comfyui-provider/fixtures/provider_png_s003_0001.base64"]
+    },
+    {
+      "owner": "composition-runner",
+      "path": "workspaces/S003/runners/composition-runner/fixtures/s003-fixtures.json",
+      "binary_fixtures": ["workspaces/S003/runners/composition-runner/fixtures/provider_png_s003_0001.base64"]
+    }
+  ],
+  "known_nonduplicated_fixture_sources": [
+    {
+      "owner": "composition-runner",
+      "path": "workspaces/S003/runners/composition-runner/fixtures/dependency-responses.md",
+      "reason": "Runner still keeps full addressed dependency examples in Markdown; provider-timeout liveness is also promoted to JSON."
+    },
+    {
+      "owner": "c04-agent-tool-gateway",
+      "path": "workspaces/S003/components/c04-agent-tool-gateway/fixtures/dependency-responses.md",
+      "reason": "C04 still keeps full addressed dependency examples in Markdown; key public/dependency cases are also promoted to JSON."
+    }
+  ]
+}

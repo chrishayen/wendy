@@ -1,0 +1,352 @@
+{
+  "scenario_id": "S003",
+  "component": "c09-runtime-node-agent",
+  "bounded_auth_facts": {
+    "token_s003_runner": {
+      "subject_id": "sub_runner_s003",
+      "allowed_actions": ["node.read", "node.service.start", "node.service.stop"],
+      "resources": ["node_linux_gpu", "svc_comfyui_gpu"]
+    },
+    "token_s003_agent": {
+      "subject_id": "sub_agent_s003",
+      "allowed_actions": [],
+      "denied_actions": ["node.read", "node.service.start", "node.service.stop"],
+      "resources": ["node_linux_gpu", "svc_comfyui_gpu"]
+    },
+    "note": "Local C09 replay facts for endpoint enforcement only; C09 does not own global policy rules."
+  },
+  "fixtures": [
+    {
+      "id": "node_health_ok",
+      "request": {
+        "method": "GET",
+        "path": "/v1/node/health",
+        "headers": {"Authorization": "Bearer token_s003_runner"}
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "ok": true,
+          "data": {
+            "status": "healthy",
+            "version": "v1",
+            "checked_at": "2026-06-05T20:00:04Z",
+            "details": {}
+          },
+          "links": {},
+          "meta": {"request_id": "req_s003_node_health", "schema_version": "v1"}
+        }
+      }
+    },
+    {
+      "id": "service_stopped",
+      "request": {
+        "method": "GET",
+        "path": "/v1/node/services/svc_comfyui_gpu",
+        "headers": {"Authorization": "Bearer token_s003_runner"}
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "ok": true,
+          "data": {
+            "service_id": "svc_comfyui_gpu",
+            "status": "stopped",
+            "runtime_adapter": "docker",
+            "provider_endpoint": "http://node_linux_gpu:8188",
+            "manifest": null,
+            "links": {
+              "start": {"method": "POST", "href": "/v1/node/services/svc_comfyui_gpu/start", "description": "Start service."},
+              "stop": {"method": "POST", "href": "/v1/node/services/svc_comfyui_gpu/stop", "description": "Stop service."}
+            }
+          },
+          "links": {},
+          "meta": {"request_id": "req_s003_node_service_stopped", "schema_version": "v1"}
+        }
+      }
+    },
+    {
+      "id": "service_start_accepted",
+      "request": {
+        "method": "POST",
+        "path": "/v1/node/services/svc_comfyui_gpu/start",
+        "headers": {
+          "Authorization": "Bearer token_s003_runner",
+          "Idempotency-Key": "idem_s003_node_start"
+        }
+      },
+      "response": {
+        "status": 202,
+        "body": {
+          "ok": true,
+          "data": {
+            "service_id": "svc_comfyui_gpu",
+            "status": "starting",
+            "runtime_adapter": "docker",
+            "provider_endpoint": "http://node_linux_gpu:8188",
+            "manifest": null,
+            "links": {
+              "status": {"method": "GET", "href": "/v1/node/services/svc_comfyui_gpu", "description": "Poll service status."}
+            }
+          },
+          "links": {},
+          "meta": {"request_id": "req_s003_node_start", "schema_version": "v1"}
+        }
+      }
+    },
+    {
+      "id": "service_running",
+      "request": {
+        "method": "GET",
+        "path": "/v1/node/services/svc_comfyui_gpu",
+        "headers": {"Authorization": "Bearer token_s003_runner"}
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "ok": true,
+          "data": {
+            "service_id": "svc_comfyui_gpu",
+            "status": "running",
+            "runtime_adapter": "docker",
+            "provider_endpoint": "http://node_linux_gpu:8188",
+            "manifest": null,
+            "links": {}
+          },
+          "links": {},
+          "meta": {"request_id": "req_s003_node_service_ready", "schema_version": "v1"}
+        }
+      }
+    },
+    {
+      "id": "service_start_replay",
+      "request": {
+        "method": "POST",
+        "path": "/v1/node/services/svc_comfyui_gpu/start",
+        "headers": {
+          "Authorization": "Bearer token_s003_runner",
+          "Idempotency-Key": "idem_s003_node_start"
+        },
+        "precondition": "service is already running"
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "ok": true,
+          "data": {
+            "service_id": "svc_comfyui_gpu",
+            "status": "running",
+            "runtime_adapter": "docker",
+            "provider_endpoint": "http://node_linux_gpu:8188",
+            "manifest": null,
+            "links": {}
+          },
+          "links": {},
+          "meta": {"request_id": "req_s003_node_start_replay", "schema_version": "v1"}
+        }
+      }
+    },
+    {
+      "id": "service_start_already_running_without_key",
+      "request": {
+        "method": "POST",
+        "path": "/v1/node/services/svc_comfyui_gpu/start",
+        "headers": {"Authorization": "Bearer token_s003_runner"},
+        "precondition": "service is already running"
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "ok": true,
+          "data": {
+            "service_id": "svc_comfyui_gpu",
+            "status": "running",
+            "runtime_adapter": "docker",
+            "provider_endpoint": "http://node_linux_gpu:8188",
+            "manifest": null,
+            "links": {}
+          },
+          "links": {},
+          "meta": {"request_id": "req_s003_node_start_running_no_key", "schema_version": "v1"}
+        }
+      }
+    },
+    {
+      "id": "service_stop_accepted",
+      "request": {
+        "method": "POST",
+        "path": "/v1/node/services/svc_comfyui_gpu/stop",
+        "headers": {"Authorization": "Bearer token_s003_runner"}
+      },
+      "response": {
+        "status": 202,
+        "body": {
+          "ok": true,
+          "data": {
+            "service_id": "svc_comfyui_gpu",
+            "status": "stopped",
+            "runtime_adapter": "docker",
+            "provider_endpoint": "http://node_linux_gpu:8188",
+            "manifest": null,
+            "links": {
+              "start": {"method": "POST", "href": "/v1/node/services/svc_comfyui_gpu/start", "description": "Start service."}
+            }
+          },
+          "links": {},
+          "meta": {"request_id": "req_s003_node_stop", "schema_version": "v1"}
+        }
+      }
+    },
+    {
+      "id": "service_stop_already_stopped_replay",
+      "request": {
+        "method": "POST",
+        "path": "/v1/node/services/svc_comfyui_gpu/stop",
+        "headers": {"Authorization": "Bearer token_s003_runner"},
+        "precondition": "service is already stopped"
+      },
+      "response": {
+        "status": 202,
+        "body": {
+          "ok": true,
+          "data": {
+            "service_id": "svc_comfyui_gpu",
+            "status": "stopped",
+            "runtime_adapter": "docker",
+            "provider_endpoint": "http://node_linux_gpu:8188",
+            "manifest": null,
+            "links": {
+              "start": {"method": "POST", "href": "/v1/node/services/svc_comfyui_gpu/start", "description": "Start service."}
+            }
+          },
+          "links": {},
+          "meta": {"request_id": "req_s003_node_stop", "schema_version": "v1"}
+        }
+      }
+    },
+    {
+      "id": "node_unauthorized",
+      "request": {
+        "method": "GET",
+        "path": "/v1/node/health",
+        "headers": {}
+      },
+      "response": {
+        "status": 401,
+        "body": {
+          "ok": false,
+          "error": {
+            "code": "unauthorized",
+            "message": "credential is missing, malformed, or unknown",
+            "retryable": false
+          },
+          "links": {},
+          "meta": {"request_id": "req_s003_node_unauthorized", "schema_version": "v1"}
+        }
+      }
+    },
+    {
+      "id": "node_forbidden",
+      "request": {
+        "method": "POST",
+        "path": "/v1/node/services/svc_comfyui_gpu/start",
+        "headers": {"Authorization": "Bearer token_s003_agent"}
+      },
+      "response": {
+        "status": 403,
+        "body": {
+          "ok": false,
+          "error": {
+            "code": "forbidden",
+            "message": "caller is not allowed to perform the node action",
+            "retryable": false
+          },
+          "links": {},
+          "meta": {"request_id": "req_s003_node_forbidden", "schema_version": "v1"}
+        }
+      }
+    },
+    {
+      "id": "service_start_idempotency_conflict",
+      "request": {
+        "method": "POST",
+        "path": "/v1/node/services/svc_comfyui_gpu/start",
+        "headers": {
+          "Authorization": "Bearer token_s003_runner",
+          "Idempotency-Key": "idem_s003_node_start"
+        },
+        "body": {"runtime_adapter": "systemd"},
+        "precondition": "same idempotency key already used for docker-backed start"
+      },
+      "response": {
+        "status": 409,
+        "body": {
+          "ok": false,
+          "error": {"code": "idempotency_conflict", "message": "idempotency key was reused with different request content", "retryable": false},
+          "links": {},
+          "meta": {"request_id": "req_s003_node_start_idempotency_conflict", "schema_version": "v1"}
+        }
+      }
+    },
+    {
+      "id": "unknown_service",
+      "request": {
+        "method": "GET",
+        "path": "/v1/node/services/svc_unknown",
+        "headers": {"Authorization": "Bearer token_s003_runner"}
+      },
+      "response": {
+        "status": 404,
+        "body": {
+          "ok": false,
+          "error": {"code": "not_found", "message": "service not found", "retryable": false},
+          "links": {},
+          "meta": {"request_id": "req_s003_node_unknown_service", "schema_version": "v1"}
+        }
+      }
+    },
+    {
+      "id": "runtime_unavailable",
+      "request": {
+        "method": "POST",
+        "path": "/v1/node/services/svc_comfyui_gpu/start",
+        "headers": {
+          "Authorization": "Bearer token_s003_runner",
+          "Idempotency-Key": "idem_s003_node_start_runtime_unavailable"
+        },
+        "precondition": "node runtime adapter cannot start the service"
+      },
+      "response": {
+        "status": 503,
+        "body": {
+          "ok": false,
+          "error": {"code": "provider_unavailable", "message": "runtime adapter docker is unavailable", "retryable": true},
+          "links": {},
+          "meta": {"request_id": "req_s003_node_error", "schema_version": "v1"}
+        }
+      }
+    },
+    {
+      "id": "invalid_lifecycle",
+      "request": {
+        "method": "POST",
+        "path": "/v1/node/services/svc_comfyui_gpu/start",
+        "headers": {
+          "Authorization": "Bearer token_s003_runner",
+          "Idempotency-Key": "idem_s003_node_start_invalid_lifecycle"
+        },
+        "body": {"lifecycle_action": "pause"},
+        "precondition": "request uses an unsupported lifecycle action"
+      },
+      "response": {
+        "status": 400,
+        "body": {
+          "ok": false,
+          "error": {"code": "validation_failed", "message": "invalid lifecycle request", "retryable": false},
+          "links": {},
+          "meta": {"request_id": "req_s003_node_invalid_lifecycle", "schema_version": "v1"}
+        }
+      }
+    }
+  ]
+}

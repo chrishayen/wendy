@@ -1,0 +1,800 @@
+{
+  "scenario_id": "S003",
+  "component": "c07-artifact-store",
+  "fixtures": [
+    {
+      "id": "artifact_upload_create_ok",
+      "request": {
+        "method": "POST",
+        "path": "/v1/artifact-uploads",
+        "headers": {
+          "Authorization": "Bearer token_s003_runner",
+          "Idempotency-Key": "idem_s003_artifact_upload_create"
+        },
+        "body": {
+          "name": "job_s003_0001.png",
+          "media_type": "image/png",
+          "producer_ref": "job_s003_0001",
+          "owner_subject_id": "sub_agent_s003",
+          "expected_size": 68,
+          "expected_checksum": "sha256:4b5c5c92cec3b23e6a294fc0eea43234ef5126c5a64f4c6c531ac8430ab0b844",
+          "metadata": {"capability_id": "cap_image_generate_gpu"}
+        }
+      },
+      "response": {
+        "status": 201,
+        "body": {
+          "ok": true,
+          "data": {
+            "upload_id": "upload_s003_0001",
+            "state": "created",
+            "name": "job_s003_0001.png",
+            "media_type": "image/png",
+            "producer_ref": "job_s003_0001",
+            "owner_subject_id": "sub_agent_s003",
+            "received_size": null,
+            "expected_size": 68,
+            "expected_checksum": "sha256:4b5c5c92cec3b23e6a294fc0eea43234ef5126c5a64f4c6c531ac8430ab0b844",
+            "artifact_id": null,
+            "expires_at": "2026-06-05T20:15:00Z",
+            "links": {
+              "content": {"method": "PUT", "href": "/v1/artifact-uploads/upload_s003_0001/content", "description": "Upload bytes."},
+              "complete": {"method": "POST", "href": "/v1/artifact-uploads/upload_s003_0001/complete", "description": "Complete upload."}
+            }
+          },
+          "links": {},
+          "meta": {"request_id": "req_s003_artifact_upload_create", "schema_version": "v1"}
+        }
+      }
+    },
+    {
+      "id": "artifact_upload_content_ok",
+      "request": {
+        "method": "PUT",
+        "path": "/v1/artifact-uploads/upload_s003_0001/content",
+        "headers": {
+          "Authorization": "Bearer token_s003_runner",
+          "Idempotency-Key": "idem_s003_artifact_upload_content",
+          "Content-Type": "image/png",
+          "Content-Length": "68",
+          "Digest": "sha-256=S1xcks7Dsj5qKU/A7qQyNO9RJsWmT0xsUxrIQwqwuEQ="
+        },
+        "body_fixture": "provider_png_s003_0001.base64"
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "ok": true,
+          "data": {
+            "upload_id": "upload_s003_0001",
+            "state": "received",
+            "name": "job_s003_0001.png",
+            "media_type": "image/png",
+            "producer_ref": "job_s003_0001",
+            "owner_subject_id": "sub_agent_s003",
+            "received_size": 68,
+            "expected_size": 68,
+            "expected_checksum": "sha256:4b5c5c92cec3b23e6a294fc0eea43234ef5126c5a64f4c6c531ac8430ab0b844",
+            "artifact_id": null,
+            "expires_at": "2026-06-05T20:15:00Z",
+            "links": {
+              "complete": {"method": "POST", "href": "/v1/artifact-uploads/upload_s003_0001/complete", "description": "Complete upload."}
+            }
+          },
+          "links": {},
+          "meta": {"request_id": "req_s003_artifact_upload_content", "schema_version": "v1"}
+        }
+      }
+    },
+    {
+      "id": "artifact_upload_complete_ok",
+      "request": {
+        "method": "POST",
+        "path": "/v1/artifact-uploads/upload_s003_0001/complete",
+        "headers": {
+          "Authorization": "Bearer token_s003_runner",
+          "Idempotency-Key": "idem_s003_artifact_upload_complete"
+        },
+        "body": {
+          "checksum": "sha256:4b5c5c92cec3b23e6a294fc0eea43234ef5126c5a64f4c6c531ac8430ab0b844",
+          "size": 68
+        }
+      },
+      "response": {
+        "status": 201,
+        "body": {
+          "ok": true,
+          "data": {
+            "artifact_id": "art_s003_0001",
+            "name": "job_s003_0001.png",
+            "media_type": "image/png",
+            "size": 68,
+            "checksum": "sha256:4b5c5c92cec3b23e6a294fc0eea43234ef5126c5a64f4c6c531ac8430ab0b844",
+            "created_at": "2026-06-05T20:00:45Z",
+            "producer_ref": "job_s003_0001",
+            "owner_subject_id": "sub_agent_s003",
+            "links": {
+              "metadata": {"method": "GET", "href": "/v1/artifacts/art_s003_0001", "description": "Read artifact metadata."},
+              "content": {"method": "GET", "href": "/v1/artifacts/art_s003_0001/content", "description": "Read artifact content."}
+            }
+          },
+          "links": {},
+          "meta": {"request_id": "req_s003_artifact_complete", "schema_version": "v1"}
+        }
+      }
+    },
+    {
+      "id": "artifact_policy_context_ok",
+      "request": {
+        "method": "GET",
+        "path": "/v1/artifacts/art_s003_0001/policy-context",
+        "headers": {"Authorization": "Bearer token_s003_gateway"}
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "ok": true,
+          "data": {
+            "resource_kind": "artifact",
+            "artifact_id": "art_s003_0001",
+            "owner_subject_id": "sub_agent_s003",
+            "producer_ref": "job_s003_0001",
+            "policy_state": "available"
+          },
+          "links": {},
+          "meta": {"request_id": "req_s003_artifact_policy_context", "schema_version": "v1"}
+        }
+      }
+    },
+    {
+      "id": "artifact_metadata_ok",
+      "request": {
+        "method": "GET",
+        "path": "/v1/artifacts/art_s003_0001",
+        "headers": {"Authorization": "Bearer token_s003_gateway"}
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "ok": true,
+          "data": {
+            "artifact_id": "art_s003_0001",
+            "name": "job_s003_0001.png",
+            "media_type": "image/png",
+            "size": 68,
+            "checksum": "sha256:4b5c5c92cec3b23e6a294fc0eea43234ef5126c5a64f4c6c531ac8430ab0b844",
+            "created_at": "2026-06-05T20:00:45Z",
+            "producer_ref": "job_s003_0001",
+            "owner_subject_id": "sub_agent_s003",
+            "links": {
+              "metadata": {"method": "GET", "href": "/v1/artifacts/art_s003_0001", "description": "Read artifact metadata."},
+              "content": {"method": "GET", "href": "/v1/artifacts/art_s003_0001/content", "description": "Read artifact content."}
+            }
+          },
+          "links": {},
+          "meta": {"request_id": "req_s003_artifact_metadata", "schema_version": "v1"}
+        }
+      }
+    },
+    {
+      "id": "artifact_list_by_producer_ok",
+      "request": {
+        "method": "GET",
+        "path": "/v1/artifacts",
+        "headers": {"Authorization": "Bearer token_s003_gateway"},
+        "query": {"producer_ref": "job_s003_0001"}
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "ok": true,
+          "data": {
+            "items": [
+              {
+                "artifact_id": "art_s003_0001",
+                "name": "job_s003_0001.png",
+                "media_type": "image/png",
+                "size": 68,
+                "checksum": "sha256:4b5c5c92cec3b23e6a294fc0eea43234ef5126c5a64f4c6c531ac8430ab0b844",
+                "created_at": "2026-06-05T20:00:45Z",
+                "producer_ref": "job_s003_0001",
+                "owner_subject_id": "sub_agent_s003",
+                "links": {
+                  "content": {"method": "GET", "href": "/v1/artifacts/art_s003_0001/content", "description": "Read artifact content."}
+                }
+              }
+            ],
+            "next_cursor": null
+          },
+          "links": {},
+          "meta": {"request_id": "req_s003_artifact_list_by_producer", "schema_version": "v1"}
+        }
+      }
+    },
+    {
+      "id": "artifact_content_ok",
+      "request": {
+        "method": "GET",
+        "path": "/v1/artifacts/art_s003_0001/content",
+        "headers": {"Authorization": "Bearer token_s003_gateway"}
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "Content-Type": "image/png",
+          "Content-Length": "68",
+          "Digest": "sha-256=S1xcks7Dsj5qKU/A7qQyNO9RJsWmT0xsUxrIQwqwuEQ="
+        },
+        "body_fixture": "provider_png_s003_0001.base64"
+      }
+    },
+    {
+      "id": "artifact_upload_content_missing_headers",
+      "request": {
+        "method": "PUT",
+        "path": "/v1/artifact-uploads/upload_s003_0001/content",
+        "headers": {
+          "Authorization": "Bearer token_s003_runner",
+          "Idempotency-Key": "idem_s003_artifact_upload_content"
+        }
+      },
+      "response": {
+        "status": 400,
+        "body": {
+          "ok": false,
+          "error": {
+            "code": "validation_failed",
+            "message": "Content-Type, Content-Length, and Digest headers are required for artifact content upload",
+            "retryable": false
+          },
+          "links": {},
+          "meta": {"request_id": "req_s003_artifact_missing_headers", "schema_version": "v1"}
+        }
+      }
+    },
+    {
+      "id": "artifact_upload_content_bad_digest",
+      "request": {
+        "method": "PUT",
+        "path": "/v1/artifact-uploads/upload_s003_0001/content",
+        "headers": {
+          "Authorization": "Bearer token_s003_runner",
+          "Idempotency-Key": "idem_s003_artifact_upload_content_bad_digest",
+          "Content-Type": "image/png",
+          "Content-Length": "68",
+          "Digest": "sha-256=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+        },
+        "body_fixture": "provider_png_s003_0001.base64",
+        "precondition": "first content write for upload_s003_0001"
+      },
+      "response": {
+        "status": 400,
+        "body": {
+          "ok": false,
+          "error": {
+            "code": "validation_failed",
+            "message": "Digest does not match uploaded content",
+            "retryable": false
+          },
+          "links": {},
+          "meta": {"request_id": "req_s003_artifact_bad_digest", "schema_version": "v1"}
+        }
+      }
+    },
+    {
+      "id": "artifact_upload_content_length_mismatch",
+      "request": {
+        "method": "PUT",
+        "path": "/v1/artifact-uploads/upload_s003_0001/content",
+        "headers": {
+          "Authorization": "Bearer token_s003_runner",
+          "Idempotency-Key": "idem_s003_artifact_upload_content_bad_length",
+          "Content-Type": "image/png",
+          "Content-Length": "67",
+          "Digest": "sha-256=S1xcks7Dsj5qKU/A7qQyNO9RJsWmT0xsUxrIQwqwuEQ="
+        },
+        "body_fixture": "provider_png_s003_0001.base64",
+        "precondition": "first content write for upload_s003_0001"
+      },
+      "response": {
+        "status": 400,
+        "body": {
+          "ok": false,
+          "error": {
+            "code": "validation_failed",
+            "message": "Content-Length does not match uploaded content",
+            "retryable": false
+          },
+          "links": {},
+          "meta": {"request_id": "req_s003_artifact_content_length_mismatch", "schema_version": "v1"}
+        }
+      }
+    },
+    {
+      "id": "artifact_upload_session_completed",
+      "request": {
+        "method": "GET",
+        "path": "/v1/artifact-uploads/upload_s003_0001",
+        "headers": {"Authorization": "Bearer token_s003_runner"},
+        "precondition": "artifact_upload_complete_ok created art_s003_0001"
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "ok": true,
+          "data": {
+            "upload_id": "upload_s003_0001",
+            "state": "completed",
+            "artifact_id": "art_s003_0001",
+            "received_size": 68,
+            "expected_size": 68,
+            "expected_checksum": "sha256:4b5c5c92cec3b23e6a294fc0eea43234ef5126c5a64f4c6c531ac8430ab0b844",
+            "completed_at": "2026-06-05T20:00:45Z"
+          },
+          "links": {},
+          "meta": {"request_id": "req_s003_artifact_upload_session_completed", "schema_version": "v1"}
+        }
+      }
+    },
+    {
+      "id": "artifact_upload_missing_idempotency",
+      "request": {
+        "method": "POST",
+        "path": "/v1/artifact-uploads",
+        "headers": {"Authorization": "Bearer token_s003_runner"},
+        "body": {
+          "name": "job_s003_0001.png",
+          "media_type": "image/png",
+          "producer_ref": "job_s003_0001",
+          "owner_subject_id": "sub_agent_s003",
+          "expected_size": 68
+        }
+      },
+      "response": {
+        "status": 400,
+        "body": {
+          "ok": false,
+          "error": {"code": "missing_idempotency_key", "message": "Idempotency-Key header is required for artifact upload operations", "retryable": false},
+          "links": {},
+          "meta": {"request_id": "req_s003_artifact_missing_idempotency", "schema_version": "v1"}
+        }
+      }
+    },
+    {
+      "id": "artifact_upload_create_idempotency_replay",
+      "request": {
+        "method": "POST",
+        "path": "/v1/artifact-uploads",
+        "headers": {
+          "Authorization": "Bearer token_s003_runner",
+          "Idempotency-Key": "idem_s003_artifact_upload_create"
+        },
+        "body": {
+          "name": "job_s003_0001.png",
+          "media_type": "image/png",
+          "producer_ref": "job_s003_0001",
+          "owner_subject_id": "sub_agent_s003",
+          "expected_size": 68,
+          "expected_checksum": "sha256:4b5c5c92cec3b23e6a294fc0eea43234ef5126c5a64f4c6c531ac8430ab0b844",
+          "metadata": {"capability_id": "cap_image_generate_gpu"}
+        },
+        "precondition": "same idempotency key and equivalent create body already created upload_s003_0001"
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "ok": true,
+          "data": {
+            "upload_id": "upload_s003_0001",
+            "state": "created",
+            "name": "job_s003_0001.png",
+            "media_type": "image/png",
+            "producer_ref": "job_s003_0001",
+            "owner_subject_id": "sub_agent_s003",
+            "received_size": null,
+            "expected_size": 68,
+            "expected_checksum": "sha256:4b5c5c92cec3b23e6a294fc0eea43234ef5126c5a64f4c6c531ac8430ab0b844",
+            "artifact_id": null,
+            "expires_at": "2026-06-05T20:15:00Z",
+            "links": {
+              "content": {"method": "PUT", "href": "/v1/artifact-uploads/upload_s003_0001/content", "description": "Upload bytes."},
+              "complete": {"method": "POST", "href": "/v1/artifact-uploads/upload_s003_0001/complete", "description": "Complete upload."}
+            }
+          },
+          "links": {},
+          "meta": {"request_id": "req_s003_artifact_upload_create_replay", "schema_version": "v1"}
+        }
+      }
+    },
+    {
+      "id": "artifact_upload_create_idempotency_conflict",
+      "request": {
+        "method": "POST",
+        "path": "/v1/artifact-uploads",
+        "headers": {
+          "Authorization": "Bearer token_s003_runner",
+          "Idempotency-Key": "idem_s003_artifact_upload_create"
+        },
+        "body": {
+          "name": "different.png",
+          "media_type": "image/png",
+          "producer_ref": "job_s003_0001",
+          "owner_subject_id": "sub_agent_s003",
+          "expected_size": 68
+        },
+        "precondition": "same idempotency key already used for different upload create body"
+      },
+      "response": {
+        "status": 409,
+        "body": {
+          "ok": false,
+          "error": {"code": "idempotency_conflict", "message": "idempotency key was reused with different request content", "retryable": false},
+          "links": {},
+          "meta": {"request_id": "req_s003_artifact_idempotency_conflict", "schema_version": "v1"}
+        }
+      }
+    },
+    {
+      "id": "artifact_expired_upload",
+      "checkpoint": {
+        "upload_id": "upload_s003_expired",
+        "state": "created",
+        "name": "expired.png",
+        "media_type": "image/png",
+        "producer_ref": "job_s003_expired",
+        "owner_subject_id": "sub_agent_s003",
+        "expected_size": 68,
+        "expected_checksum": "sha256:4b5c5c92cec3b23e6a294fc0eea43234ef5126c5a64f4c6c531ac8430ab0b844",
+        "expires_at": "2026-06-05T20:15:00Z",
+        "now": "2026-06-05T20:15:01Z",
+        "artifact_id": null
+      },
+      "request": {
+        "method": "PUT",
+        "path": "/v1/artifact-uploads/upload_s003_expired/content",
+        "headers": {
+          "Authorization": "Bearer token_s003_runner",
+          "Idempotency-Key": "idem_s003_artifact_upload_expired",
+          "Content-Type": "image/png",
+          "Content-Length": "68",
+          "Digest": "sha-256=S1xcks7Dsj5qKU/A7qQyNO9RJsWmT0xsUxrIQwqwuEQ="
+        },
+        "body_fixture": "provider_png_s003_0001.base64",
+        "precondition": "upload_s003_expired is uncompleted and expired at 2026-06-05T20:15:00Z; request occurs at 2026-06-05T20:15:01Z"
+      },
+      "response": {
+        "status": 410,
+        "body": {
+          "ok": false,
+          "error": {"code": "artifact_expired", "message": "artifact upload session has expired", "retryable": false},
+          "links": {},
+          "meta": {"request_id": "req_s003_artifact_expired", "schema_version": "v1"}
+        }
+      }
+    },
+    {
+      "id": "artifact_checksum_mismatch",
+      "request": {
+        "method": "POST",
+        "path": "/v1/artifact-uploads/upload_s003_0001/complete",
+        "headers": {
+          "Authorization": "Bearer token_s003_runner",
+          "Idempotency-Key": "idem_s003_artifact_upload_complete_bad_checksum"
+        },
+        "body": {
+          "checksum": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+          "size": 68
+        },
+        "precondition": "upload_s003_0001 received the canonical PNG body"
+      },
+      "response": {
+        "status": 400,
+        "body": {
+          "ok": false,
+          "error": {"code": "validation_failed", "message": "checksum does not match uploaded content", "retryable": false},
+          "links": {},
+          "meta": {"request_id": "req_s003_artifact_checksum_mismatch", "schema_version": "v1"}
+        }
+      }
+    },
+    {
+      "id": "artifact_size_mismatch",
+      "request": {
+        "method": "POST",
+        "path": "/v1/artifact-uploads/upload_s003_0001/complete",
+        "headers": {
+          "Authorization": "Bearer token_s003_runner",
+          "Idempotency-Key": "idem_s003_artifact_upload_complete_bad_size"
+        },
+        "body": {
+          "checksum": "sha256:4b5c5c92cec3b23e6a294fc0eea43234ef5126c5a64f4c6c531ac8430ab0b844",
+          "size": 67
+        },
+        "precondition": "upload_s003_0001 received the canonical 68-byte PNG body"
+      },
+      "response": {
+        "status": 400,
+        "body": {
+          "ok": false,
+          "error": {"code": "validation_failed", "message": "artifact size mismatch", "retryable": false},
+          "links": {},
+          "meta": {"request_id": "req_s003_artifact_size_mismatch", "schema_version": "v1"}
+        }
+      }
+    },
+    {
+      "id": "artifact_policy_context_missing",
+      "request": {
+        "method": "GET",
+        "path": "/v1/artifacts/art_s003_missing/policy-context",
+        "headers": {"Authorization": "Bearer token_s003_gateway"}
+      },
+      "response": {
+        "status": 404,
+        "body": {
+          "ok": false,
+          "error": {"code": "not_found", "message": "artifact not found", "retryable": false},
+          "links": {},
+          "meta": {"request_id": "req_s003_artifact_policy_context_missing", "schema_version": "v1"}
+        }
+      }
+    },
+    {
+      "id": "artifact_metadata_missing",
+      "request": {
+        "method": "GET",
+        "path": "/v1/artifacts/art_s003_missing",
+        "headers": {"Authorization": "Bearer token_s003_gateway"}
+      },
+      "response": {
+        "status": 404,
+        "body": {
+          "ok": false,
+          "error": {"code": "not_found", "message": "artifact not found", "retryable": false},
+          "links": {},
+          "meta": {"request_id": "req_s003_artifact_missing", "schema_version": "v1"}
+        }
+      }
+    },
+    {
+      "id": "artifact_content_missing",
+      "request": {
+        "method": "GET",
+        "path": "/v1/artifacts/art_s003_missing/content",
+        "headers": {"Authorization": "Bearer token_s003_gateway"}
+      },
+      "response": {
+        "status": 404,
+        "body": {
+          "ok": false,
+          "error": {"code": "not_found", "message": "artifact not found", "retryable": false},
+          "links": {},
+          "meta": {"request_id": "req_s003_artifact_content_missing", "schema_version": "v1"}
+        }
+      }
+    },
+    {
+      "id": "artifact_list_empty",
+      "request": {
+        "method": "GET",
+        "path": "/v1/artifacts",
+        "headers": {"Authorization": "Bearer token_s003_gateway"},
+        "query": {"producer_ref": "job_s003_empty"}
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "ok": true,
+          "data": {"items": [], "next_cursor": null},
+          "links": {},
+          "meta": {"request_id": "req_s003_artifact_list_empty", "schema_version": "v1"}
+        }
+      }
+    },
+    {
+      "id": "artifact_upload_content_missing_idempotency",
+      "request": {
+        "method": "PUT",
+        "path": "/v1/artifact-uploads/upload_s003_0001/content",
+        "headers": {
+          "Authorization": "Bearer token_s003_runner",
+          "Content-Type": "image/png",
+          "Content-Length": "68",
+          "Digest": "sha-256=S1xcks7Dsj5qKU/A7qQyNO9RJsWmT0xsUxrIQwqwuEQ="
+        },
+        "body_fixture": "provider_png_s003_0001.base64"
+      },
+      "response": {
+        "status": 400,
+        "body": {
+          "ok": false,
+          "error": {"code": "missing_idempotency_key", "message": "Idempotency-Key header is required for artifact upload operations", "retryable": false},
+          "links": {},
+          "meta": {"request_id": "req_s003_artifact_content_missing_idempotency", "schema_version": "v1"}
+        }
+      }
+    },
+    {
+      "id": "artifact_upload_complete_missing_idempotency",
+      "request": {
+        "method": "POST",
+        "path": "/v1/artifact-uploads/upload_s003_0001/complete",
+        "headers": {"Authorization": "Bearer token_s003_runner"},
+        "body": {
+          "checksum": "sha256:4b5c5c92cec3b23e6a294fc0eea43234ef5126c5a64f4c6c531ac8430ab0b844",
+          "size": 68
+        }
+      },
+      "response": {
+        "status": 400,
+        "body": {
+          "ok": false,
+          "error": {"code": "missing_idempotency_key", "message": "Idempotency-Key header is required for artifact upload operations", "retryable": false},
+          "links": {},
+          "meta": {"request_id": "req_s003_artifact_complete_missing_idempotency", "schema_version": "v1"}
+        }
+      }
+    },
+    {
+      "id": "artifact_upload_content_idempotency_replay",
+      "request": {
+        "method": "PUT",
+        "path": "/v1/artifact-uploads/upload_s003_0001/content",
+        "headers": {
+          "Authorization": "Bearer token_s003_runner",
+          "Idempotency-Key": "idem_s003_artifact_upload_content",
+          "Content-Type": "image/png",
+          "Content-Length": "68",
+          "Digest": "sha-256=S1xcks7Dsj5qKU/A7qQyNO9RJsWmT0xsUxrIQwqwuEQ="
+        },
+        "body_fixture": "provider_png_s003_0001.base64",
+        "precondition": "same content idempotency key and same byte fingerprint already accepted"
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "ok": true,
+          "data": {
+            "upload_id": "upload_s003_0001",
+            "state": "received",
+            "name": "job_s003_0001.png",
+            "media_type": "image/png",
+            "producer_ref": "job_s003_0001",
+            "owner_subject_id": "sub_agent_s003",
+            "received_size": 68,
+            "expected_size": 68,
+            "expected_checksum": "sha256:4b5c5c92cec3b23e6a294fc0eea43234ef5126c5a64f4c6c531ac8430ab0b844",
+            "artifact_id": null,
+            "expires_at": "2026-06-05T20:15:00Z",
+            "links": {
+              "complete": {"method": "POST", "href": "/v1/artifact-uploads/upload_s003_0001/complete", "description": "Complete upload."}
+            }
+          },
+          "links": {},
+          "meta": {"request_id": "req_s003_artifact_upload_content_replay", "schema_version": "v1"}
+        }
+      }
+    },
+    {
+      "id": "artifact_upload_content_idempotency_conflict",
+      "request": {
+        "method": "PUT",
+        "path": "/v1/artifact-uploads/upload_s003_0001/content",
+        "headers": {
+          "Authorization": "Bearer token_s003_runner",
+          "Idempotency-Key": "idem_s003_artifact_upload_content",
+          "Content-Type": "image/png",
+          "Content-Length": "1",
+          "Digest": "sha-256=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+        },
+        "body_base64": "AA==",
+        "precondition": "same content idempotency key already used for canonical PNG bytes"
+      },
+      "response": {
+        "status": 409,
+        "body": {
+          "ok": false,
+          "error": {"code": "idempotency_conflict", "message": "idempotency key was reused with different upload content", "retryable": false},
+          "links": {},
+          "meta": {"request_id": "req_s003_artifact_content_idempotency_conflict", "schema_version": "v1"}
+        }
+      }
+    },
+    {
+      "id": "artifact_upload_complete_idempotency_replay",
+      "request": {
+        "method": "POST",
+        "path": "/v1/artifact-uploads/upload_s003_0001/complete",
+        "headers": {
+          "Authorization": "Bearer token_s003_runner",
+          "Idempotency-Key": "idem_s003_artifact_upload_complete"
+        },
+        "body": {
+          "checksum": "sha256:4b5c5c92cec3b23e6a294fc0eea43234ef5126c5a64f4c6c531ac8430ab0b844",
+          "size": 68
+        },
+        "precondition": "same complete idempotency key and same body already created art_s003_0001"
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "ok": true,
+          "data": {
+            "artifact_id": "art_s003_0001",
+            "name": "job_s003_0001.png",
+            "media_type": "image/png",
+            "size": 68,
+            "checksum": "sha256:4b5c5c92cec3b23e6a294fc0eea43234ef5126c5a64f4c6c531ac8430ab0b844",
+            "created_at": "2026-06-05T20:00:45Z",
+            "producer_ref": "job_s003_0001",
+            "owner_subject_id": "sub_agent_s003",
+            "links": {
+              "metadata": {"method": "GET", "href": "/v1/artifacts/art_s003_0001", "description": "Read artifact metadata."},
+              "content": {"method": "GET", "href": "/v1/artifacts/art_s003_0001/content", "description": "Read artifact content."}
+            }
+          },
+          "links": {},
+          "meta": {"request_id": "req_s003_artifact_complete_replay", "schema_version": "v1"}
+        }
+      }
+    },
+    {
+      "id": "artifact_upload_complete_idempotency_conflict",
+      "request": {
+        "method": "POST",
+        "path": "/v1/artifact-uploads/upload_s003_0001/complete",
+        "headers": {
+          "Authorization": "Bearer token_s003_runner",
+          "Idempotency-Key": "idem_s003_artifact_upload_complete"
+        },
+        "body": {
+          "checksum": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+          "size": 68
+        },
+        "precondition": "same complete idempotency key already used for canonical checksum"
+      },
+      "response": {
+        "status": 409,
+        "body": {
+          "ok": false,
+          "error": {"code": "idempotency_conflict", "message": "idempotency key was reused with different upload content", "retryable": false},
+          "links": {},
+          "meta": {"request_id": "req_s003_artifact_complete_idempotency_conflict", "schema_version": "v1"}
+        }
+      }
+    },
+    {
+      "id": "artifact_upload_complete_duplicate_without_matching_key",
+      "request": {
+        "method": "POST",
+        "path": "/v1/artifact-uploads/upload_s003_0001/complete",
+        "headers": {
+          "Authorization": "Bearer token_s003_runner",
+          "Idempotency-Key": "idem_s003_artifact_upload_complete_new_after_completed"
+        },
+        "body": {
+          "checksum": "sha256:4b5c5c92cec3b23e6a294fc0eea43234ef5126c5a64f4c6c531ac8430ab0b844",
+          "size": 68
+        },
+        "precondition": "upload_s003_0001 is already completed by idem_s003_artifact_upload_complete; this idempotency key has no matching completion record"
+      },
+      "response": {
+        "status": 409,
+        "body": {
+          "ok": false,
+          "error": {"code": "idempotency_conflict", "message": "upload is already completed with a different idempotency key", "retryable": false},
+          "links": {},
+          "meta": {"request_id": "req_s003_artifact_complete_duplicate_without_matching_key", "schema_version": "v1"}
+        }
+      }
+    },
+    {
+      "id": "artifact_digest_conversion",
+      "mapping": {
+        "metadata_checksum": "sha256:4b5c5c92cec3b23e6a294fc0eea43234ef5126c5a64f4c6c531ac8430ab0b844",
+        "http_digest": "sha-256=S1xcks7Dsj5qKU/A7qQyNO9RJsWmT0xsUxrIQwqwuEQ=",
+        "body_fixture": "provider_png_s003_0001.base64"
+      }
+    }
+  ]
+}
