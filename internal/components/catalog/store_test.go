@@ -7,19 +7,17 @@ import (
 
 func TestRegisterManifestRejectsDuplicates(t *testing.T) {
 	store := NewStore()
-	if _, err := store.RegisterManifest(S003Manifest()); err != nil {
+	manifest := sampleManifest(t)
+	if _, err := store.RegisterManifest(manifest); err != nil {
 		t.Fatalf("register manifest: %v", err)
 	}
-	if _, err := store.RegisterManifest(S003Manifest()); !errors.Is(err, ErrDuplicateService) {
+	if _, err := store.RegisterManifest(manifest); !errors.Is(err, ErrDuplicateService) {
 		t.Fatalf("duplicate register error = %v, want ErrDuplicateService", err)
 	}
 }
 
 func TestListCapabilitiesFilters(t *testing.T) {
-	store, err := NewS003Store()
-	if err != nil {
-		t.Fatalf("seed store: %v", err)
-	}
+	store := sampleStore(t)
 
 	records, err := store.ListCapabilities(CapabilityFilter{
 		CapabilityID:         "cap_image_generate_gpu",
@@ -49,11 +47,8 @@ func TestListCapabilitiesFilters(t *testing.T) {
 }
 
 func TestInvalidCursor(t *testing.T) {
-	store, err := NewS003Store()
-	if err != nil {
-		t.Fatalf("seed store: %v", err)
-	}
-	_, err = store.ListCapabilities(CapabilityFilter{Cursor: "cursor_s003_invalid"})
+	store := sampleStore(t)
+	_, err := store.ListCapabilities(CapabilityFilter{Cursor: "cursor_s003_invalid"})
 	if !errors.Is(err, ErrInvalidCursor) {
 		t.Fatalf("error = %v, want ErrInvalidCursor", err)
 	}

@@ -1,10 +1,9 @@
-# PACP Implementation Spike
+# PACP
 
-This is the first implementation spike for the Pluggable Agent Control Plane.
-It starts with Wave 0: contract fixtures, validation, and fake endpoints.
+Pluggable Agent Control Plane implementation.
 
-The module currently proves that the accepted S003 contract simulation can be
-used as implementation-facing test data.
+The product direction is a generic host for user-approved service providers.
+Contract simulation data is kept as test input, not as product behavior.
 
 ## What Exists
 
@@ -14,8 +13,9 @@ used as implementation-facing test data.
 - `internal/testkit`: S003 fixture loader and fixture-backed HTTP fake server.
 - `cmd/pacp-contract-smoke`: CLI smoke check for a contract simulation package.
 - `cmd/pacp-fixture-server`: serves one fixture owner as an HTTP fake.
-- `cmd/pacp-catalog`: runnable C03 catalog server.
+- `cmd/pacp-catalog`: runnable catalog server that loads provider manifests.
 - `testdata/contract-sim`: accepted role-play fixtures copied from the vault.
+- `testdata/manifests`: sample provider manifests used by tests and examples.
 
 ## Local Checks
 
@@ -23,7 +23,7 @@ used as implementation-facing test data.
 go test ./...
 go run ./cmd/pacp-contract-smoke
 go run ./cmd/pacp-fixture-server -owner c04-agent-tool-gateway -addr localhost:18080
-go run ./cmd/pacp-catalog -addr localhost:18081 -seed s003
+go run ./cmd/pacp-catalog -addr localhost:18081 -manifest testdata/manifests/s003-comfyui-gpu.json
 ```
 
 The catalog can then be queried:

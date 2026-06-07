@@ -16,11 +16,7 @@ import (
 )
 
 func TestHTTPMatchesS003CatalogFixtures(t *testing.T) {
-	store, err := NewS003Store()
-	if err != nil {
-		t.Fatalf("seed store: %v", err)
-	}
-	handler := NewHandler(store)
+	handler := NewHandler(sampleStore(t))
 	fixturePackage := loadCatalogFixturePackage(t)
 
 	for _, fixture := range fixturePackage.File.Fixtures {
@@ -59,13 +55,26 @@ func TestHTTPMatchesS003CatalogFixtures(t *testing.T) {
 
 func TestRegisterManifestHTTP(t *testing.T) {
 	handler := NewHandler(NewStore())
-	body := marshalReader(t, S003Manifest())
+	body := marshalReader(t, sampleManifest(t))
 	req := httptest.NewRequest(http.MethodPost, "/v1/catalog/manifests", body)
 	rec := httptest.NewRecorder()
 
 	handler.ServeHTTP(rec, req)
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("status = %d, want 201; body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestLoadManifestsFromDirectory(t *testing.T) {
+	manifests, err := LoadManifests(filepath.Join("..", "..", "..", "testdata", "manifests"))
+	if err != nil {
+		t.Fatalf("load manifests: %v", err)
+	}
+	if len(manifests) != 1 {
+		t.Fatalf("manifest count = %d, want 1", len(manifests))
+	}
+	if manifests[0].Service.ID != "svc_comfyui_gpu" {
+		t.Fatalf("service id = %q", manifests[0].Service.ID)
 	}
 }
 
