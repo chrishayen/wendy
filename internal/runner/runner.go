@@ -21,19 +21,20 @@ import (
 )
 
 type Config struct {
-	WorkerID            string
-	JobsURL             string
-	LeasesURL           string
-	ArtifactsURL        string
-	PolicyURL           string
-	NodeURL             string
-	NodeURLs            map[string]string
-	NodeStartTimeout    time.Duration
-	NodePollInterval    time.Duration
-	ComponentCredential string
-	WorkerSubjectID     string
-	ActorSubjectID      string
-	Client              *http.Client
+	WorkerID                  string
+	JobsURL                   string
+	LeasesURL                 string
+	ArtifactsURL              string
+	PolicyURL                 string
+	NodeURL                   string
+	NodeURLs                  map[string]string
+	NodeStartTimeout          time.Duration
+	NodePollInterval          time.Duration
+	ProviderHeartbeatInterval time.Duration
+	ComponentCredential       string
+	WorkerSubjectID           string
+	ActorSubjectID            string
+	Client                    *http.Client
 }
 
 type Runner struct {
@@ -82,6 +83,9 @@ func New(cfg Config) *Runner {
 	}
 	if cfg.NodePollInterval <= 0 {
 		cfg.NodePollInterval = 500 * time.Millisecond
+	}
+	if cfg.ProviderHeartbeatInterval <= 0 {
+		cfg.ProviderHeartbeatInterval = 30 * time.Second
 	}
 	cfg.JobsURL = strings.TrimRight(cfg.JobsURL, "/")
 	cfg.LeasesURL = strings.TrimRight(cfg.LeasesURL, "/")
@@ -180,7 +184,9 @@ func (r *Runner) runJob(ctx context.Context, job contracts.Job) error {
 	} else if terminal {
 		return nil
 	}
-	response, err := r.invokeProvider(ctx, job.JobID, plan, lease)
+	invokeCtx, stopKeepalive := r.providerInvocationContext(ctx, job.JobID, plan, lease)
+	response, err := r.invokeProvider(invokeCtx, job.JobID, plan, lease)
+	stopKeepalive()
 	if err != nil {
 		providerErr := normalizeProviderError(err)
 		leaseReleaseReason = providerErr.releaseReason
@@ -234,12 +240,56 @@ func (r *Runner) claimJob(ctx context.Context, jobID string) (contracts.Job, err
 }
 
 func (r *Runner) heartbeatRunning(ctx context.Context, jobID string) error {
+	return r.heartbeatJob(ctx, jobID, "running", "running provider invocation")
+}
+
+func (r *Runner) heartbeatJob(ctx context.Context, jobID, transition, statusMessage string) error {
 	var job contracts.Job
-	if err := r.postJSON(ctx, r.cfg.JobsURL+"/v1/jobs/"+url.PathEscape(jobID)+"/heartbeat", contracts.JobHeartbeatRequest{WorkerID: r.cfg.WorkerID, TransitionTo: "running", StatusMessage: "running"}, "", &job); err != nil {
+	if err := r.postJSON(ctx, r.cfg.JobsURL+"/v1/jobs/"+url.PathEscape(jobID)+"/heartbeat", contracts.JobHeartbeatRequest{WorkerID: r.cfg.WorkerID, TransitionTo: transition, StatusMessage: statusMessage}, "", &job); err != nil {
 		return err
 	}
 	r.stats.RecordHeartbeat(jobID)
 	return nil
+}
+
+func (r *Runner) providerInvocationContext(ctx context.Context, jobID string, plan executionPlan, lease *contracts.Lease) (context.Context, func()) {
+	invokeCtx := ctx
+	var cancel context.CancelFunc
+	if plan.TimeoutSeconds > 0 {
+		invokeCtx, cancel = context.WithTimeout(ctx, time.Duration(plan.TimeoutSeconds)*time.Second)
+	} else {
+		invokeCtx, cancel = context.WithCancel(ctx)
+	}
+	done := make(chan struct{})
+	if r.cfg.ProviderHeartbeatInterval > 0 {
+		go r.keepProviderInvocationAlive(invokeCtx, done, jobID, lease)
+	}
+	return invokeCtx, func() {
+		cancel()
+		close(done)
+	}
+}
+
+func (r *Runner) keepProviderInvocationAlive(ctx context.Context, done <-chan struct{}, jobID string, lease *contracts.Lease) {
+	ticker := time.NewTicker(r.cfg.ProviderHeartbeatInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-done:
+			return
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if err := r.heartbeatJob(ctx, jobID, "", "waiting for provider completion"); err != nil {
+				return
+			}
+			if lease != nil {
+				if err := r.heartbeatLease(ctx, lease.LeaseID, jobID); err != nil {
+					return
+				}
+			}
+		}
+	}
 }
 
 func (r *Runner) completeJob(ctx context.Context, jobID string, artifactIDs []string) error {
@@ -312,6 +362,11 @@ func (r *Runner) releaseLease(ctx context.Context, leaseID, holderID, reason str
 	}
 	err := r.postJSONWithHeaders(ctx, r.cfg.LeasesURL+"/v1/leases/"+url.PathEscape(leaseID)+"/release", contracts.LeaseReleaseRequest{HolderID: holderID, Reason: reason}, "runner-release-"+leaseID, headers, &lease)
 	return lease, err
+}
+
+func (r *Runner) heartbeatLease(ctx context.Context, leaseID, holderID string) error {
+	var lease contracts.Lease
+	return r.postJSON(ctx, r.cfg.LeasesURL+"/v1/leases/"+url.PathEscape(leaseID)+"/heartbeat", contracts.LeaseHeartbeatRequest{HolderID: holderID}, "", &lease)
 }
 
 func (r *Runner) ensureNodeService(ctx context.Context, route contracts.CapabilityRoute) error {
@@ -400,6 +455,13 @@ func (r *Runner) invokeProvider(ctx context.Context, jobID string, plan executio
 	var response contracts.ProviderInvokeResponse
 	target := strings.TrimRight(plan.Route.ProviderEndpoint, "/") + plan.Route.ProviderInvokePath
 	err := r.postJSON(ctx, target, contracts.ProviderInvokeRequest{Input: plan.Input, Context: invokeCtx}, "", &response)
+	if err != nil && errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		return contracts.ProviderInvokeResponse{}, componentError{ErrorObject: contracts.ErrorObject{
+			Code:      "provider_timeout",
+			Message:   "provider invocation timed out",
+			Retryable: true,
+		}}
+	}
 	return response, err
 }
 

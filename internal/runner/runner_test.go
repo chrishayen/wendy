@@ -10,6 +10,9 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strconv"
+	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -236,6 +239,109 @@ func TestRunnerPreservesProviderUnavailableFailureCodeAndReleaseReason(t *testin
 		Message:   "ComfyUI backend is unavailable",
 		Retryable: true,
 	}, http.StatusServiceUnavailable, "provider invocation failed", "provider failed")
+}
+
+func TestRunnerTimesOutProviderInvocationAndKeepsClaimsAlive(t *testing.T) {
+	jobStore := jobs.NewStore()
+	var jobHeartbeats atomic.Int32
+	jobsHandler := jobs.NewHandler(jobStore)
+	jobsServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/heartbeat") {
+			jobHeartbeats.Add(1)
+		}
+		jobsHandler.ServeHTTP(w, r)
+	}))
+	defer jobsServer.Close()
+
+	leaseStore := leases.NewStore()
+	if _, err := leaseStore.RegisterResource(contracts.RegisterResourceRequest{Selector: "gpu", Status: contracts.ResourceAvailable}); err != nil {
+		t.Fatalf("register resource: %v", err)
+	}
+	var leaseHeartbeats atomic.Int32
+	leasesHandler := leases.NewHandler(leaseStore)
+	leasesServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/heartbeat") {
+			leaseHeartbeats.Add(1)
+		}
+		leasesHandler.ServeHTTP(w, r)
+	}))
+	defer leasesServer.Close()
+
+	releaseProvider := make(chan struct{})
+	var releaseProviderOnce sync.Once
+	defer releaseProviderOnce.Do(func() { close(releaseProvider) })
+	providerServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/v1/provider/capabilities/cap_slow/invoke" {
+			t.Fatalf("unexpected provider request %s %s", r.Method, r.URL.Path)
+		}
+		<-releaseProvider
+	}))
+	defer providerServer.Close()
+
+	route := contracts.CapabilityRoute{
+		CapabilityID:       "cap_slow",
+		ServiceID:          "svc_slow_provider",
+		ProviderEndpoint:   providerServer.URL,
+		ProviderHealthPath: "/v1/provider/health",
+		ProviderInvokePath: "/v1/provider/capabilities/cap_slow/invoke",
+		ServiceStartMode:   "manual",
+		ResourceHints:      []contracts.ResourceHint{{Selector: "gpu", Required: true}},
+	}
+	created, _, err := jobStore.Create(contracts.CreateJobRequest{
+		RequesterID:  "sub_agent",
+		CapabilityID: "cap_slow",
+		InputSummary: map[string]any{"prompt_present": true},
+		Metadata: map[string]any{"execution_plan": map[string]any{
+			"capability_id":     "cap_slow",
+			"subject_id":        "sub_agent",
+			"input":             map[string]any{"prompt": "red mug"},
+			"route":             route,
+			"resource_selector": "gpu",
+			"timeout_seconds":   1,
+		}},
+	}, "create-slow-provider-job")
+	if err != nil {
+		t.Fatalf("create job: %v", err)
+	}
+
+	runner := New(Config{
+		WorkerID:                  "runner_test",
+		JobsURL:                   jobsServer.URL,
+		LeasesURL:                 leasesServer.URL,
+		ArtifactsURL:              "http://artifacts.invalid",
+		ActorSubjectID:            "sub_runner_test",
+		ProviderHeartbeatInterval: 10 * time.Millisecond,
+		Client:                    jobsServer.Client(),
+	})
+	jobID, ok, err := runner.RunOnce(context.Background())
+	releaseProviderOnce.Do(func() { close(releaseProvider) })
+	providerServer.CloseClientConnections()
+	if err == nil {
+		t.Fatal("expected provider timeout error")
+	}
+	if !ok || jobID != created.JobID {
+		t.Fatalf("run result jobID=%q ok=%v", jobID, ok)
+	}
+	if jobHeartbeats.Load() < 2 {
+		t.Fatalf("job heartbeats = %d, want initial plus keepalive", jobHeartbeats.Load())
+	}
+	if leaseHeartbeats.Load() == 0 {
+		t.Fatal("lease was not kept alive during provider invocation")
+	}
+	failed, err := jobStore.Get(created.JobID)
+	if err != nil {
+		t.Fatalf("get failed job: %v", err)
+	}
+	if failed.State != contracts.JobFailed || failed.TerminalError == nil || failed.TerminalError.Code != "provider_timeout" || !failed.TerminalError.Retryable {
+		t.Fatalf("failed job = %#v", failed)
+	}
+	metrics := runner.Metrics(context.Background())
+	assertContractMetric(t, metrics.Samples, "runner_run_once_total", map[string]string{"result": "error"}, 1)
+	assertContractMetric(t, metrics.Samples, "runner_errors_total", map[string]string{"code": "provider_timeout"}, 1)
+	events := leaseStore.AuditEvents()
+	if len(events) != 1 || events[0].ReleaseReason != "provider timed out" {
+		t.Fatalf("lease audit events = %#v", events)
+	}
 }
 
 func TestRunnerMonitorHTTPReportsHealthAndMetrics(t *testing.T) {

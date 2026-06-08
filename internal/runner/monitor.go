@@ -277,6 +277,10 @@ func classifyRunnerError(err error) string {
 	if err == nil {
 		return ""
 	}
+	var componentErr componentError
+	if errors.As(err, &componentErr) && componentErr.Code != "" {
+		return componentErr.Code
+	}
 	if errors.Is(err, context.Canceled) {
 		return "context_canceled"
 	}
