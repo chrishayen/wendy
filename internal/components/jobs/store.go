@@ -168,6 +168,7 @@ func (s *Store) PolicyContext(jobID string) (contracts.JobPolicyContext, error) 
 		JobID:          jobID,
 		OwnerSubjectID: rec.ownerSubjectID,
 		RequesterID:    rec.requesterID,
+		JobState:       string(rec.job.State),
 		PolicyState:    policyState(rec.job.State),
 	}, nil
 }

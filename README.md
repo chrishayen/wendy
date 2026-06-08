@@ -10,6 +10,8 @@ Contract simulation data is kept as test input, not as product behavior.
 - `internal/contracts`: shared fixture and envelope validation helpers.
 - `internal/components/catalog`: first isolated real component, C03 Service
   Catalog, with in-memory storage and HTTP handlers.
+- `internal/components/gateway`: agent-facing tool discovery, invocation, job,
+  log, artifact, and content gateway that composes public component APIs.
 - `internal/components/jobs`: async job lifecycle service with in-memory
   storage and HTTP handlers.
 - `internal/components/leases`: resource registry, FIFO lease queue, heartbeat,
@@ -24,6 +26,7 @@ Contract simulation data is kept as test input, not as product behavior.
 - `cmd/pacp-contract-smoke`: CLI smoke check for a contract simulation package.
 - `cmd/pacp-fixture-server`: serves one fixture owner as an HTTP fake.
 - `cmd/pacp-catalog`: runnable catalog server that loads provider manifests.
+- `cmd/pacp-gateway`: runnable agent tool gateway.
 - `cmd/pacp-jobs`: runnable async job service.
 - `cmd/pacp-leases`: runnable resource lease service.
 - `cmd/pacp-artifacts`: runnable artifact store.
@@ -42,6 +45,7 @@ go run ./cmd/pacp-jobs -addr localhost:18082
 go run ./cmd/pacp-leases -addr localhost:18083
 go run ./cmd/pacp-artifacts -addr localhost:18084 -root /tmp/pacp-artifacts
 go run ./cmd/pacp-policy -addr localhost:18085
+go run ./cmd/pacp-gateway -addr localhost:18086 -catalog-url http://localhost:18081 -jobs-url http://localhost:18082 -artifacts-url http://localhost:18084 -policy-url http://localhost:18085
 ```
 
 The catalog can then be queried:

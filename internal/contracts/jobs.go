@@ -97,5 +97,6 @@ type JobPolicyContext struct {
 	JobID          string `json:"job_id"`
 	OwnerSubjectID string `json:"owner_subject_id"`
 	RequesterID    string `json:"requester_id,omitempty"`
+	JobState       string `json:"job_state"`
 	PolicyState    string `json:"policy_state"`
 }
