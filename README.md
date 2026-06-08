@@ -10,6 +10,9 @@ Contract simulation data is kept as test input, not as product behavior.
 - `internal/contracts`: shared fixture and envelope validation helpers.
 - `internal/provider`: provider SDK helpers for manifest, health, invoke,
   simple schema validation, and provider response envelopes.
+- `internal/runner`: composition runner that claims jobs, acquires leases,
+  invokes providers, uploads artifacts, and completes or fails jobs through
+  public APIs.
 - `internal/components/catalog`: first isolated real component, C03 Service
   Catalog, with in-memory storage and HTTP handlers.
 - `internal/components/gateway`: agent-facing tool discovery, invocation, job,
@@ -37,6 +40,7 @@ Contract simulation data is kept as test input, not as product behavior.
 - `cmd/pacp-artifacts`: runnable artifact store.
 - `cmd/pacp-policy`: runnable access policy and secrets service.
 - `cmd/pacp-node`: runnable runtime node agent for one configured service node.
+- `cmd/pacp-runner`: runnable composition runner.
 - `testdata/contract-sim`: accepted role-play fixtures copied from the vault.
 - `testdata/manifests`: sample provider manifests used by tests and examples.
 
@@ -54,6 +58,7 @@ go run ./cmd/pacp-artifacts -addr localhost:18084 -root /tmp/pacp-artifacts
 go run ./cmd/pacp-policy -addr localhost:18085
 go run ./cmd/pacp-gateway -addr localhost:18086 -catalog-url http://localhost:18081 -jobs-url http://localhost:18082 -artifacts-url http://localhost:18084 -policy-url http://localhost:18085
 go run ./cmd/pacp-node -addr localhost:18087 -config testdata/node/linux-gpu-fake.json
+go run ./cmd/pacp-runner -once -worker-id runner_local -jobs-url http://localhost:18082 -leases-url http://localhost:18083 -artifacts-url http://localhost:18084
 ```
 
 The catalog can then be queried:
