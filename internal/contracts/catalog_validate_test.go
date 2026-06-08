@@ -39,6 +39,33 @@ func TestValidateProviderManifestRejectsInvalidCapabilityEnums(t *testing.T) {
 	}
 }
 
+func TestValidateProviderManifestRejectsInvalidProviderRoutingFields(t *testing.T) {
+	manifest := validTestManifest()
+	manifest.Provider.Endpoint = "provider.local:18088"
+	manifest.Provider.HealthPath = "v1/provider/health"
+
+	errs := ValidateProviderManifest(manifest)
+	for _, want := range []string{
+		"provider.endpoint must be an absolute http or https URL without query or fragment",
+		"provider.health_path must be an absolute path",
+	} {
+		if !containsValidationError(errs, want) {
+			t.Fatalf("errors missing %q: %#v", want, errs)
+		}
+	}
+}
+
+func TestValidateProviderManifestAcceptsAbsoluteProviderRoutingFields(t *testing.T) {
+	manifest := validTestManifest()
+	manifest.Provider.Endpoint = "https://provider.example/base"
+	manifest.Provider.HealthPath = "/healthz"
+
+	errs := ValidateProviderManifest(manifest)
+	if len(errs) != 0 {
+		t.Fatalf("unexpected errors: %#v", errs)
+	}
+}
+
 func TestValidateProviderManifestValidatesExamplesAgainstInputSchema(t *testing.T) {
 	manifest := validTestManifest()
 	manifest.Capabilities[0].InputSchema = map[string]any{

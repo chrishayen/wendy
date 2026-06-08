@@ -2,6 +2,7 @@ package contracts
 
 import (
 	"fmt"
+	"net/url"
 	"strings"
 )
 
@@ -27,6 +28,11 @@ func ValidateProviderManifest(manifest ProviderManifest) []string {
 	}
 	if manifest.Provider.Endpoint == "" {
 		errs = append(errs, "provider.endpoint is required")
+	} else if !validProviderEndpoint(manifest.Provider.Endpoint) {
+		errs = append(errs, "provider.endpoint must be an absolute http or https URL without query or fragment")
+	}
+	if manifest.Provider.HealthPath != "" && !validProviderHealthPath(manifest.Provider.HealthPath) {
+		errs = append(errs, "provider.health_path must be an absolute path")
 	}
 	if len(manifest.Capabilities) == 0 {
 		errs = append(errs, "capabilities must contain at least one capability")
@@ -96,6 +102,25 @@ func validExecutionMode(value string) bool {
 	default:
 		return false
 	}
+}
+
+func validProviderEndpoint(value string) bool {
+	parsed, err := url.Parse(value)
+	if err != nil {
+		return false
+	}
+	if parsed.Scheme != "http" && parsed.Scheme != "https" {
+		return false
+	}
+	return parsed.Host != "" && parsed.RawQuery == "" && parsed.Fragment == ""
+}
+
+func validProviderHealthPath(value string) bool {
+	parsed, err := url.Parse(value)
+	if err != nil {
+		return false
+	}
+	return parsed.Scheme == "" && parsed.Host == "" && strings.HasPrefix(parsed.Path, "/") && !strings.HasPrefix(value, "//")
 }
 
 func validateCapabilityObjectSchema(prefix string, schema map[string]any) []string {
