@@ -25,6 +25,9 @@ func run(args []string, stdout, stderr io.Writer, httpClient *http.Client) int {
 	flags.SetOutput(stderr)
 	root := flags.String("root", "testdata/contract-sim", "contract simulation root")
 	scenarioManifest := flags.String("manifest", "fixtures/S003/manifest.json", "manifest path relative to root")
+	componentURL := flags.String("component-url", "", "optional live component base URL to check instead of fixture simulation")
+	componentKind := flags.String("component-kind", "", "component kind for -component-url: artifacts, catalog, gateway, jobs, leases, node, policy, or runner")
+	componentCredential := flags.String("component-credential", "", "optional bearer credential for protected component checks")
 	providerURL := flags.String("provider-url", "", "optional live provider base URL to check instead of fixture simulation")
 	capabilityID := flags.String("capability-id", "", "optional provider capability id to invoke")
 	inputRaw := flags.String("input", "{}", "JSON object input for provider invocation")
@@ -39,6 +42,9 @@ func run(args []string, stdout, stderr io.Writer, httpClient *http.Client) int {
 	}
 	if *distributed {
 		return runDistributedSmoke(*timeout, stdout, stderr)
+	}
+	if *componentURL != "" {
+		return runComponentSmoke(*componentURL, *componentKind, *componentCredential, *timeout, stdout, stderr, httpClient)
 	}
 	if *providerURL != "" {
 		return runProviderSmoke(*providerURL, *capabilityID, *inputRaw, *timeout, stdout, stderr, httpClient)
@@ -123,6 +129,42 @@ func runOpenAPICheck(pathsRaw string, stdout, stderr io.Writer) int {
 	return 1
 }
 
+func runComponentSmoke(componentURL, componentKind, credential string, timeout time.Duration, stdout, stderr io.Writer, httpClient *http.Client) int {
+	ctx := context.Background()
+	if timeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, timeout)
+		defer cancel()
+	}
+	report := testkit.CheckComponent(ctx, httpClient, testkit.ComponentCheckOptions{
+		BaseURL:    componentURL,
+		Kind:       componentKind,
+		Credential: authorizationHeader(credential),
+	})
+	fmt.Fprintf(stdout, "component=%s kind=%s checks=%d\n", componentURL, componentKind, len(report.Checks))
+	for _, check := range report.Checks {
+		status := "fail"
+		if check.OK {
+			status = "pass"
+		}
+		if check.HTTPStatus != 0 {
+			fmt.Fprintf(stdout, "check=%s status=%s http_status=%d\n", check.Name, status, check.HTTPStatus)
+			continue
+		}
+		fmt.Fprintf(stdout, "check=%s status=%s\n", check.Name, status)
+	}
+	if report.Passed() {
+		fmt.Fprintln(stdout, "contract-smoke=pass")
+		return 0
+	}
+	for _, check := range report.Checks {
+		if !check.OK {
+			fmt.Fprintf(stderr, "%s: %s\n", check.Name, check.Error)
+		}
+	}
+	return 1
+}
+
 func runProviderSmoke(providerURL, capabilityID, inputRaw string, timeout time.Duration, stdout, stderr io.Writer, httpClient *http.Client) int {
 	input, err := parseInput(inputRaw)
 	if err != nil {
@@ -162,6 +204,17 @@ func runProviderSmoke(providerURL, capabilityID, inputRaw string, timeout time.D
 		}
 	}
 	return 1
+}
+
+func authorizationHeader(token string) string {
+	token = strings.TrimSpace(token)
+	if token == "" {
+		return ""
+	}
+	if strings.HasPrefix(token, "Bearer ") {
+		return token
+	}
+	return "Bearer " + token
 }
 
 func parseInput(raw string) (map[string]any, error) {

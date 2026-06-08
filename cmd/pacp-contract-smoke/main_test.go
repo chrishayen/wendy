@@ -90,6 +90,58 @@ func TestRunProviderSmokeChecksLiveProvider(t *testing.T) {
 	}
 }
 
+func TestRunComponentSmokeChecksLiveComponent(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer component-token" {
+			writeSmokeErrorEnvelope(t, w, http.StatusUnauthorized, "unauthorized", "missing token")
+			return
+		}
+		switch r.URL.Path {
+		case "/v1/jobs/health":
+			writeSmokeEnvelope(t, w, http.StatusOK, contracts.NewComponentHealth("jobs", nil))
+		case "/v1/jobs/metrics":
+			writeSmokeEnvelope(t, w, http.StatusOK, contracts.NewComponentMetrics("jobs", []contracts.MetricSample{}))
+		default:
+			t.Fatalf("unexpected request = %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	var stdout, stderr bytes.Buffer
+	code := run([]string{
+		"-component-url", server.URL,
+		"-component-kind", "jobs",
+		"-component-credential", "component-token",
+	}, &stdout, &stderr, server.Client())
+	if code != 0 {
+		t.Fatalf("code=%d stderr=%s stdout=%s", code, stderr.String(), stdout.String())
+	}
+	for _, expected := range []string{
+		"component=" + server.URL + " kind=jobs checks=2",
+		"check=component.health status=pass",
+		"check=component.metrics status=pass",
+		"contract-smoke=pass",
+	} {
+		if !strings.Contains(stdout.String(), expected) {
+			t.Fatalf("stdout missing %q:\n%s", expected, stdout.String())
+		}
+	}
+}
+
+func TestRunComponentSmokeRejectsUnknownKind(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := run([]string{
+		"-component-url", "http://component.invalid",
+		"-component-kind", "unknown",
+	}, &stdout, &stderr, http.DefaultClient)
+	if code != 1 {
+		t.Fatalf("code=%d stderr=%s stdout=%s", code, stderr.String(), stdout.String())
+	}
+	if !strings.Contains(stderr.String(), "unsupported component kind") {
+		t.Fatalf("stderr = %s", stderr.String())
+	}
+}
+
 func TestRunProviderSmokeRejectsInvalidInputJSON(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	code := run([]string{
