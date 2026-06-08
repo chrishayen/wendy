@@ -115,7 +115,7 @@ func (h Handler) require(w http.ResponseWriter, r *http.Request, action string) 
 func writeStoreError(w http.ResponseWriter, r *http.Request, err error) {
 	switch {
 	case errors.Is(err, ErrNotFound):
-		writeError(w, r, http.StatusNotFound, "not_found", "node resource not found", false)
+		writeError(w, r, http.StatusNotFound, "not_found", "service not found", false)
 	case errors.Is(err, ErrValidation):
 		writeError(w, r, http.StatusBadRequest, "validation_failed", err.Error(), false)
 	case errors.Is(err, ErrUnauthorized):

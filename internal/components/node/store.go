@@ -586,7 +586,10 @@ func serviceProjection(rec *serviceRecord) contracts.NodeService {
 func serviceLinks(serviceID, status string) map[string]any {
 	switch status {
 	case "stopped":
-		return map[string]any{"start": map[string]any{"method": "POST", "href": "/v1/node/services/" + serviceID + "/start", "description": "Start service."}}
+		return map[string]any{
+			"start": map[string]any{"method": "POST", "href": "/v1/node/services/" + serviceID + "/start", "description": "Start service."},
+			"stop":  map[string]any{"method": "POST", "href": "/v1/node/services/" + serviceID + "/stop", "description": "Stop service."},
+		}
 	case "starting":
 		return map[string]any{"status": map[string]any{"method": "GET", "href": "/v1/node/services/" + serviceID, "description": "Poll service status."}}
 	default:

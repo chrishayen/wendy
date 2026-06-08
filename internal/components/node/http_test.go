@@ -4,8 +4,65 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"testing"
+	"time"
+
+	"pacp/internal/contracts"
+	"pacp/internal/testkit"
 )
+
+func TestHandlerReplaysS003ReadAndAuthFixtures(t *testing.T) {
+	scenario, err := testkit.LoadScenario(filepath.Join("..", "..", "..", "testdata", "contract-sim"), filepath.Join("fixtures", "S003", "manifest.json"))
+	if err != nil {
+		t.Fatalf("load scenario: %v", err)
+	}
+	pkg, ok := testkit.FindPackage(scenario, "c09-runtime-node-agent")
+	if !ok {
+		t.Fatalf("c09 fixture package not found")
+	}
+	store, err := NewStore(s003FixtureConfig())
+	if err != nil {
+		t.Fatalf("new store: %v", err)
+	}
+	store.SetClock(func() time.Time { return time.Date(2026, 6, 5, 20, 0, 4, 0, time.UTC) })
+	handler := NewHandler(store)
+
+	for _, fixtureID := range []string{
+		"node_health_ok",
+		"service_stopped",
+		"node_unauthorized",
+		"node_forbidden",
+		"unknown_service",
+	} {
+		if _, err := testkit.ReplayHTTPFixture(handler, pkg, fixtureID); err != nil {
+			t.Fatalf("replay %s: %v", fixtureID, err)
+		}
+	}
+}
+
+func s003FixtureConfig() contracts.NodeConfig {
+	return contracts.NodeConfig{
+		NodeID:      "node_linux_gpu",
+		DisplayName: "Linux GPU",
+		Resources: []contracts.NodeResource{{
+			ResourceID: "res_gpu_0",
+			Tags:       []string{"gpu", "gpu:0"},
+			Metadata:   map[string]any{"kind": "gpu"},
+		}},
+		Auth: []contracts.NodeAuthSubject{
+			{Token: "token_s003_runner", SubjectID: "sub_runner_s003", Scopes: []string{"worker"}, AllowedActions: []string{"node.read", "node.service.start", "node.service.stop"}},
+			{Token: "token_s003_agent", SubjectID: "sub_agent_s003", Scopes: []string{"agent"}, AllowedActions: []string{"node.read"}},
+		},
+		Services: []contracts.NodeServiceConfig{{
+			ServiceID:        "svc_comfyui_gpu",
+			RuntimeAdapter:   "docker",
+			ProviderEndpoint: "http://node_linux_gpu:8188",
+			InitialStatus:    "stopped",
+			Docker:           &contracts.DockerRuntimeConfig{ContainerName: "comfyui_gpu"},
+		}},
+	}
+}
 
 func TestHandlerNodeLifecycle(t *testing.T) {
 	handler := NewHandler(newTestStore(t))

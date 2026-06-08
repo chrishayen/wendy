@@ -33,8 +33,8 @@ Contract simulation data is kept as test input, not as product behavior.
 - `internal/components/node`: runtime node agent with local auth, resource
   advertisement, fake, process, and Docker service lifecycle adapters, health,
   lease resource export, and service status APIs.
-- `internal/testkit`: contract-simulation fixture loader and fixture-backed
-  HTTP fake server.
+- `internal/testkit`: contract-simulation fixture loader, fixture-backed HTTP
+  fake server, and fixture replay helpers for live handler contract tests.
 - `cmd/pacp-contract-smoke`: CLI smoke check for contract simulation packages,
   OpenAPI contracts, and live provider compliance.
 - `cmd/pacp-fixture-server`: serves one fixture owner as an HTTP fake.
@@ -212,6 +212,8 @@ owners when a test needs a fixed fake dependency. It matches method, path,
 declared query values, declared headers, and declared request bodies. If the
 same exact request appears more than once in a fixture package, repeated calls
 advance through those fixtures in file order so replay cases can be tested.
+Fixture replay helpers can also send accepted fixture requests to live handlers
+and compare status plus the expected response envelope as a JSON subset.
 
 The policy seed and state files store API tokens and secret values. Keep them
 private and outside shared artifact directories. Reapplying the same policy
