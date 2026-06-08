@@ -17,6 +17,8 @@ func TestCheckProviderManifestAndHealth(t *testing.T) {
 			writeTestEnvelope(t, w, http.StatusOK, testProviderManifest(serverURL(r)))
 		case "/v1/provider/health":
 			writeTestEnvelope(t, w, http.StatusOK, map[string]any{"status": "healthy"})
+		case "/v1/provider/metrics":
+			writeTestEnvelope(t, w, http.StatusOK, testProviderMetrics(nil))
 		default:
 			t.Fatalf("unexpected request = %s %s", r.Method, r.URL.Path)
 		}
@@ -27,7 +29,7 @@ func TestCheckProviderManifestAndHealth(t *testing.T) {
 	if !report.Passed() {
 		t.Fatalf("report = %#v", report)
 	}
-	if len(report.Checks) != 2 {
+	if len(report.Checks) != 3 {
 		t.Fatalf("checks = %#v", report.Checks)
 	}
 }
@@ -52,6 +54,16 @@ func TestCheckProviderInvoke(t *testing.T) {
 			writeTestEnvelope(t, w, http.StatusOK, contracts.ProviderInvokeResponse{
 				Output: map[string]any{"reply": "hello"},
 			})
+		case "/v1/provider/metrics":
+			samples := []contracts.MetricSample{}
+			if invoked {
+				samples = append(samples, contracts.CountMetric("provider_invocations_total", 1, map[string]string{
+					"capability_id": "cap_echo",
+					"service_id":    "svc_test_provider",
+					"status":        "success",
+				}))
+			}
+			writeTestEnvelope(t, w, http.StatusOK, testProviderMetrics(samples))
 		default:
 			t.Fatalf("unexpected request = %s %s", r.Method, r.URL.Path)
 		}
@@ -69,7 +81,7 @@ func TestCheckProviderInvoke(t *testing.T) {
 	if !invoked {
 		t.Fatal("provider was not invoked")
 	}
-	if len(report.Checks) != 3 {
+	if len(report.Checks) != 4 {
 		t.Fatalf("checks = %#v", report.Checks)
 	}
 }
@@ -81,6 +93,8 @@ func TestCheckProviderReportsInvalidInvokeInput(t *testing.T) {
 			writeTestEnvelope(t, w, http.StatusOK, testProviderManifest(serverURL(r)))
 		case "/v1/provider/health":
 			writeTestEnvelope(t, w, http.StatusOK, map[string]any{"status": "healthy"})
+		case "/v1/provider/metrics":
+			writeTestEnvelope(t, w, http.StatusOK, testProviderMetrics(nil))
 		default:
 			t.Fatalf("unexpected request = %s %s", r.Method, r.URL.Path)
 		}
@@ -95,12 +109,18 @@ func TestCheckProviderReportsInvalidInvokeInput(t *testing.T) {
 	if report.Passed() {
 		t.Fatalf("report passed unexpectedly: %#v", report)
 	}
-	if len(report.Checks) != 3 || report.Checks[2].Name != "provider.invoke" {
+	if len(report.Checks) != 4 || report.Checks[2].Name != "provider.invoke" {
 		t.Fatalf("checks = %#v", report.Checks)
 	}
 	if report.Checks[2].Error == "" {
 		t.Fatalf("invoke error missing: %#v", report.Checks[2])
 	}
+}
+
+func testProviderMetrics(samples []contracts.MetricSample) contracts.ComponentMetrics {
+	metrics := contracts.NewComponentMetrics("provider", samples)
+	metrics.CollectedAt = "2026-06-08T00:00:00Z"
+	return metrics
 }
 
 func testProviderManifest(endpoint string) contracts.ProviderManifest {

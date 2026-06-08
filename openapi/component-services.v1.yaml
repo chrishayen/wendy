@@ -16,6 +16,8 @@ servers:
     description: Policy service
   - url: http://localhost:18087
     description: Node service
+  - url: http://localhost:18088
+    description: Provider service
 security:
   - componentBearer: []
 tags:
@@ -25,6 +27,7 @@ tags:
   - name: artifacts
   - name: policy
   - name: node
+  - name: provider
 paths:
   /v1/catalog/health:
     get:
@@ -920,6 +923,73 @@ paths:
         default:
           $ref: "#/components/responses/Error"
 
+  /v1/provider/manifest:
+    get:
+      tags: [provider]
+      operationId: getProviderManifest
+      security: []
+      responses:
+        "200":
+          description: Provider manifest envelope.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/ProviderManifest"
+        default:
+          $ref: "#/components/responses/Error"
+  /v1/provider/health:
+    get:
+      tags: [provider]
+      operationId: getProviderHealth
+      security: []
+      responses:
+        "200":
+          $ref: "#/components/responses/Health"
+        default:
+          $ref: "#/components/responses/Error"
+  /v1/provider/metrics:
+    get:
+      tags: [provider]
+      operationId: getProviderMetrics
+      security: []
+      responses:
+        "200":
+          $ref: "#/components/responses/Metrics"
+        default:
+          $ref: "#/components/responses/Error"
+  /v1/provider/capabilities/{capability_id}/invoke:
+    post:
+      tags: [provider]
+      operationId: invokeProviderCapability
+      security: []
+      parameters:
+        - $ref: "#/components/parameters/CapabilityID"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ProviderInvokeRequest"
+      responses:
+        "200":
+          description: Provider invocation result envelope.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/ProviderInvokeResponse"
+        default:
+          $ref: "#/components/responses/Error"
+
 components:
   securitySchemes:
     componentBearer:
@@ -1156,6 +1226,51 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/Capability"
+    ProviderInvokeRequest:
+      type: object
+      required: [input]
+      properties:
+        input:
+          $ref: "#/components/schemas/AnyMap"
+        context:
+          $ref: "#/components/schemas/ProviderInvokeContext"
+    ProviderInvokeContext:
+      type: object
+      properties:
+        subject_id:
+          type: string
+        request_id:
+          type: string
+        job_id:
+          type: string
+        artifact_base_url:
+          type: string
+        resource_lease_id:
+          type: string
+        dry_run:
+          type: boolean
+    ProviderInvokeResponse:
+      type: object
+      required: [output]
+      properties:
+        output:
+          $ref: "#/components/schemas/AnyMap"
+        artifacts:
+          type: array
+          items:
+            $ref: "#/components/schemas/ProviderArtifact"
+    ProviderArtifact:
+      type: object
+      required: [name, media_type]
+      properties:
+        name:
+          type: string
+        media_type:
+          type: string
+        content_base64:
+          type: string
+        checksum:
+          type: string
     Service:
       type: object
       required: [id, name, description, version, provider_kind]

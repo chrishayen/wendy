@@ -43,6 +43,49 @@ func TestServerRejectsInvalidInput(t *testing.T) {
 	}
 }
 
+func TestServerMetricsIncludeInvocationsAndHTTPRequests(t *testing.T) {
+	server := newTestProvider(t)
+	doJSON(t, server, http.MethodGet, "/v1/provider/health", nil, http.StatusOK)
+	doJSON(t, server, http.MethodPost, "/v1/provider/capabilities/cap_echo/invoke", map[string]any{
+		"input": map[string]any{"message": "hello"},
+	}, http.StatusOK)
+	doJSONEnvelope(t, server, http.MethodPost, "/v1/provider/capabilities/cap_echo/invoke", map[string]any{
+		"input": map[string]any{},
+	}, http.StatusBadRequest)
+
+	metrics := doJSON(t, server, http.MethodGet, "/v1/provider/metrics", nil, http.StatusOK)
+	if metrics["component"] != "provider" {
+		t.Fatalf("metrics component = %#v", metrics["component"])
+	}
+	samples := metrics["samples"].([]any)
+	assertMetric(t, samples, "provider_invocations_total", map[string]string{
+		"service_id":    "svc_fake",
+		"capability_id": "cap_echo",
+		"status":        "success",
+	})
+	assertMetric(t, samples, "provider_invocation_errors_total", map[string]string{
+		"service_id":    "svc_fake",
+		"capability_id": "cap_echo",
+		"status":        "error",
+		"error_code":    "validation_failed",
+	})
+	assertMetric(t, samples, "provider_invocation_duration_seconds_avg", map[string]string{
+		"service_id":    "svc_fake",
+		"capability_id": "cap_echo",
+		"status":        "success",
+	})
+	assertMetric(t, samples, "http_requests_total", map[string]string{
+		"method":       "GET",
+		"route_group":  "/v1/provider/health",
+		"status_class": "2xx",
+	})
+	assertMetric(t, samples, "http_requests_total", map[string]string{
+		"method":       "POST",
+		"route_group":  "/v1/provider/capabilities/{capability_id}/invoke",
+		"status_class": "4xx",
+	})
+}
+
 func TestServerMapsHandlerValidationError(t *testing.T) {
 	server, err := NewServer(testManifest(), map[string]CapabilityHandler{
 		"cap_echo": func(ctx context.Context, req contracts.ProviderInvokeRequest) (contracts.ProviderInvokeResponse, error) {
@@ -74,6 +117,28 @@ func newTestProvider(t *testing.T) *Server {
 		t.Fatalf("new provider: %v", err)
 	}
 	return server
+}
+
+func assertMetric(t *testing.T, samples []any, name string, labels map[string]string) {
+	t.Helper()
+	for _, rawSample := range samples {
+		sample, ok := rawSample.(map[string]any)
+		if !ok || sample["name"] != name {
+			continue
+		}
+		rawLabels, _ := sample["labels"].(map[string]any)
+		matched := true
+		for key, value := range labels {
+			if rawLabels[key] != value {
+				matched = false
+				break
+			}
+		}
+		if matched {
+			return
+		}
+	}
+	t.Fatalf("missing metric %s with labels %#v in %#v", name, labels, samples)
 }
 
 func testManifest() contracts.ProviderManifest {

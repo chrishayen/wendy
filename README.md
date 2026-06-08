@@ -9,7 +9,7 @@ Contract simulation data is kept as test input, not as product behavior.
 
 - `internal/contracts`: shared public API types, envelopes, and validation
   helpers.
-- `internal/provider`: provider SDK helpers for manifest, health, invoke,
+- `internal/provider`: provider SDK helpers for manifest, health, metrics, invoke,
   simple schema validation, and provider response envelopes.
 - `internal/runner`: composition runner that claims jobs, acquires leases,
   starts node-managed providers by node ID, invokes providers, uploads
@@ -214,6 +214,7 @@ curl http://localhost:18086/v1/gateway/health
 curl http://localhost:18082/v1/jobs/metrics
 curl http://localhost:18083/v1/leases/metrics
 curl http://localhost:18086/v1/gateway/metrics
+curl http://localhost:18088/v1/provider/metrics
 go run ./cmd/pacp-admin -node-url http://localhost:18087 -node-token token_agent_smoke health
 go run ./cmd/pacp-admin -node-urls node_linux_gpu=http://localhost:18087 -node-token token_agent_smoke health -providers
 go run ./cmd/pacp-admin -node-urls node_linux_gpu=http://localhost:18087 -node-token token_agent_smoke metrics
@@ -227,6 +228,8 @@ go run ./cmd/pacp-control -gateway-url http://localhost:18086 -token token_agent
 
 Component metrics include component-specific state samples plus HTTP request
 count, error count, and average latency by method and normalized route group.
+Provider metrics additionally expose invocation count, error count, and average
+duration by service id, capability id, status, and error code.
 Gateway and runner requests propagate `X-Request-ID` to downstream component,
 node, artifact, and provider calls so logs and response metadata can be
 correlated across the distributed flow.

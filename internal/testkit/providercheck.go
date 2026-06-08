@@ -51,9 +51,11 @@ func CheckProvider(ctx context.Context, httpClient *http.Client, opts ProviderCh
 		return report
 	}
 	checkProviderHealth(ctx, httpClient, baseURL, manifest, &report)
+	invoked := false
 	if strings.TrimSpace(opts.CapabilityID) != "" {
-		checkProviderInvoke(ctx, httpClient, baseURL, manifest, opts, &report)
+		invoked = checkProviderInvoke(ctx, httpClient, baseURL, manifest, opts, &report)
 	}
+	checkProviderMetrics(ctx, httpClient, baseURL, strings.TrimSpace(opts.CapabilityID), invoked, &report)
 	return report
 }
 
@@ -129,14 +131,14 @@ func checkProviderHealth(ctx context.Context, httpClient *http.Client, baseURL s
 	report.add(result)
 }
 
-func checkProviderInvoke(ctx context.Context, httpClient *http.Client, baseURL string, manifest contracts.ProviderManifest, opts ProviderCheckOptions, report *ProviderCheckReport) {
+func checkProviderInvoke(ctx context.Context, httpClient *http.Client, baseURL string, manifest contracts.ProviderManifest, opts ProviderCheckOptions, report *ProviderCheckReport) bool {
 	capabilityID := strings.TrimSpace(opts.CapabilityID)
 	capability, ok := findCapability(manifest, capabilityID)
 	result := ProviderCheckResult{Name: "provider.invoke"}
 	if !ok {
 		result.Error = "capability not found in manifest: " + capabilityID
 		report.add(result)
-		return
+		return false
 	}
 	input := opts.Input
 	if input == nil {
@@ -145,13 +147,48 @@ func checkProviderInvoke(ctx context.Context, httpClient *http.Client, baseURL s
 	if err := provider.ValidateObject(input, capability.InputSchema); err != nil {
 		result.Error = "input does not match manifest schema: " + err.Error()
 		report.add(result)
-		return
+		return false
 	}
 	request := contracts.ProviderInvokeRequest{Input: input}
 	var envelope rawSuccessEnvelope
 	path := "/v1/provider/capabilities/" + url.PathEscape(capabilityID) + "/invoke"
 	status, err := postEnvelope(ctx, httpClient, joinURLPath(baseURL, path), request, &envelope)
 	result.HTTPStatus = status
+	if err != nil {
+		result.Error = err.Error()
+		report.add(result)
+		return false
+	}
+	if status < 200 || status >= 300 {
+		result.Error = fmt.Sprintf("HTTP %d", status)
+		report.add(result)
+		return false
+	}
+	if !envelope.OK {
+		result.Error = "invoke response was not ok"
+		report.add(result)
+		return false
+	}
+	var response contracts.ProviderInvokeResponse
+	if err := json.Unmarshal(envelope.Data, &response); err != nil {
+		result.Error = "decode invoke response: " + err.Error()
+		report.add(result)
+		return false
+	}
+	if err := provider.ValidateObject(response.Output, capability.OutputSchema); err != nil {
+		result.Error = "output does not match manifest schema: " + err.Error()
+		report.add(result)
+		return false
+	}
+	result.OK = true
+	report.add(result)
+	return true
+}
+
+func checkProviderMetrics(ctx context.Context, httpClient *http.Client, baseURL, capabilityID string, expectInvocation bool, report *ProviderCheckReport) {
+	var envelope rawSuccessEnvelope
+	status, err := getEnvelope(ctx, httpClient, joinURLPath(baseURL, "/v1/provider/metrics"), &envelope)
+	result := ProviderCheckResult{Name: "provider.metrics", HTTPStatus: status}
 	if err != nil {
 		result.Error = err.Error()
 		report.add(result)
@@ -163,18 +200,38 @@ func checkProviderInvoke(ctx context.Context, httpClient *http.Client, baseURL s
 		return
 	}
 	if !envelope.OK {
-		result.Error = "invoke response was not ok"
+		result.Error = "metrics response was not ok"
 		report.add(result)
 		return
 	}
-	var response contracts.ProviderInvokeResponse
-	if err := json.Unmarshal(envelope.Data, &response); err != nil {
-		result.Error = "decode invoke response: " + err.Error()
+	var metrics contracts.ComponentMetrics
+	if err := json.Unmarshal(envelope.Data, &metrics); err != nil {
+		result.Error = "decode metrics: " + err.Error()
 		report.add(result)
 		return
 	}
-	if err := provider.ValidateObject(response.Output, capability.OutputSchema); err != nil {
-		result.Error = "output does not match manifest schema: " + err.Error()
+	if metrics.Component == "" {
+		result.Error = "metrics component is required"
+		report.add(result)
+		return
+	}
+	if metrics.Version == "" {
+		result.Error = "metrics version is required"
+		report.add(result)
+		return
+	}
+	if metrics.CollectedAt == "" {
+		result.Error = "metrics collected_at is required"
+		report.add(result)
+		return
+	}
+	if metrics.Samples == nil {
+		result.Error = "metrics samples must be an array"
+		report.add(result)
+		return
+	}
+	if expectInvocation && !hasProviderInvocationMetric(metrics.Samples, capabilityID) {
+		result.Error = "metrics missing provider_invocations_total for " + capabilityID
 		report.add(result)
 		return
 	}
@@ -189,6 +246,18 @@ func findCapability(manifest contracts.ProviderManifest, capabilityID string) (c
 		}
 	}
 	return contracts.Capability{}, false
+}
+
+func hasProviderInvocationMetric(samples []contracts.MetricSample, capabilityID string) bool {
+	for _, sample := range samples {
+		if sample.Name != "provider_invocations_total" {
+			continue
+		}
+		if sample.Labels["capability_id"] == capabilityID && sample.Value > 0 {
+			return true
+		}
+	}
+	return false
 }
 
 func (r *ProviderCheckReport) add(result ProviderCheckResult) {

@@ -28,6 +28,7 @@ func TestRunScenarioSmokeStillPasses(t *testing.T) {
 }
 
 func TestRunProviderSmokeChecksLiveProvider(t *testing.T) {
+	invoked := false
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/v1/provider/manifest":
@@ -35,6 +36,7 @@ func TestRunProviderSmokeChecksLiveProvider(t *testing.T) {
 		case "/v1/provider/health":
 			writeSmokeEnvelope(t, w, http.StatusOK, map[string]any{"status": "healthy"})
 		case "/v1/provider/capabilities/cap_echo/invoke":
+			invoked = true
 			var req contracts.ProviderInvokeRequest
 			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 				t.Fatalf("decode invoke: %v", err)
@@ -45,6 +47,16 @@ func TestRunProviderSmokeChecksLiveProvider(t *testing.T) {
 			writeSmokeEnvelope(t, w, http.StatusOK, contracts.ProviderInvokeResponse{
 				Output: map[string]any{"reply": "hello"},
 			})
+		case "/v1/provider/metrics":
+			samples := []contracts.MetricSample{}
+			if invoked {
+				samples = append(samples, contracts.CountMetric("provider_invocations_total", 1, map[string]string{
+					"capability_id": "cap_echo",
+					"service_id":    "svc_smoke_provider",
+					"status":        "success",
+				}))
+			}
+			writeSmokeEnvelope(t, w, http.StatusOK, contracts.NewComponentMetrics("provider", samples))
 		default:
 			t.Fatalf("unexpected request = %s %s", r.Method, r.URL.Path)
 		}
@@ -64,6 +76,7 @@ func TestRunProviderSmokeChecksLiveProvider(t *testing.T) {
 		"check=provider.manifest status=pass",
 		"check=provider.health status=pass",
 		"check=provider.invoke status=pass",
+		"check=provider.metrics status=pass",
 		"contract-smoke=pass",
 	} {
 		if !strings.Contains(stdout.String(), expected) {
