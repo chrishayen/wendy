@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 	"time"
@@ -105,10 +106,175 @@ func run(args []string, stdout, stderr io.Writer, httpClient *http.Client) int {
 			return 0
 		}
 		return 1
+	case "catalog":
+		return catalogCommand(cfg, httpClient, remaining[1:], stdout, stderr)
+	case "jobs":
+		return jobsCommand(cfg, httpClient, remaining[1:], stdout, stderr)
+	case "leases":
+		return leasesCommand(cfg, httpClient, remaining[1:], stdout, stderr)
+	case "artifacts":
+		return artifactsCommand(cfg, httpClient, remaining[1:], stdout, stderr)
+	case "node":
+		return nodeCommand(cfg, httpClient, remaining[1:], stdout, stderr)
 	default:
 		printUsage(stderr)
 		fmt.Fprintf(stderr, "unknown command %q\n", remaining[0])
 		return 2
+	}
+}
+
+func catalogCommand(cfg adminConfig, httpClient *http.Client, args []string, stdout, stderr io.Writer) int {
+	if len(args) == 0 {
+		fmt.Fprintln(stderr, "usage: pacp-admin [flags] catalog <services|service|capabilities|capability|route|tags> [id]")
+		return 2
+	}
+	switch args[0] {
+	case "services":
+		if len(args) != 1 {
+			return usage(stderr, "usage: pacp-admin [flags] catalog services")
+		}
+		return getJSON(cfg, httpClient, cfg.CatalogURL, "/v1/catalog/services", authorizationHeader(cfg.ComponentToken), stdout, stderr)
+	case "service":
+		if len(args) != 2 {
+			return usage(stderr, "usage: pacp-admin [flags] catalog service <service-id>")
+		}
+		return getJSON(cfg, httpClient, cfg.CatalogURL, "/v1/catalog/services/"+url.PathEscape(args[1]), authorizationHeader(cfg.ComponentToken), stdout, stderr)
+	case "capabilities":
+		if len(args) != 1 {
+			return usage(stderr, "usage: pacp-admin [flags] catalog capabilities")
+		}
+		return getJSON(cfg, httpClient, cfg.CatalogURL, "/v1/catalog/capabilities", authorizationHeader(cfg.ComponentToken), stdout, stderr)
+	case "capability":
+		if len(args) != 2 {
+			return usage(stderr, "usage: pacp-admin [flags] catalog capability <capability-id>")
+		}
+		return getJSON(cfg, httpClient, cfg.CatalogURL, "/v1/catalog/capabilities/"+url.PathEscape(args[1]), authorizationHeader(cfg.ComponentToken), stdout, stderr)
+	case "route":
+		if len(args) != 2 {
+			return usage(stderr, "usage: pacp-admin [flags] catalog route <capability-id>")
+		}
+		return getJSON(cfg, httpClient, cfg.CatalogURL, "/v1/catalog/capabilities/"+url.PathEscape(args[1])+"/route", authorizationHeader(cfg.ComponentToken), stdout, stderr)
+	case "tags":
+		if len(args) != 1 {
+			return usage(stderr, "usage: pacp-admin [flags] catalog tags")
+		}
+		return getJSON(cfg, httpClient, cfg.CatalogURL, "/v1/catalog/tags", authorizationHeader(cfg.ComponentToken), stdout, stderr)
+	default:
+		return usage(stderr, "usage: pacp-admin [flags] catalog <services|service|capabilities|capability|route|tags> [id]")
+	}
+}
+
+func jobsCommand(cfg adminConfig, httpClient *http.Client, args []string, stdout, stderr io.Writer) int {
+	if len(args) == 0 {
+		return usage(stderr, "usage: pacp-admin [flags] jobs <list|job|logs> [id]")
+	}
+	switch args[0] {
+	case "list":
+		if len(args) != 1 {
+			return usage(stderr, "usage: pacp-admin [flags] jobs list")
+		}
+		return getJSON(cfg, httpClient, cfg.JobsURL, "/v1/jobs", authorizationHeader(cfg.ComponentToken), stdout, stderr)
+	case "job":
+		if len(args) != 2 {
+			return usage(stderr, "usage: pacp-admin [flags] jobs job <job-id>")
+		}
+		return getJSON(cfg, httpClient, cfg.JobsURL, "/v1/jobs/"+url.PathEscape(args[1]), authorizationHeader(cfg.ComponentToken), stdout, stderr)
+	case "logs":
+		if len(args) != 2 {
+			return usage(stderr, "usage: pacp-admin [flags] jobs logs <job-id>")
+		}
+		return getJSON(cfg, httpClient, cfg.JobsURL, "/v1/jobs/"+url.PathEscape(args[1])+"/logs", authorizationHeader(cfg.ComponentToken), stdout, stderr)
+	default:
+		return usage(stderr, "usage: pacp-admin [flags] jobs <list|job|logs> [id]")
+	}
+}
+
+func leasesCommand(cfg adminConfig, httpClient *http.Client, args []string, stdout, stderr io.Writer) int {
+	if len(args) == 0 {
+		return usage(stderr, "usage: pacp-admin [flags] leases <resources|resource|inspect|request|lease> [id]")
+	}
+	switch args[0] {
+	case "resources":
+		if len(args) != 1 {
+			return usage(stderr, "usage: pacp-admin [flags] leases resources")
+		}
+		return getJSON(cfg, httpClient, cfg.LeasesURL, "/v1/resources", authorizationHeader(cfg.ComponentToken), stdout, stderr)
+	case "resource":
+		if len(args) != 2 {
+			return usage(stderr, "usage: pacp-admin [flags] leases resource <resource-id>")
+		}
+		return getJSON(cfg, httpClient, cfg.LeasesURL, "/v1/resources/"+url.PathEscape(args[1]), authorizationHeader(cfg.ComponentToken), stdout, stderr)
+	case "inspect":
+		if len(args) != 2 {
+			return usage(stderr, "usage: pacp-admin [flags] leases inspect <resource-id>")
+		}
+		return getJSON(cfg, httpClient, cfg.LeasesURL, "/v1/resources/"+url.PathEscape(args[1])+"/inspection", authorizationHeader(cfg.ComponentToken), stdout, stderr)
+	case "request":
+		if len(args) != 2 {
+			return usage(stderr, "usage: pacp-admin [flags] leases request <request-id>")
+		}
+		return getJSON(cfg, httpClient, cfg.LeasesURL, "/v1/lease-requests/"+url.PathEscape(args[1]), authorizationHeader(cfg.ComponentToken), stdout, stderr)
+	case "lease":
+		if len(args) != 2 {
+			return usage(stderr, "usage: pacp-admin [flags] leases lease <lease-id>")
+		}
+		return getJSON(cfg, httpClient, cfg.LeasesURL, "/v1/leases/"+url.PathEscape(args[1]), authorizationHeader(cfg.ComponentToken), stdout, stderr)
+	default:
+		return usage(stderr, "usage: pacp-admin [flags] leases <resources|resource|inspect|request|lease> [id]")
+	}
+}
+
+func artifactsCommand(cfg adminConfig, httpClient *http.Client, args []string, stdout, stderr io.Writer) int {
+	if len(args) == 0 {
+		return usage(stderr, "usage: pacp-admin [flags] artifacts <list|artifact|upload> [id]")
+	}
+	switch args[0] {
+	case "list":
+		if len(args) != 1 {
+			return usage(stderr, "usage: pacp-admin [flags] artifacts list")
+		}
+		return getJSON(cfg, httpClient, cfg.ArtifactsURL, "/v1/artifacts", authorizationHeader(cfg.ComponentToken), stdout, stderr)
+	case "artifact":
+		if len(args) != 2 {
+			return usage(stderr, "usage: pacp-admin [flags] artifacts artifact <artifact-id>")
+		}
+		return getJSON(cfg, httpClient, cfg.ArtifactsURL, "/v1/artifacts/"+url.PathEscape(args[1]), authorizationHeader(cfg.ComponentToken), stdout, stderr)
+	case "upload":
+		if len(args) != 2 {
+			return usage(stderr, "usage: pacp-admin [flags] artifacts upload <upload-id>")
+		}
+		return getJSON(cfg, httpClient, cfg.ArtifactsURL, "/v1/artifact-uploads/"+url.PathEscape(args[1]), authorizationHeader(cfg.ComponentToken), stdout, stderr)
+	default:
+		return usage(stderr, "usage: pacp-admin [flags] artifacts <list|artifact|upload> [id]")
+	}
+}
+
+func nodeCommand(cfg adminConfig, httpClient *http.Client, args []string, stdout, stderr io.Writer) int {
+	if cfg.NodeURL == "" {
+		fmt.Fprintln(stderr, "node-url is required; set -node-url or PACP_NODE_URL")
+		return 2
+	}
+	if len(args) == 0 {
+		return usage(stderr, "usage: pacp-admin [flags] node <resources|services|service> [id]")
+	}
+	switch args[0] {
+	case "resources":
+		if len(args) != 1 {
+			return usage(stderr, "usage: pacp-admin [flags] node resources")
+		}
+		return getJSON(cfg, httpClient, cfg.NodeURL, "/v1/node/resources", authorizationHeader(cfg.NodeToken), stdout, stderr)
+	case "services":
+		if len(args) != 1 {
+			return usage(stderr, "usage: pacp-admin [flags] node services")
+		}
+		return getJSON(cfg, httpClient, cfg.NodeURL, "/v1/node/services", authorizationHeader(cfg.NodeToken), stdout, stderr)
+	case "service":
+		if len(args) != 2 {
+			return usage(stderr, "usage: pacp-admin [flags] node service <service-id>")
+		}
+		return getJSON(cfg, httpClient, cfg.NodeURL, "/v1/node/services/"+url.PathEscape(args[1]), authorizationHeader(cfg.NodeToken), stdout, stderr)
+	default:
+		return usage(stderr, "usage: pacp-admin [flags] node <resources|services|service> [id]")
 	}
 }
 
@@ -213,6 +379,53 @@ func checkTarget(ctx context.Context, httpClient *http.Client, target serviceTar
 	return item
 }
 
+func getJSON(cfg adminConfig, httpClient *http.Client, baseURL, path, credential string, stdout, stderr io.Writer) int {
+	baseURL = strings.TrimRight(strings.TrimSpace(baseURL), "/")
+	if baseURL == "" {
+		fmt.Fprintf(stderr, "service URL is required for %s\n", path)
+		return 2
+	}
+	ctx := context.Background()
+	if cfg.Timeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, cfg.Timeout)
+		defer cancel()
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, baseURL+path, nil)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 2
+	}
+	if credential != "" {
+		req.Header.Set("Authorization", credential)
+	}
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	defer resp.Body.Close()
+	raw, err := io.ReadAll(resp.Body)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	if err := writePrettyJSON(stdout, raw); err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		fmt.Fprintf(stderr, "component returned HTTP %d\n", resp.StatusCode)
+		return 1
+	}
+	return 0
+}
+
+func usage(stderr io.Writer, message string) int {
+	fmt.Fprintln(stderr, message)
+	return 2
+}
+
 func envOrDefault(name, fallback string) string {
 	if value := os.Getenv(name); value != "" {
 		return value
@@ -239,7 +452,24 @@ func writeJSON(w io.Writer, body any) error {
 	return err
 }
 
+func writePrettyJSON(w io.Writer, raw []byte) error {
+	var decoded any
+	if err := json.Unmarshal(raw, &decoded); err != nil {
+		_, _ = w.Write(raw)
+		if len(raw) == 0 || raw[len(raw)-1] != '\n' {
+			_, _ = fmt.Fprintln(w)
+		}
+		return err
+	}
+	encoded, err := json.MarshalIndent(decoded, "", "  ")
+	if err != nil {
+		return err
+	}
+	_, err = fmt.Fprintln(w, string(encoded))
+	return err
+}
+
 func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "usage: pacp-admin [flags] <command>")
-	fmt.Fprintln(w, "commands: health")
+	fmt.Fprintln(w, "commands: health, catalog, jobs, leases, artifacts, node")
 }

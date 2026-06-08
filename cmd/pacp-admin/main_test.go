@@ -111,6 +111,69 @@ func TestHealthFailsForConfiguredUnhealthyNode(t *testing.T) {
 	}
 }
 
+func TestCatalogRouteCommandUsesComponentToken(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/v1/catalog/capabilities/cap_1/route" {
+			t.Fatalf("request = %s %s", r.Method, r.URL.Path)
+		}
+		if r.Header.Get("Authorization") != "Bearer component-token" {
+			t.Fatalf("Authorization = %q", r.Header.Get("Authorization"))
+		}
+		writeEnvelope(t, w, http.StatusOK, map[string]any{"capability_id": "cap_1"})
+	}))
+	defer server.Close()
+
+	var stdout, stderr bytes.Buffer
+	code := run([]string{
+		"-catalog-url", server.URL,
+		"-component-token", "component-token",
+		"catalog", "route", "cap_1",
+	}, &stdout, &stderr, server.Client())
+	if code != 0 {
+		t.Fatalf("code=%d stderr=%s stdout=%s", code, stderr.String(), stdout.String())
+	}
+	if !strings.Contains(stdout.String(), `"capability_id": "cap_1"`) {
+		t.Fatalf("stdout = %s", stdout.String())
+	}
+}
+
+func TestNodeServicesCommandUsesNodeToken(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/v1/node/services" {
+			t.Fatalf("request = %s %s", r.Method, r.URL.Path)
+		}
+		if r.Header.Get("Authorization") != "Bearer node-token" {
+			t.Fatalf("Authorization = %q", r.Header.Get("Authorization"))
+		}
+		writeEnvelope(t, w, http.StatusOK, map[string]any{"items": []any{}})
+	}))
+	defer server.Close()
+
+	var stdout, stderr bytes.Buffer
+	code := run([]string{
+		"-node-url", server.URL,
+		"-node-token", "node-token",
+		"node", "services",
+	}, &stdout, &stderr, server.Client())
+	if code != 0 {
+		t.Fatalf("code=%d stderr=%s stdout=%s", code, stderr.String(), stdout.String())
+	}
+	if !strings.Contains(stdout.String(), `"items": []`) {
+		t.Fatalf("stdout = %s", stdout.String())
+	}
+}
+
+func TestNodeCommandRequiresNodeURL(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := run([]string{"-node-url", "", "node", "services"}, &stdout, &stderr, http.DefaultClient)
+	if code != 2 {
+		t.Fatalf("code=%d stderr=%s", code, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "node-url is required") {
+		t.Fatalf("stderr = %s", stderr.String())
+	}
+}
+
 func coreURLArgs(url string) []string {
 	return []string{
 		"-catalog-url", url,
@@ -119,6 +182,20 @@ func coreURLArgs(url string) []string {
 		"-artifacts-url", url,
 		"-policy-url", url,
 		"-gateway-url", url,
+	}
+}
+
+func writeEnvelope(t *testing.T, w http.ResponseWriter, status int, data any) {
+	t.Helper()
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	if err := json.NewEncoder(w).Encode(map[string]any{
+		"ok":    status >= 200 && status < 300,
+		"data":  data,
+		"links": map[string]any{},
+		"meta":  map[string]any{"request_id": "req_test", "schema_version": "v1"},
+	}); err != nil {
+		t.Fatalf("encode envelope: %v", err)
 	}
 }
 
