@@ -201,8 +201,11 @@ func validateOperations(report *FileReport, doc map[string]any, paths map[string
 				report.add("responses_missing", location+"/responses", "responses object is required")
 				continue
 			}
-			if _, ok := responses["default"]; !ok {
+			defaultResponse, ok := responses["default"]
+			if !ok {
 				report.add("default_response_missing", location+"/responses", "default error response is required")
+			} else if !responseUsesErrorEnvelope(doc, defaultResponse) {
+				report.add("default_response_not_error_enveloped", location+"/responses/default", "default responses must use the standard error envelope")
 			}
 			for status, response := range responses {
 				if !isSuccessStatus(status) {
@@ -308,6 +311,70 @@ func schemaContainsEnvelopeRef(doc map[string]any, schema any, depth int) bool {
 			}
 		case map[string]any:
 			if schemaContainsEnvelopeRef(doc, typed, depth+1) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func responseUsesErrorEnvelope(doc map[string]any, response any) bool {
+	return responseUsesErrorEnvelopeDepth(doc, response, 0)
+}
+
+func responseUsesErrorEnvelopeDepth(doc map[string]any, response any, depth int) bool {
+	if depth > 8 {
+		return false
+	}
+	responseMap, ok := asMap(response)
+	if !ok {
+		return false
+	}
+	if ref, _ := responseMap["$ref"].(string); ref != "" {
+		if schemaRefName(ref) == "ErrorEnvelope" {
+			return true
+		}
+		resolved, ok := resolveRef(doc, ref)
+		return ok && responseUsesErrorEnvelopeDepth(doc, resolved, depth+1)
+	}
+	content, ok := asMap(responseMap["content"])
+	if !ok {
+		return false
+	}
+	media, ok := asMap(content["application/json"])
+	if !ok {
+		return false
+	}
+	schema, ok := asMap(media["schema"])
+	return ok && schemaContainsErrorEnvelopeRef(doc, schema, depth+1)
+}
+
+func schemaContainsErrorEnvelopeRef(doc map[string]any, schema any, depth int) bool {
+	if depth > 12 {
+		return false
+	}
+	schemaMap, ok := asMap(schema)
+	if !ok {
+		return false
+	}
+	if ref, _ := schemaMap["$ref"].(string); ref != "" {
+		if schemaRefName(ref) == "ErrorEnvelope" {
+			return true
+		}
+		if resolved, ok := resolveRef(doc, ref); ok {
+			return schemaContainsErrorEnvelopeRef(doc, resolved, depth+1)
+		}
+	}
+	for _, value := range schemaMap {
+		switch typed := value.(type) {
+		case []any:
+			for _, item := range typed {
+				if schemaContainsErrorEnvelopeRef(doc, item, depth+1) {
+					return true
+				}
+			}
+		case map[string]any:
+			if schemaContainsErrorEnvelopeRef(doc, typed, depth+1) {
 				return true
 			}
 		}

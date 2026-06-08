@@ -189,6 +189,47 @@ components:
 	}
 }
 
+func TestValidateFileDetectsRawDefaultErrorResponse(t *testing.T) {
+	path := writeContract(t, `
+openapi: 3.1.0
+info:
+  title: Raw default
+  version: v1
+paths:
+  /one:
+    get:
+      operationId: one
+      x-operation-audience: component
+      x-policy-action: test.read
+      responses:
+        "200":
+          $ref: "#/components/responses/Success"
+        default:
+          description: Raw error response.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RawError"
+components:
+  responses:
+    Success:
+      description: Success.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/SuccessEnvelope"
+  schemas:
+    SuccessEnvelope:
+      type: object
+    RawError:
+      type: object
+`)
+	report := ValidateFile(path)
+	if !hasFinding(report, "default_response_not_error_enveloped") {
+		t.Fatalf("expected default error envelope finding, got %#v", report.Findings)
+	}
+}
+
 func TestValidateFileDetectsUnknownSecurityScheme(t *testing.T) {
 	path := writeContract(t, `
 openapi: 3.1.0
