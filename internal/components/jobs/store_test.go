@@ -2,6 +2,7 @@ package jobs
 
 import (
 	"errors"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -117,6 +118,70 @@ func TestPolicyAndAgentProjectionHideMetadata(t *testing.T) {
 	}
 	if projection.JobID != job.JobID || projection.State != contracts.JobQueued {
 		t.Fatalf("projection=%+v", projection)
+	}
+}
+
+func TestPersistentStoreReloadsJobState(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "jobs.json")
+	store, err := NewPersistentStore(path)
+	if err != nil {
+		t.Fatalf("new persistent store: %v", err)
+	}
+	store.SetClock(fixedClock("2030-01-01T00:00:00Z"))
+	job, created, err := store.Create(createRequest(), "idem_persist_create")
+	if err != nil {
+		t.Fatalf("create persistent job: %v", err)
+	}
+	if !created {
+		t.Fatalf("expected new persistent job")
+	}
+	if _, err := store.Claim(job.JobID, contracts.JobClaimRequest{WorkerID: "runner_1", LeaseSeconds: 60}); err != nil {
+		t.Fatalf("claim persistent job: %v", err)
+	}
+	if _, _, err := store.AppendLogs(job.JobID, contracts.AppendJobLogRequest{
+		WorkerID: "runner_1",
+		Entries:  []contracts.JobLogEntry{{Timestamp: "2030-01-01T00:00:01Z", Level: "info", Message: "persisted log"}},
+	}); err != nil {
+		t.Fatalf("append persistent logs: %v", err)
+	}
+
+	reloaded, err := NewPersistentStore(path)
+	if err != nil {
+		t.Fatalf("reload persistent store: %v", err)
+	}
+	reloaded.SetClock(fixedClock("2030-01-01T00:00:10Z"))
+	replay, created, err := reloaded.Create(createRequest(), "idem_persist_create")
+	if err != nil {
+		t.Fatalf("replay persisted create: %v", err)
+	}
+	if created || replay.JobID != job.JobID {
+		t.Fatalf("replay created=%v job=%s want %s", created, replay.JobID, job.JobID)
+	}
+	logs, _, err := reloaded.Logs(job.JobID, "", 10)
+	if err != nil {
+		t.Fatalf("persisted logs: %v", err)
+	}
+	if len(logs) != 1 || logs[0].Message != "persisted log" {
+		t.Fatalf("logs = %#v", logs)
+	}
+	running, err := reloaded.Heartbeat(job.JobID, contracts.JobHeartbeatRequest{WorkerID: "runner_1", TransitionTo: "running"})
+	if err != nil {
+		t.Fatalf("heartbeat after reload: %v", err)
+	}
+	if running.State != contracts.JobRunning {
+		t.Fatalf("running = %#v", running)
+	}
+
+	reloadedAgain, err := NewPersistentStore(path)
+	if err != nil {
+		t.Fatalf("reload updated persistent store: %v", err)
+	}
+	got, err := reloadedAgain.Get(job.JobID)
+	if err != nil {
+		t.Fatalf("get persisted running job: %v", err)
+	}
+	if got.State != contracts.JobRunning {
+		t.Fatalf("persisted state = %s", got.State)
 	}
 }
 

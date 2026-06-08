@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"sort"
 	"sync"
 	"time"
@@ -24,11 +26,12 @@ var (
 )
 
 type Store struct {
-	mu          sync.RWMutex
-	now         func() time.Time
-	nextID      int
-	jobs        map[string]*record
-	idempotency map[string]idempotentCreate
+	mu           sync.RWMutex
+	now          func() time.Time
+	nextID       int
+	jobs         map[string]*record
+	idempotency  map[string]idempotentCreate
+	snapshotPath string
 }
 
 type record struct {
@@ -44,11 +47,43 @@ type idempotentCreate struct {
 	jobID       string
 }
 
+type snapshotFile struct {
+	Version     int                           `json:"version"`
+	NextID      int                           `json:"next_id"`
+	Jobs        map[string]recordSnapshot     `json:"jobs"`
+	Idempotency map[string]idempotentSnapshot `json:"idempotency"`
+}
+
+type recordSnapshot struct {
+	Job               contracts.Job           `json:"job"`
+	RequesterID       string                  `json:"requester_id"`
+	OwnerSubjectID    string                  `json:"owner_subject_id"`
+	ClaimLeaseSeconds int64                   `json:"claim_lease_seconds"`
+	Logs              []contracts.JobLogEntry `json:"logs,omitempty"`
+}
+
+type idempotentSnapshot struct {
+	Fingerprint string `json:"fingerprint"`
+	JobID       string `json:"job_id"`
+}
+
 type ListFilter struct {
 	State        contracts.JobState
 	CapabilityID string
 	Cursor       string
 	Limit        int
+}
+
+func NewPersistentStore(path string) (*Store, error) {
+	store := NewStore()
+	store.snapshotPath = path
+	if path == "" {
+		return store, nil
+	}
+	if err := store.loadSnapshot(path); err != nil {
+		return nil, err
+	}
+	return store, nil
 }
 
 func NewStore() *Store {
@@ -112,6 +147,9 @@ func (s *Store) Create(req contracts.CreateJobRequest, idempotencyKey string) (c
 	s.jobs[jobID] = rec
 	if idempotencyKey != "" {
 		s.idempotency[idempotencyKey] = idempotentCreate{fingerprint: fingerprint, jobID: jobID}
+	}
+	if err := s.saveLocked(); err != nil {
+		return contracts.Job{}, false, err
 	}
 	return cloneJob(job), true, nil
 }
@@ -214,6 +252,9 @@ func (s *Store) Claim(jobID string, req contracts.JobClaimRequest) (contracts.Jo
 		ClaimedAt: formatTime(now),
 		ExpiresAt: formatTime(now.Add(rec.claimLease)),
 	}
+	if err := s.saveLocked(); err != nil {
+		return contracts.Job{}, err
+	}
 	return cloneJob(rec.job), nil
 }
 
@@ -241,6 +282,9 @@ func (s *Store) Heartbeat(jobID string, req contracts.JobHeartbeatRequest) (cont
 		rec.job.StatusMessage = req.StatusMessage
 	}
 	s.refreshClaim(rec)
+	if err := s.saveLocked(); err != nil {
+		return contracts.Job{}, err
+	}
 	return cloneJob(rec.job), nil
 }
 
@@ -269,6 +313,9 @@ func (s *Store) Complete(jobID string, req contracts.JobCompleteRequest) (contra
 	rec.job.TerminalError = nil
 	rec.job.Claim = nil
 	rec.job.StatusMessage = "completed"
+	if err := s.saveLocked(); err != nil {
+		return contracts.Job{}, err
+	}
 	return cloneJob(rec.job), nil
 }
 
@@ -293,6 +340,9 @@ func (s *Store) Fail(jobID string, req contracts.JobFailRequest) (contracts.Job,
 	rec.job.TerminalError = &req.Error
 	rec.job.Claim = nil
 	rec.job.StatusMessage = req.Error.Message
+	if err := s.saveLocked(); err != nil {
+		return contracts.Job{}, err
+	}
 	return cloneJob(rec.job), nil
 }
 
@@ -318,6 +368,9 @@ func (s *Store) Cancel(jobID string, req contracts.CancelRequest) (contracts.Job
 	rec.job.StatusMessage = message
 	rec.job.TerminalError = &contracts.ErrorObject{Code: "canceled", Message: message, Retryable: false}
 	rec.job.Claim = nil
+	if err := s.saveLocked(); err != nil {
+		return contracts.Job{}, err
+	}
 	return cloneJob(rec.job), nil
 }
 
@@ -342,6 +395,9 @@ func (s *Store) AppendLogs(jobID string, req contracts.AppendJobLogRequest) ([]c
 	cursor := logCursor(len(rec.logs))
 	rec.job.LogCursor = &cursor
 	rec.job.UpdatedAt = s.formatNow()
+	if err := s.saveLocked(); err != nil {
+		return nil, nil, err
+	}
 	return append([]contracts.JobLogEntry(nil), req.Entries...), &cursor, nil
 }
 
@@ -517,4 +573,85 @@ func parseCursor(cursor string) (int, error) {
 		return 0, ErrInvalidCursor
 	}
 	return index, nil
+}
+
+func (s *Store) loadSnapshot(path string) error {
+	raw, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	var snapshot snapshotFile
+	if err := json.Unmarshal(raw, &snapshot); err != nil {
+		return fmt.Errorf("%w: invalid job snapshot: %v", ErrValidation, err)
+	}
+	if snapshot.NextID <= 0 {
+		snapshot.NextID = 1
+	}
+	s.nextID = snapshot.NextID
+	s.jobs = map[string]*record{}
+	for jobID, rec := range snapshot.Jobs {
+		job := cloneJob(rec.Job)
+		if job.JobID == "" {
+			job.JobID = jobID
+		}
+		job.Links = jobLinks(job.JobID)
+		claimLease := time.Duration(rec.ClaimLeaseSeconds) * time.Second
+		if claimLease <= 0 {
+			claimLease = time.Minute
+		}
+		s.jobs[job.JobID] = &record{
+			job:            job,
+			requesterID:    rec.RequesterID,
+			ownerSubjectID: rec.OwnerSubjectID,
+			claimLease:     claimLease,
+			logs:           append([]contracts.JobLogEntry(nil), rec.Logs...),
+		}
+	}
+	s.idempotency = map[string]idempotentCreate{}
+	for key, rec := range snapshot.Idempotency {
+		if rec.JobID == "" {
+			continue
+		}
+		s.idempotency[key] = idempotentCreate{fingerprint: rec.Fingerprint, jobID: rec.JobID}
+	}
+	return nil
+}
+
+func (s *Store) saveLocked() error {
+	if s.snapshotPath == "" {
+		return nil
+	}
+	snapshot := snapshotFile{
+		Version:     1,
+		NextID:      s.nextID,
+		Jobs:        map[string]recordSnapshot{},
+		Idempotency: map[string]idempotentSnapshot{},
+	}
+	for jobID, rec := range s.jobs {
+		snapshot.Jobs[jobID] = recordSnapshot{
+			Job:               cloneJob(rec.job),
+			RequesterID:       rec.requesterID,
+			OwnerSubjectID:    rec.ownerSubjectID,
+			ClaimLeaseSeconds: int64(rec.claimLease / time.Second),
+			Logs:              append([]contracts.JobLogEntry(nil), rec.logs...),
+		}
+	}
+	for key, rec := range s.idempotency {
+		snapshot.Idempotency[key] = idempotentSnapshot{Fingerprint: rec.fingerprint, JobID: rec.jobID}
+	}
+	raw, err := json.MarshalIndent(snapshot, "", "  ")
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(s.snapshotPath), 0o755); err != nil {
+		return err
+	}
+	tmpPath := s.snapshotPath + ".tmp"
+	if err := os.WriteFile(tmpPath, raw, 0o600); err != nil {
+		return err
+	}
+	return os.Rename(tmpPath, s.snapshotPath)
 }

@@ -18,8 +18,8 @@ Contract simulation data is kept as test input, not as product behavior.
   HTTP handlers.
 - `internal/components/gateway`: agent-facing tool discovery, invocation, job,
   log, artifact, and content gateway that composes public component APIs.
-- `internal/components/jobs`: async job lifecycle service with in-memory
-  storage and HTTP handlers.
+- `internal/components/jobs`: async job lifecycle service with in-memory or
+  file-backed durable storage and HTTP handlers.
 - `internal/components/leases`: resource registry, FIFO lease queue, heartbeat,
   release, expiration, and inspection service with in-memory storage and HTTP
   handlers.
@@ -68,7 +68,7 @@ The services can also be run separately for distributed testing:
 ```sh
 go run ./cmd/pacp-fake-provider -addr localhost:18088
 go run ./cmd/pacp-catalog -addr localhost:18081 -manifest testdata/manifests/s003-comfyui-gpu.json
-go run ./cmd/pacp-jobs -addr localhost:18082
+go run ./cmd/pacp-jobs -addr localhost:18082 -state-file /tmp/pacp-jobs-state.json
 go run ./cmd/pacp-leases -addr localhost:18083
 go run ./cmd/pacp-artifacts -addr localhost:18084 -root /tmp/pacp-artifacts
 go run ./cmd/pacp-policy -addr localhost:18085
