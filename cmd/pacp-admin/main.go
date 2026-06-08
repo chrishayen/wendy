@@ -2308,6 +2308,20 @@ func addMetricFindings(report *alertsReport, item metricsItem, opts alertOptions
 				}
 				addAlertFinding(report, diagnosticFinding{Severity: "warning", Code: "policy_denies", Message: fmt.Sprintf("%s denied %.0f policy decision(s) for %s", item.Name, sample.Value, action)})
 			}
+		case "policy_secret_resolutions_total":
+			if sample.Labels["decision"] == "deny" && sample.Value > 0 {
+				reason := sample.Labels["reason"]
+				if reason == "" {
+					reason = "unknown"
+				}
+				severity := "warning"
+				code := "secret_resolution_denied"
+				if reason == "not_found" {
+					severity = "error"
+					code = "secret_resolution_failed"
+				}
+				addAlertFinding(report, diagnosticFinding{Severity: severity, Code: code, Message: fmt.Sprintf("%s recorded %.0f denied secret resolution(s), reason=%s", item.Name, sample.Value, reason)})
+			}
 		case "node_services_by_status":
 			status := sample.Labels["status"]
 			if status == "failed" && sample.Value > 0 {

@@ -438,6 +438,9 @@ Gateway health includes per-downstream dependency status for catalog, policy,
 jobs, leases, and artifacts. Gateway metrics expose configured and reachable
 samples for those downstreams, and `pacp-admin alerts` reports configured
 gateway dependencies that are missing or not healthy.
+Policy metrics expose policy denies and secret resolution outcomes.
+`pacp-admin alerts` reports denied secret resolutions and escalates missing
+secret refs as failed secret resolution alerts.
 `pacp-admin alerts -node-registry` reads the public node registry API and
 reports disabled, untrusted, unreachable, and stale nodes.
 Runner operational logs are JSON records with request id, job id when present,

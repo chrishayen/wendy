@@ -135,16 +135,30 @@ func (s *Store) Metrics() contracts.ComponentMetrics {
 		contracts.CountMetric("policy_audit_events_total", len(s.audit), nil),
 	}
 	decisions := map[string]int{}
+	secretResolutions := map[string]int{}
 	for _, event := range s.audit {
-		if event.EventType != "policy.decision" {
+		switch event.EventType {
+		case "policy.decision":
+			decision := "deny"
+			if event.Allowed {
+				decision = "allow"
+			}
+			key := event.Action + "\x00" + decision
+			decisions[key]++
+		case "secret.resolve":
+			decision := "deny"
+			if event.Allowed {
+				decision = "allow"
+			}
+			reason := event.Reason
+			if reason == "" {
+				reason = "unknown"
+			}
+			key := decision + "\x00" + reason
+			secretResolutions[key]++
+		default:
 			continue
 		}
-		decision := "deny"
-		if event.Allowed {
-			decision = "allow"
-		}
-		key := event.Action + "\x00" + decision
-		decisions[key]++
 	}
 	for key, count := range decisions {
 		action, decision, _ := strings.Cut(key, "\x00")
@@ -152,6 +166,10 @@ func (s *Store) Metrics() contracts.ComponentMetrics {
 			action = "unknown"
 		}
 		samples = append(samples, contracts.CountMetric("policy_decisions_total", count, map[string]string{"action": action, "decision": decision}))
+	}
+	for key, count := range secretResolutions {
+		decision, reason, _ := strings.Cut(key, "\x00")
+		samples = append(samples, contracts.CountMetric("policy_secret_resolutions_total", count, map[string]string{"decision": decision, "reason": reason}))
 	}
 	return contracts.NewComponentMetrics("policy", samples)
 }

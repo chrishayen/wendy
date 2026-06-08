@@ -455,6 +455,8 @@ func TestAlertsReportsHealthAndMetricFindings(t *testing.T) {
 		case "/v1/policy/metrics":
 			writeMetrics(t, w, http.StatusOK, "policy", []map[string]any{
 				{"name": "policy_decisions_total", "value": 2, "unit": "count", "labels": map[string]string{"action": "tool.invoke", "decision": "deny"}},
+				{"name": "policy_secret_resolutions_total", "value": 1, "unit": "count", "labels": map[string]string{"decision": "deny", "reason": "forbidden"}},
+				{"name": "policy_secret_resolutions_total", "value": 1, "unit": "count", "labels": map[string]string{"decision": "deny", "reason": "not_found"}},
 			})
 		case "/v1/node/metrics":
 			writeMetrics(t, w, http.StatusOK, "node", []map[string]any{
@@ -490,6 +492,8 @@ func TestAlertsReportsHealthAndMetricFindings(t *testing.T) {
 		`"code": "lease_queue_depth"`,
 		`"code": "artifact_uploads_not_completed"`,
 		`"code": "policy_denies"`,
+		`"code": "secret_resolution_denied"`,
+		`"code": "secret_resolution_failed"`,
 		`"code": "node_services_failed"`,
 		`"code": "gateway_downstream_unreachable"`,
 	} {
