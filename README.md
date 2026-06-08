@@ -434,6 +434,8 @@ Provider metrics additionally expose invocation count, error count, and average
 duration by service id, capability id, status, and error code.
 Runner metrics expose active job count, run loop results, successful heartbeat
 timestamps, and dependency reachability for configured primary APIs and nodes.
+Runner lease-expiration errors are surfaced through `pacp-admin alerts` so an
+operator can tell when jobs failed after losing a resource lease.
 Gateway health includes per-downstream dependency status for catalog, policy,
 jobs, leases, and artifacts. Gateway metrics expose configured and reachable
 samples for those downstreams, and `pacp-admin alerts` reports configured

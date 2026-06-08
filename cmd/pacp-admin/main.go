@@ -1615,6 +1615,17 @@ func buildJobDiagnostics(job contracts.Job, logs []contracts.JobLogEntry) jobDia
 			}
 			addSuggestedAction(&data.SuggestedActions, "retry after artifact store is healthy")
 		}
+		if job.TerminalError != nil && job.TerminalError.Code == "lease_expired" {
+			leaseID := leaseExpiredLogLeaseID(logs)
+			leaseMessage := "resource lease expired before completion"
+			if leaseID != "" {
+				leaseMessage += ": " + leaseID
+				addSuggestedAction(&data.SuggestedActions, "inspect lease "+leaseID)
+			}
+			data.Findings = append(data.Findings, diagnosticFinding{Severity: "error", Code: "lease_heartbeat_expired", Message: leaseMessage})
+			addSuggestedAction(&data.SuggestedActions, "verify runner lease heartbeats are reaching the lease service")
+			addSuggestedAction(&data.SuggestedActions, "retry after resource lease health is stable")
+		}
 	case contracts.JobCanceled:
 		data.Findings = append(data.Findings, diagnosticFinding{Severity: "info", Code: "job_canceled", Message: "job was canceled"})
 	case contracts.JobExpired:
@@ -1873,6 +1884,21 @@ func artifactFailureStage(logs []contracts.JobLogEntry) string {
 		stage = strings.TrimSpace(stage)
 		if stage != "" {
 			return stage
+		}
+	}
+	return ""
+}
+
+func leaseExpiredLogLeaseID(logs []contracts.JobLogEntry) string {
+	for i := len(logs) - 1; i >= 0; i-- {
+		entry := logs[i]
+		if entry.Message != "resource lease expired" {
+			continue
+		}
+		leaseID, _ := entry.Fields["lease_id"].(string)
+		leaseID = strings.TrimSpace(leaseID)
+		if leaseID != "" {
+			return leaseID
 		}
 	}
 	return ""
@@ -2262,6 +2288,10 @@ func addMetricFindings(report *alertsReport, item metricsItem, opts alertOptions
 					severity = "error"
 				}
 				addAlertFinding(report, diagnosticFinding{Severity: severity, Code: "runner_dependency_unreachable", Message: fmt.Sprintf("%s dependency %s is unreachable", item.Name, dependency)})
+			}
+		case "runner_errors_total":
+			if sample.Value > 0 && sample.Labels["code"] == "lease_expired" {
+				addAlertFinding(report, diagnosticFinding{Severity: "error", Code: "lease_heartbeat_expired", Message: fmt.Sprintf("%s recorded %.0f resource lease expiration error(s)", item.Name, sample.Value)})
 			}
 		case "jobs_by_state":
 			state := sample.Labels["state"]

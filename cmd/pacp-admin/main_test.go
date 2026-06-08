@@ -609,6 +609,42 @@ func TestAlertsReportsStaleRunnerHeartbeat(t *testing.T) {
 	}
 }
 
+func TestAlertsReportsLeaseExpirationFromRunnerMetrics(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/health") {
+			writeHealth(t, w, http.StatusOK, "healthy")
+			return
+		}
+		if r.URL.Path == "/v1/runner/metrics" {
+			writeMetrics(t, w, http.StatusOK, "runner", []map[string]any{
+				{"name": "runner_errors_total", "value": 2, "unit": "count", "labels": map[string]string{"code": "lease_expired"}},
+			})
+			return
+		}
+		writeMetrics(t, w, http.StatusOK, "component", []map[string]any{})
+	}))
+	defer server.Close()
+
+	args := append(coreURLArgs(server.URL),
+		"-runner-url", server.URL,
+		"alerts",
+	)
+	var stdout, stderr bytes.Buffer
+	code := run(args, &stdout, &stderr, server.Client())
+	if code != 1 {
+		t.Fatalf("code=%d stderr=%s stdout=%s", code, stderr.String(), stdout.String())
+	}
+	output := stdout.String()
+	for _, expected := range []string{
+		`"code": "lease_heartbeat_expired"`,
+		`resource lease expiration error`,
+	} {
+		if !strings.Contains(output, expected) {
+			t.Fatalf("stdout missing %q:\n%s", expected, output)
+		}
+	}
+}
+
 func TestAlertsCanIncludeNodeRegistryFindings(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
@@ -1144,6 +1180,75 @@ func TestDiagnoseJobExplainsArtifactUploadFailure(t *testing.T) {
 		`inspect artifact service health and permissions`,
 		`inspect runner logs for artifact upload stage content`,
 		`retry after artifact store is healthy`,
+	} {
+		if !strings.Contains(output, expected) {
+			t.Fatalf("stdout missing %q:\n%s", expected, output)
+		}
+	}
+}
+
+func TestDiagnoseJobExplainsLeaseExpiration(t *testing.T) {
+	now := time.Now().UTC()
+	seen := map[string]bool{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seen[r.URL.Path] = true
+		if r.Header.Get("Authorization") != "Bearer component-token" {
+			t.Fatalf("%s Authorization = %q", r.URL.Path, r.Header.Get("Authorization"))
+		}
+		switch r.URL.Path {
+		case "/v1/jobs/job_lease_expired":
+			writeEnvelope(t, w, http.StatusOK, map[string]any{
+				"job_id":     "job_lease_expired",
+				"state":      "failed",
+				"created_at": now.Add(-time.Minute).Format(time.RFC3339),
+				"updated_at": now.Format(time.RFC3339),
+				"terminal_error": map[string]any{
+					"code":      "lease_expired",
+					"message":   "resource lease expired before completion",
+					"retryable": true,
+				},
+				"artifact_refs": []any{},
+				"links":         map[string]any{},
+			})
+		case "/v1/jobs/job_lease_expired/logs":
+			if r.URL.Query().Get("limit") != "20" {
+				t.Fatalf("logs query = %s", r.URL.RawQuery)
+			}
+			writeEnvelope(t, w, http.StatusOK, map[string]any{
+				"items": []map[string]any{{
+					"timestamp": now.Format(time.RFC3339),
+					"level":     "error",
+					"message":   "resource lease expired",
+					"fields":    map[string]any{"lease_id": "lease_1"},
+				}},
+				"next_cursor": nil,
+			})
+		default:
+			t.Fatalf("request = %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	var stdout, stderr bytes.Buffer
+	code := run([]string{
+		"-jobs-url", server.URL,
+		"-component-token", "component-token",
+		"diagnose", "job", "job_lease_expired",
+	}, &stdout, &stderr, server.Client())
+	if code != 0 {
+		t.Fatalf("code=%d stderr=%s stdout=%s", code, stderr.String(), stdout.String())
+	}
+	if !seen["/v1/jobs/job_lease_expired"] || !seen["/v1/jobs/job_lease_expired/logs"] {
+		t.Fatalf("seen requests = %#v", seen)
+	}
+	output := stdout.String()
+	for _, expected := range []string{
+		`"code": "job_failed"`,
+		`"code": "lease_heartbeat_expired"`,
+		`resource lease expired before completion: lease_1`,
+		`inspect lease lease_1`,
+		`verify runner lease heartbeats are reaching the lease service`,
+		`retry after resource lease health is stable`,
 	} {
 		if !strings.Contains(output, expected) {
 			t.Fatalf("stdout missing %q:\n%s", expected, output)
