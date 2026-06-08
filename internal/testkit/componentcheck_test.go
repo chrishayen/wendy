@@ -17,6 +17,9 @@ func TestCheckComponentValidatesHealthAndMetrics(t *testing.T) {
 			writeTestErrorEnvelope(t, w, http.StatusUnauthorized, "unauthorized", "missing token")
 			return
 		}
+		if r.Header.Get("X-Request-ID") != "req_test" {
+			t.Fatalf("X-Request-ID = %q", r.Header.Get("X-Request-ID"))
+		}
 		switch r.URL.Path {
 		case "/v1/jobs/health":
 			writeTestEnvelope(t, w, http.StatusOK, contracts.NewComponentHealth("jobs", nil))
@@ -44,10 +47,51 @@ func TestCheckComponentValidatesHealthAndMetrics(t *testing.T) {
 		BaseURL:    server.URL,
 		Kind:       "jobs",
 		Credential: "Bearer component-token",
+		RequestID:  "req_test",
 	})
 
 	if !report.Passed() || len(report.Checks) != 3 {
 		t.Fatalf("report = %#v", report)
+	}
+}
+
+func TestCheckComponentFailsWhenEnvelopeRequestIDDiffers(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/jobs/health":
+			if r.Header.Get("X-Request-ID") != "req_expected" {
+				t.Fatalf("X-Request-ID = %q", r.Header.Get("X-Request-ID"))
+			}
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			if err := json.NewEncoder(w).Encode(map[string]any{
+				"ok":    true,
+				"data":  contracts.NewComponentHealth("jobs", nil),
+				"links": map[string]any{},
+				"meta":  map[string]any{"request_id": "req_other", "schema_version": "v1"},
+			}); err != nil {
+				t.Fatalf("encode envelope: %v", err)
+			}
+		case "/v1/jobs/metrics":
+			writeTestEnvelope(t, w, http.StatusOK, contracts.NewComponentMetrics("jobs", []contracts.MetricSample{}))
+		case "/v1/jobs":
+			writeTestEnvelope(t, w, http.StatusOK, map[string]any{"items": []any{}, "next_cursor": nil})
+		default:
+			t.Fatalf("unexpected request %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	report := CheckComponent(context.Background(), server.Client(), ComponentCheckOptions{
+		BaseURL:   server.URL,
+		Kind:      "jobs",
+		RequestID: "req_expected",
+	})
+	if report.Passed() || len(report.Checks) == 0 || report.Checks[0].Name != "component.health" {
+		t.Fatalf("report = %#v", report)
+	}
+	if !strings.Contains(report.Checks[0].Error, `want "req_expected"`) {
+		t.Fatalf("health error = %q", report.Checks[0].Error)
 	}
 }
 

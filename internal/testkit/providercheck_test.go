@@ -13,6 +13,9 @@ import (
 
 func TestCheckProviderManifestAndHealth(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("X-Request-ID") != "req_test" {
+			t.Fatalf("X-Request-ID = %q", r.Header.Get("X-Request-ID"))
+		}
 		switch r.URL.Path {
 		case "/v1/provider/manifest":
 			writeTestEnvelope(t, w, http.StatusOK, testProviderManifest(serverURL(r)))
@@ -26,7 +29,7 @@ func TestCheckProviderManifestAndHealth(t *testing.T) {
 	}))
 	defer server.Close()
 
-	report := CheckProvider(context.Background(), server.Client(), ProviderCheckOptions{BaseURL: server.URL})
+	report := CheckProvider(context.Background(), server.Client(), ProviderCheckOptions{BaseURL: server.URL, RequestID: "req_test"})
 	if !report.Passed() {
 		t.Fatalf("report = %#v", report)
 	}

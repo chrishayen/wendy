@@ -141,6 +141,7 @@ func runComponentSmoke(componentURL, componentKind, credential string, timeout t
 		BaseURL:    componentURL,
 		Kind:       componentKind,
 		Credential: authorizationHeader(credential),
+		RequestID:  "req_contract_component",
 	})
 	fmt.Fprintf(stdout, "component=%s kind=%s checks=%d\n", componentURL, componentKind, len(report.Checks))
 	for _, check := range report.Checks {
@@ -183,6 +184,7 @@ func runProviderSmoke(providerURL, credential, capabilityID, inputRaw string, ti
 		CapabilityID: capabilityID,
 		Input:        input,
 		Credential:   authorizationHeader(credential),
+		RequestID:    "req_contract_provider",
 	})
 	fmt.Fprintf(stdout, "provider=%s checks=%d\n", providerURL, len(report.Checks))
 	for _, check := range report.Checks {

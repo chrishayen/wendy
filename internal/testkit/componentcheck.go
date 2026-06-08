@@ -8,12 +8,14 @@ import (
 	"strings"
 
 	"pacp/internal/contracts"
+	"pacp/internal/observability"
 )
 
 type ComponentCheckOptions struct {
 	BaseURL    string
 	Kind       string
 	Credential string
+	RequestID  string
 }
 
 type ComponentCheckReport struct {
@@ -49,6 +51,9 @@ func CheckComponent(ctx context.Context, httpClient *http.Client, opts Component
 	report := ComponentCheckReport{OK: true}
 	if httpClient == nil {
 		httpClient = http.DefaultClient
+	}
+	if requestID := strings.TrimSpace(opts.RequestID); requestID != "" {
+		ctx = observability.WithRequestID(ctx, requestID)
 	}
 	baseURL := strings.TrimRight(strings.TrimSpace(opts.BaseURL), "/")
 	if baseURL == "" {
@@ -135,7 +140,7 @@ func checkComponentHealth(ctx context.Context, httpClient *http.Client, baseURL,
 		report.add(result)
 		return
 	}
-	if err := validateEnvelopeMeta(envelope.Meta); err != nil {
+	if err := validateEnvelopeMeta(envelope.Meta, observability.RequestIDFromContext(ctx)); err != nil {
 		result.Error = "health envelope " + err.Error()
 		report.add(result)
 		return
@@ -189,7 +194,7 @@ func checkComponentMetrics(ctx context.Context, httpClient *http.Client, baseURL
 		report.add(result)
 		return
 	}
-	if err := validateEnvelopeMeta(envelope.Meta); err != nil {
+	if err := validateEnvelopeMeta(envelope.Meta, observability.RequestIDFromContext(ctx)); err != nil {
 		result.Error = "metrics envelope " + err.Error()
 		report.add(result)
 		return
@@ -243,7 +248,7 @@ func checkComponentListEndpoint(ctx context.Context, httpClient *http.Client, ba
 		report.add(result)
 		return
 	}
-	if err := validateEnvelopeMeta(envelope.Meta); err != nil {
+	if err := validateEnvelopeMeta(envelope.Meta, observability.RequestIDFromContext(ctx)); err != nil {
 		result.Error = "list envelope " + err.Error()
 		report.add(result)
 		return
@@ -407,6 +412,7 @@ func getEnvelopeWithCredential(ctx context.Context, httpClient *http.Client, end
 	if credential != "" {
 		req.Header.Set("Authorization", credential)
 	}
+	observability.PropagateRequestID(ctx, req)
 	resp, err := httpClient.Do(req)
 	if err != nil {
 		return 0, err

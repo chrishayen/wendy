@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"pacp/internal/contracts"
+	"pacp/internal/observability"
 	"pacp/internal/provider"
 )
 
@@ -18,6 +19,7 @@ type ProviderCheckOptions struct {
 	CapabilityID string
 	Input        map[string]any
 	Credential   string
+	RequestID    string
 }
 
 type ProviderCheckReport struct {
@@ -40,6 +42,9 @@ func CheckProvider(ctx context.Context, httpClient *http.Client, opts ProviderCh
 	report := ProviderCheckReport{OK: true}
 	if httpClient == nil {
 		httpClient = http.DefaultClient
+	}
+	if requestID := strings.TrimSpace(opts.RequestID); requestID != "" {
+		ctx = observability.WithRequestID(ctx, requestID)
 	}
 	baseURL := strings.TrimRight(strings.TrimSpace(opts.BaseURL), "/")
 	if baseURL == "" {
@@ -84,7 +89,7 @@ func checkProviderManifest(ctx context.Context, httpClient *http.Client, baseURL
 		report.add(result)
 		return contracts.ProviderManifest{}, false
 	}
-	if err := validateEnvelopeMeta(envelope.Meta); err != nil {
+	if err := validateEnvelopeMeta(envelope.Meta, observability.RequestIDFromContext(ctx)); err != nil {
 		result.Error = "manifest envelope " + err.Error()
 		report.add(result)
 		return contracts.ProviderManifest{}, false
@@ -128,7 +133,7 @@ func checkProviderHealth(ctx context.Context, httpClient *http.Client, baseURL, 
 		report.add(result)
 		return
 	}
-	if err := validateEnvelopeMeta(envelope.Meta); err != nil {
+	if err := validateEnvelopeMeta(envelope.Meta, observability.RequestIDFromContext(ctx)); err != nil {
 		result.Error = "health envelope " + err.Error()
 		report.add(result)
 		return
@@ -193,7 +198,7 @@ func checkProviderInvoke(ctx context.Context, httpClient *http.Client, baseURL s
 		report.add(result)
 		return false
 	}
-	if err := validateEnvelopeMeta(envelope.Meta); err != nil {
+	if err := validateEnvelopeMeta(envelope.Meta, observability.RequestIDFromContext(ctx)); err != nil {
 		result.Error = "invoke envelope " + err.Error()
 		report.add(result)
 		return false
@@ -239,7 +244,7 @@ func checkProviderInvalidInput(ctx context.Context, httpClient *http.Client, bas
 		report.add(result)
 		return
 	}
-	if err := validateEnvelopeMeta(envelope.Meta); err != nil {
+	if err := validateEnvelopeMeta(envelope.Meta, observability.RequestIDFromContext(ctx)); err != nil {
 		result.Error = "invalid input envelope " + err.Error()
 		report.add(result)
 		return
@@ -272,7 +277,7 @@ func checkProviderMetrics(ctx context.Context, httpClient *http.Client, baseURL,
 		report.add(result)
 		return
 	}
-	if err := validateEnvelopeMeta(envelope.Meta); err != nil {
+	if err := validateEnvelopeMeta(envelope.Meta, observability.RequestIDFromContext(ctx)); err != nil {
 		result.Error = "metrics envelope " + err.Error()
 		report.add(result)
 		return
@@ -352,13 +357,18 @@ type rawErrorEnvelope struct {
 	Meta  map[string]any        `json:"meta"`
 }
 
-func validateEnvelopeMeta(meta map[string]any) error {
+func validateEnvelopeMeta(meta map[string]any, expectedRequestID string) error {
 	if meta == nil {
 		return fmt.Errorf("meta is required")
 	}
 	requestID, _ := meta["request_id"].(string)
-	if strings.TrimSpace(requestID) == "" {
+	requestID = strings.TrimSpace(requestID)
+	if requestID == "" {
 		return fmt.Errorf("meta.request_id is required")
+	}
+	expectedRequestID = strings.TrimSpace(expectedRequestID)
+	if expectedRequestID != "" && requestID != expectedRequestID {
+		return fmt.Errorf("meta.request_id = %q, want %q", requestID, expectedRequestID)
 	}
 	schemaVersion, _ := meta["schema_version"].(string)
 	if strings.TrimSpace(schemaVersion) == "" {
@@ -397,6 +407,7 @@ func getEnvelope(ctx context.Context, httpClient *http.Client, endpoint, credent
 	if credential != "" {
 		req.Header.Set("Authorization", credential)
 	}
+	observability.PropagateRequestID(ctx, req)
 	resp, err := httpClient.Do(req)
 	if err != nil {
 		return 0, err
@@ -422,6 +433,7 @@ func postEnvelope(ctx context.Context, httpClient *http.Client, endpoint, creden
 	if credential != "" {
 		req.Header.Set("Authorization", credential)
 	}
+	observability.PropagateRequestID(ctx, req)
 	resp, err := httpClient.Do(req)
 	if err != nil {
 		return 0, err

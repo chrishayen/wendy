@@ -31,14 +31,14 @@ func TestRunProviderSmokeChecksLiveProvider(t *testing.T) {
 	invoked := false
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Authorization") != "Bearer provider-token" {
-			writeSmokeErrorEnvelope(t, w, http.StatusUnauthorized, "unauthorized", "missing token")
+			writeSmokeErrorEnvelope(t, w, r, http.StatusUnauthorized, "unauthorized", "missing token")
 			return
 		}
 		switch r.URL.Path {
 		case "/v1/provider/manifest":
-			writeSmokeEnvelope(t, w, http.StatusOK, smokeProviderManifest("http://"+r.Host))
+			writeSmokeEnvelope(t, w, r, http.StatusOK, smokeProviderManifest("http://"+r.Host))
 		case "/v1/provider/health":
-			writeSmokeEnvelope(t, w, http.StatusOK, map[string]any{"status": "healthy"})
+			writeSmokeEnvelope(t, w, r, http.StatusOK, map[string]any{"status": "healthy"})
 		case "/v1/provider/capabilities/cap_echo/invoke":
 			invoked = true
 			var req contracts.ProviderInvokeRequest
@@ -47,12 +47,12 @@ func TestRunProviderSmokeChecksLiveProvider(t *testing.T) {
 			}
 			if req.Input["message"] != "hello" {
 				if _, exists := req.Input["message"]; !exists {
-					writeSmokeErrorEnvelope(t, w, http.StatusBadRequest, "validation_failed", "message is required")
+					writeSmokeErrorEnvelope(t, w, r, http.StatusBadRequest, "validation_failed", "message is required")
 					return
 				}
 				t.Fatalf("input = %#v", req.Input)
 			}
-			writeSmokeEnvelope(t, w, http.StatusOK, contracts.ProviderInvokeResponse{
+			writeSmokeEnvelope(t, w, r, http.StatusOK, contracts.ProviderInvokeResponse{
 				Output: map[string]any{"reply": "hello"},
 			})
 		case "/v1/provider/metrics":
@@ -64,7 +64,7 @@ func TestRunProviderSmokeChecksLiveProvider(t *testing.T) {
 					"status":        "success",
 				}))
 			}
-			writeSmokeEnvelope(t, w, http.StatusOK, contracts.NewComponentMetrics("provider", samples))
+			writeSmokeEnvelope(t, w, r, http.StatusOK, contracts.NewComponentMetrics("provider", samples))
 		default:
 			t.Fatalf("unexpected request = %s %s", r.Method, r.URL.Path)
 		}
@@ -98,16 +98,16 @@ func TestRunProviderSmokeChecksLiveProvider(t *testing.T) {
 func TestRunComponentSmokeChecksLiveComponent(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Authorization") != "Bearer component-token" {
-			writeSmokeErrorEnvelope(t, w, http.StatusUnauthorized, "unauthorized", "missing token")
+			writeSmokeErrorEnvelope(t, w, r, http.StatusUnauthorized, "unauthorized", "missing token")
 			return
 		}
 		switch r.URL.Path {
 		case "/v1/jobs/health":
-			writeSmokeEnvelope(t, w, http.StatusOK, contracts.NewComponentHealth("jobs", nil))
+			writeSmokeEnvelope(t, w, r, http.StatusOK, contracts.NewComponentHealth("jobs", nil))
 		case "/v1/jobs/metrics":
-			writeSmokeEnvelope(t, w, http.StatusOK, contracts.NewComponentMetrics("jobs", []contracts.MetricSample{}))
+			writeSmokeEnvelope(t, w, r, http.StatusOK, contracts.NewComponentMetrics("jobs", []contracts.MetricSample{}))
 		case "/v1/jobs":
-			writeSmokeEnvelope(t, w, http.StatusOK, map[string]any{"items": []any{}, "next_cursor": nil})
+			writeSmokeEnvelope(t, w, r, http.StatusOK, map[string]any{"items": []any{}, "next_cursor": nil})
 		default:
 			t.Fatalf("unexpected request = %s %s", r.Method, r.URL.Path)
 		}
@@ -277,29 +277,37 @@ func smokeProviderManifest(endpoint string) contracts.ProviderManifest {
 	}
 }
 
-func writeSmokeEnvelope(t *testing.T, w http.ResponseWriter, status int, data any) {
+func writeSmokeEnvelope(t *testing.T, w http.ResponseWriter, r *http.Request, status int, data any) {
 	t.Helper()
+	requestID := r.Header.Get("X-Request-ID")
+	if requestID == "" {
+		requestID = "req_test"
+	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	if err := json.NewEncoder(w).Encode(map[string]any{
 		"ok":    status >= 200 && status < 300,
 		"data":  data,
 		"links": map[string]any{},
-		"meta":  map[string]any{"request_id": "req_test", "schema_version": "v1"},
+		"meta":  map[string]any{"request_id": requestID, "schema_version": "v1"},
 	}); err != nil {
 		t.Fatalf("encode envelope: %v", err)
 	}
 }
 
-func writeSmokeErrorEnvelope(t *testing.T, w http.ResponseWriter, status int, code, message string) {
+func writeSmokeErrorEnvelope(t *testing.T, w http.ResponseWriter, r *http.Request, status int, code, message string) {
 	t.Helper()
+	requestID := r.Header.Get("X-Request-ID")
+	if requestID == "" {
+		requestID = "req_test"
+	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	if err := json.NewEncoder(w).Encode(map[string]any{
 		"ok":    false,
 		"error": map[string]any{"code": code, "message": message, "retryable": false},
 		"links": map[string]any{},
-		"meta":  map[string]any{"request_id": "req_test", "schema_version": "v1"},
+		"meta":  map[string]any{"request_id": requestID, "schema_version": "v1"},
 	}); err != nil {
 		t.Fatalf("encode error envelope: %v", err)
 	}
