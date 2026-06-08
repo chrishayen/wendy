@@ -281,6 +281,10 @@ register local artifacts; gateway/component credentials can list, read metadata,
 read policy context, and retrieve artifact content. Use
 `-policy-credential` when the policy service itself is protected by a component
 transport token.
+Set `-artifact-ttl` or `PACP_ARTIFACT_TTL` when completed artifacts should
+expire by retention policy. Expired artifacts return `artifact_expired` for
+metadata and content reads, are omitted from artifact lists, and report
+`policy_state: expired` from the policy-context endpoint.
 
 `pacp-leases` also supports C08-backed route-aware auth. Worker credentials can
 request leases, heartbeat active leases, and release leases; component

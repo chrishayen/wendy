@@ -237,8 +237,12 @@ func writeStoreError(w http.ResponseWriter, r *http.Request, err error) {
 		writeError(w, r, http.StatusConflict, "idempotency_conflict", "idempotency key was reused with different request content", false)
 	case errors.Is(err, ErrIdempotencyConflict):
 		writeError(w, r, http.StatusConflict, "idempotency_conflict", "idempotency key was reused with different upload content", false)
-	case errors.Is(err, ErrExpired):
+	case errors.Is(err, ErrUploadExpired):
 		writeError(w, r, http.StatusGone, "artifact_expired", "artifact upload session has expired", false)
+	case errors.Is(err, ErrArtifactExpired):
+		writeError(w, r, http.StatusGone, "artifact_expired", "artifact has expired", false)
+	case errors.Is(err, ErrExpired):
+		writeError(w, r, http.StatusGone, "artifact_expired", "artifact resource has expired", false)
 	case errors.Is(err, ErrInvalidTransition):
 		writeError(w, r, http.StatusConflict, "invalid_transition", "artifact upload cannot transition from its current state", false)
 	case errors.Is(err, ErrDisallowedPath):

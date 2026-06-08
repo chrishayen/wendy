@@ -2,10 +2,12 @@ package main
 
 import (
 	"flag"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
 	"strings"
+	"time"
 
 	"pacp/internal/components/artifacts"
 	"pacp/internal/routeauth"
@@ -16,6 +18,7 @@ func main() {
 	addr := flag.String("addr", "localhost:18084", "listen address")
 	root := flag.String("root", "/tmp/pacp-artifacts", "artifact storage root")
 	stateFile := flag.String("state-file", "", "optional JSON state file for durable artifact metadata")
+	artifactTTLRaw := flag.String("artifact-ttl", os.Getenv("PACP_ARTIFACT_TTL"), "optional completed artifact retention TTL, such as 24h or 168h")
 	componentToken := flag.String("component-token", os.Getenv("PACP_COMPONENT_TOKEN"), "optional bearer token required for component API calls")
 	policyURL := flag.String("policy-url", os.Getenv("PACP_POLICY_URL"), "optional policy service base URL for route-aware artifact API auth")
 	policyCredential := flag.String("policy-credential", componentCredentialDefault("PACP_ARTIFACTS_POLICY_CREDENTIAL"), "optional credential used when calling policy auth verify; defaults to PACP_ARTIFACTS_POLICY_CREDENTIAL or PACP_COMPONENT_TOKEN")
@@ -28,6 +31,11 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	artifactTTL, err := optionalDuration(*artifactTTLRaw)
+	if err != nil {
+		log.Fatal(err)
+	}
+	store.SetArtifactTTL(artifactTTL)
 	handler := artifacts.NewHandler(store)
 	authMode := "open"
 	if strings.TrimSpace(*policyURL) != "" {
@@ -41,10 +49,25 @@ func main() {
 		handler = transportauth.RequireBearer(handler, *componentToken)
 		authMode = "component-token"
 	}
-	log.Printf("serving artifacts addr=%s root=%s state_file=%s auth_mode=%s", *addr, *root, *stateFile, authMode)
+	log.Printf("serving artifacts addr=%s root=%s state_file=%s artifact_ttl=%s auth_mode=%s", *addr, *root, *stateFile, artifactTTL, authMode)
 	if err := http.ListenAndServe(*addr, handler); err != nil {
 		log.Fatal(err)
 	}
+}
+
+func optionalDuration(raw string) (time.Duration, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return 0, nil
+	}
+	duration, err := time.ParseDuration(raw)
+	if err != nil {
+		return 0, err
+	}
+	if duration < 0 {
+		return 0, fmt.Errorf("artifact-ttl must be non-negative")
+	}
+	return duration, nil
 }
 
 func componentCredentialDefault(primaryEnv string) string {

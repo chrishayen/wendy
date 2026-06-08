@@ -27,6 +27,8 @@ var (
 	ErrIdempotencyConflict    = errors.New("idempotency conflict")
 	ErrRequestConflict        = fmt.Errorf("%w: request idempotency conflict", ErrIdempotencyConflict)
 	ErrExpired                = errors.New("artifact expired")
+	ErrUploadExpired          = fmt.Errorf("%w: upload session expired", ErrExpired)
+	ErrArtifactExpired        = fmt.Errorf("%w: completed artifact expired", ErrExpired)
 	ErrInvalidTransition      = errors.New("invalid artifact transition")
 	ErrDisallowedPath         = errors.New("artifact path is outside the configured root")
 	ErrAlreadyCompleted       = errors.New("upload is already completed")
@@ -44,6 +46,7 @@ type Store struct {
 	nextUploadID   int
 	nextArtifactID int
 	contentReads   int
+	artifactTTL    time.Duration
 	uploads        map[string]*uploadRecord
 	artifacts      map[string]*artifactRecord
 	idempotency    map[string]idempotentRecord
@@ -172,6 +175,7 @@ func NewStore(root string) (*Store, error) {
 func (s *Store) HealthDetails() map[string]any {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
+	availableArtifacts, expiredArtifacts := s.artifactCountsLocked()
 	uploadsByState := map[string]int{
 		string(contracts.ArtifactUploadCreated):   0,
 		string(contracts.ArtifactUploadReceived):  0,
@@ -185,8 +189,9 @@ func (s *Store) HealthDetails() map[string]any {
 	return map[string]any{
 		"store_backend":      backendLabel(s.snapshotPath),
 		"content_backend":    "local_fs",
-		"artifact_count":     len(s.artifacts),
-		"registration_count": len(s.artifacts),
+		"artifact_count":     availableArtifacts,
+		"expired_artifacts":  expiredArtifacts,
+		"registration_count": availableArtifacts,
 		"upload_count":       len(s.uploads),
 		"content_read_count": s.contentReads,
 		"uploads_by_state":   uploadsByState,
@@ -198,15 +203,20 @@ func (s *Store) HealthDetails() map[string]any {
 func (s *Store) Metrics() contracts.ComponentMetrics {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
+	availableArtifacts, expiredArtifacts := s.artifactCountsLocked()
 	samples := []contracts.MetricSample{
-		contracts.CountMetric("artifacts_total", len(s.artifacts), nil),
-		contracts.CountMetric("artifact_registrations_total", len(s.artifacts), nil),
+		contracts.CountMetric("artifacts_total", availableArtifacts, nil),
+		contracts.CountMetric("artifact_registrations_total", availableArtifacts, nil),
+		contracts.CountMetric("artifact_expirations_total", expiredArtifacts, nil),
 		contracts.CountMetric("artifact_uploads_total", len(s.uploads), nil),
 		contracts.CountMetric("artifact_idempotency_records_total", len(s.idempotency), nil),
 		contracts.CountMetric("artifact_content_retrievals_total", s.contentReads, nil),
 	}
 	totalBytes := int64(0)
 	for _, rec := range s.artifacts {
+		if s.artifactExpiredLocked(rec) {
+			continue
+		}
 		totalBytes += rec.artifact.Size
 	}
 	samples = append(samples, contracts.GaugeMetric("artifact_bytes_total", float64(totalBytes), "bytes", nil))
@@ -231,6 +241,15 @@ func (s *Store) SetClock(now func() time.Time) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.now = now
+}
+
+func (s *Store) SetArtifactTTL(ttl time.Duration) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if ttl < 0 {
+		ttl = 0
+	}
+	s.artifactTTL = ttl
 }
 
 func (s *Store) CreateUpload(req contracts.CreateArtifactUploadRequest, idempotencyKey string) (contracts.ArtifactUploadSession, bool, error) {
@@ -442,7 +461,8 @@ func (s *Store) CompleteUpload(uploadID string, req contracts.CompleteArtifactUp
 		return contracts.Artifact{}, false, err
 	}
 
-	now := s.formatNow()
+	nowTime := s.now().UTC()
+	now := formatTime(nowTime)
 	artifact := contracts.Artifact{
 		ArtifactID:     artifactID,
 		Name:           rec.session.Name,
@@ -450,6 +470,7 @@ func (s *Store) CompleteUpload(uploadID string, req contracts.CompleteArtifactUp
 		Size:           req.Size,
 		Checksum:       req.Checksum,
 		CreatedAt:      now,
+		ExpiresAt:      s.artifactExpiresAtLocked(nowTime),
 		ProducerRef:    rec.session.ProducerRef,
 		OwnerSubjectID: rec.session.OwnerSubjectID,
 		Metadata:       cloneMap(rec.metadata),
@@ -512,13 +533,15 @@ func (s *Store) RegisterLocalArtifact(req contracts.RegisterLocalArtifactRequest
 	if err := os.WriteFile(blobPath, body, 0o600); err != nil {
 		return contracts.Artifact{}, err
 	}
+	now := s.now().UTC()
 	artifact := contracts.Artifact{
 		ArtifactID:     artifactID,
 		Name:           name,
 		MediaType:      req.MediaType,
 		Size:           int64(len(body)),
 		Checksum:       checksum,
-		CreatedAt:      s.formatNow(),
+		CreatedAt:      formatTime(now),
+		ExpiresAt:      s.artifactExpiresAtLocked(now),
 		ProducerRef:    req.ProducerRef,
 		OwnerSubjectID: req.OwnerSubjectID,
 		Metadata:       cloneMap(req.Metadata),
@@ -543,11 +566,15 @@ func (s *Store) GetUpload(uploadID string) (contracts.ArtifactUploadSession, err
 }
 
 func (s *Store) GetArtifact(artifactID string) (contracts.Artifact, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	rec, ok := s.artifacts[artifactID]
 	if !ok {
 		return contracts.Artifact{}, ErrNotFound
+	}
+	if s.artifactExpiredLocked(rec) {
+		s.expireArtifactContentLocked(rec)
+		return contracts.Artifact{}, ErrArtifactExpired
 	}
 	return cloneArtifact(rec.artifact), nil
 }
@@ -562,7 +589,11 @@ func (s *Store) ListArtifacts(filter ListFilter) []contracts.Artifact {
 	sort.Strings(ids)
 	items := make([]contracts.Artifact, 0, len(ids))
 	for _, id := range ids {
-		artifact := s.artifacts[id].artifact
+		rec := s.artifacts[id]
+		if s.artifactExpiredLocked(rec) {
+			continue
+		}
+		artifact := rec.artifact
 		if filter.ProducerRef != "" && artifact.ProducerRef != filter.ProducerRef {
 			continue
 		}
@@ -581,23 +612,36 @@ func (s *Store) PolicyContext(artifactID string) (contracts.ArtifactPolicyContex
 	if !ok {
 		return contracts.ArtifactPolicyContext{}, ErrNotFound
 	}
+	policyState := "available"
+	if s.artifactExpiredLocked(rec) {
+		policyState = "expired"
+	}
 	return contracts.ArtifactPolicyContext{
 		ResourceKind:   "artifact",
 		ArtifactID:     artifactID,
 		OwnerSubjectID: rec.artifact.OwnerSubjectID,
 		ProducerRef:    rec.artifact.ProducerRef,
-		PolicyState:    "available",
+		PolicyState:    policyState,
 	}, nil
 }
 
 func (s *Store) ReadContent(artifactID string) (ArtifactContent, error) {
-	s.mu.RLock()
+	s.mu.Lock()
 	rec, ok := s.artifacts[artifactID]
-	s.mu.RUnlock()
 	if !ok {
+		s.mu.Unlock()
 		return ArtifactContent{}, ErrNotFound
 	}
-	body, err := os.ReadFile(rec.path)
+	if s.artifactExpiredLocked(rec) {
+		s.expireArtifactContentLocked(rec)
+		s.mu.Unlock()
+		return ArtifactContent{}, ErrArtifactExpired
+	}
+	path := rec.path
+	mediaType := rec.artifact.MediaType
+	digest := rec.digest
+	s.mu.Unlock()
+	body, err := os.ReadFile(path)
 	if err != nil {
 		return ArtifactContent{}, err
 	}
@@ -606,8 +650,8 @@ func (s *Store) ReadContent(artifactID string) (ArtifactContent, error) {
 	s.mu.Unlock()
 	return ArtifactContent{
 		Body:        body,
-		ContentType: rec.artifact.MediaType,
-		Digest:      rec.digest,
+		ContentType: mediaType,
+		Digest:      digest,
 		Size:        int64(len(body)),
 	}, nil
 }
@@ -616,7 +660,7 @@ func (s *Store) requireUploadWritableLocked(rec *uploadRecord) error {
 	s.expireUploadLocked(rec)
 	switch rec.session.State {
 	case contracts.ArtifactUploadExpired:
-		return ErrExpired
+		return ErrUploadExpired
 	case contracts.ArtifactUploadAborted, contracts.ArtifactUploadCompleted:
 		return ErrInvalidTransition
 	default:
@@ -635,6 +679,43 @@ func (s *Store) expireUploadLocked(rec *uploadRecord) {
 		rec.session.State = contracts.ArtifactUploadExpired
 		rec.session.Links = map[string]any{}
 	}
+}
+
+func (s *Store) artifactCountsLocked() (available int, expired int) {
+	for _, rec := range s.artifacts {
+		if s.artifactExpiredLocked(rec) {
+			expired++
+			continue
+		}
+		available++
+	}
+	return available, expired
+}
+
+func (s *Store) artifactExpiresAtLocked(createdAt time.Time) string {
+	if s.artifactTTL <= 0 {
+		return ""
+	}
+	return formatTime(createdAt.UTC().Add(s.artifactTTL))
+}
+
+func (s *Store) artifactExpiredLocked(rec *artifactRecord) bool {
+	if rec == nil || rec.artifact.ExpiresAt == "" {
+		return false
+	}
+	expiresAt, err := time.Parse(time.RFC3339, rec.artifact.ExpiresAt)
+	if err != nil {
+		return true
+	}
+	return !s.now().UTC().Before(expiresAt)
+}
+
+func (s *Store) expireArtifactContentLocked(rec *artifactRecord) {
+	if rec == nil || rec.path == "" {
+		return
+	}
+	_ = os.Remove(rec.path)
+	rec.artifact.Links = map[string]any{}
 }
 
 func (s *Store) checkIdempotencyLocked(operation, key, fp string) (idempotentRecord, bool, error) {

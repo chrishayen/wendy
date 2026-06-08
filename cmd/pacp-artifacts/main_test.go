@@ -3,6 +3,7 @@ package main
 import (
 	"net/http"
 	"testing"
+	"time"
 
 	"pacp/internal/routeauth"
 	"pacp/internal/transportauth"
@@ -44,6 +45,28 @@ func TestArtifactsAuthorizationHeaderNormalizesRawTokens(t *testing.T) {
 	}
 	if got := authorizationHeader(""); got != "" {
 		t.Fatalf("empty header = %q", got)
+	}
+}
+
+func TestOptionalDurationParsesArtifactTTL(t *testing.T) {
+	duration, err := optionalDuration("24h")
+	if err != nil {
+		t.Fatalf("parse duration: %v", err)
+	}
+	if duration != 24*time.Hour {
+		t.Fatalf("duration = %s", duration)
+	}
+
+	duration, err = optionalDuration("")
+	if err != nil {
+		t.Fatalf("parse empty duration: %v", err)
+	}
+	if duration != 0 {
+		t.Fatalf("empty duration = %s", duration)
+	}
+
+	if _, err := optionalDuration("-1s"); err == nil {
+		t.Fatalf("expected negative duration validation error, got %v", err)
 	}
 }
 

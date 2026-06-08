@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strconv"
 	"testing"
 	"time"
 
@@ -101,6 +102,88 @@ func TestStoreUploadCompleteAndReadArtifact(t *testing.T) {
 	}
 	if context.OwnerSubjectID != "sub_agent" || context.ProducerRef != "job_1" {
 		t.Fatalf("policy context = %#v", context)
+	}
+}
+
+func TestStoreExpiresArtifactsByRetentionPolicy(t *testing.T) {
+	store := newTestStore(t)
+	now := time.Date(2026, 6, 7, 12, 0, 0, 0, time.UTC)
+	store.SetClock(func() time.Time { return now })
+	store.SetArtifactTTL(time.Minute)
+
+	body := []byte("retained bytes")
+	checksum, digest := checksumAndDigest(body)
+	size := int64(len(body))
+	session, _, err := store.CreateUpload(contracts.CreateArtifactUploadRequest{
+		Name:             "retained.txt",
+		MediaType:        "text/plain",
+		ProducerRef:      "job_retained",
+		OwnerSubjectID:   "sub_agent",
+		ExpectedSize:     &size,
+		ExpectedChecksum: checksum,
+	}, "create-retained")
+	if err != nil {
+		t.Fatalf("create upload: %v", err)
+	}
+	if _, err := store.PutContent(session.UploadID, ContentUpload{
+		Body:          body,
+		ContentType:   "text/plain",
+		ContentLength: strconv.FormatInt(size, 10),
+		Digest:        digest,
+	}, "content-retained"); err != nil {
+		t.Fatalf("put content: %v", err)
+	}
+	artifact, _, err := store.CompleteUpload(session.UploadID, contracts.CompleteArtifactUploadRequest{
+		Checksum: checksum,
+		Size:     size,
+	}, "complete-retained")
+	if err != nil {
+		t.Fatalf("complete upload: %v", err)
+	}
+	if artifact.ExpiresAt != now.Add(time.Minute).Format(time.RFC3339) {
+		t.Fatalf("expires_at = %q", artifact.ExpiresAt)
+	}
+
+	beforeExpiry, err := store.GetArtifact(artifact.ArtifactID)
+	if err != nil {
+		t.Fatalf("get before expiry: %v", err)
+	}
+	if beforeExpiry.ArtifactID != artifact.ArtifactID {
+		t.Fatalf("before expiry = %#v", beforeExpiry)
+	}
+	if list := store.ListArtifacts(ListFilter{ProducerRef: "job_retained"}); len(list) != 1 {
+		t.Fatalf("list before expiry = %#v", list)
+	}
+	context, err := store.PolicyContext(artifact.ArtifactID)
+	if err != nil {
+		t.Fatalf("policy context before expiry: %v", err)
+	}
+	if context.PolicyState != "available" {
+		t.Fatalf("policy context before expiry = %#v", context)
+	}
+
+	blobPath := store.artifacts[artifact.ArtifactID].path
+	now = now.Add(time.Minute + time.Second)
+	_, err = store.GetArtifact(artifact.ArtifactID)
+	if !errors.Is(err, ErrArtifactExpired) || !errors.Is(err, ErrExpired) {
+		t.Fatalf("expected expired artifact metadata, got %v", err)
+	}
+	if list := store.ListArtifacts(ListFilter{ProducerRef: "job_retained"}); len(list) != 0 {
+		t.Fatalf("list after expiry = %#v", list)
+	}
+	context, err = store.PolicyContext(artifact.ArtifactID)
+	if err != nil {
+		t.Fatalf("policy context after expiry: %v", err)
+	}
+	if context.PolicyState != "expired" {
+		t.Fatalf("policy context after expiry = %#v", context)
+	}
+	_, err = store.ReadContent(artifact.ArtifactID)
+	if !errors.Is(err, ErrArtifactExpired) {
+		t.Fatalf("expected expired artifact content, got %v", err)
+	}
+	if _, err := os.Stat(blobPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("expected expired artifact blob cleanup, stat err=%v", err)
 	}
 }
 
@@ -205,6 +288,9 @@ func TestStoreRegisterLocalArtifactUsesPathGuard(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new store: %v", err)
 	}
+	now := time.Date(2026, 6, 7, 12, 0, 0, 0, time.UTC)
+	store.SetClock(func() time.Time { return now })
+	store.SetArtifactTTL(time.Hour)
 	localPath := filepath.Join(root, "provider-output.txt")
 	if err := os.WriteFile(localPath, []byte("local artifact"), 0o600); err != nil {
 		t.Fatalf("write local file: %v", err)
@@ -220,6 +306,9 @@ func TestStoreRegisterLocalArtifactUsesPathGuard(t *testing.T) {
 	}
 	if artifact.ArtifactID == "" || artifact.Name != "provider-output.txt" {
 		t.Fatalf("local artifact = %#v", artifact)
+	}
+	if artifact.ExpiresAt != now.Add(time.Hour).Format(time.RFC3339) {
+		t.Fatalf("local artifact expires_at = %q", artifact.ExpiresAt)
 	}
 
 	outside := filepath.Join(t.TempDir(), "outside.txt")
@@ -335,7 +424,7 @@ func validContentUpload(body []byte, mediaType string) ContentUpload {
 	return ContentUpload{
 		Body:          body,
 		ContentType:   mediaType,
-		ContentLength: "4",
+		ContentLength: strconv.FormatInt(int64(len(body)), 10),
 		Digest:        digest,
 	}
 }

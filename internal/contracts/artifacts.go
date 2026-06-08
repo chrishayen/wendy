@@ -48,6 +48,7 @@ type Artifact struct {
 	Size           int64          `json:"size"`
 	Checksum       string         `json:"checksum"`
 	CreatedAt      string         `json:"created_at"`
+	ExpiresAt      string         `json:"expires_at,omitempty"`
 	ProducerRef    string         `json:"producer_ref,omitempty"`
 	OwnerSubjectID string         `json:"owner_subject_id"`
 	Metadata       map[string]any `json:"metadata,omitempty"`
