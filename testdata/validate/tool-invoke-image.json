@@ -1,0 +1,10 @@
+{
+  "input": {
+    "prompt": "a small red mug on a desk",
+    "width": 512,
+    "height": 512,
+    "seed": 1
+  },
+  "preferred_mode": "async",
+  "dry_run": true
+}

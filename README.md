@@ -9,6 +9,8 @@ Contract simulation data is kept as test input, not as product behavior.
 
 - `internal/contracts`: shared public API types, envelopes, and validation
   helpers.
+- `cmd/pacp-validate`: local contract validation CLI for provider manifests and
+  provider/tool invocation payloads.
 - `internal/provider`: provider SDK helpers for manifest, health, metrics, invoke,
   simple schema validation, provider response envelopes, and sync,
   async-style, and artifact-producing handler helpers.
@@ -107,6 +109,9 @@ Contract simulation data is kept as test input, not as product behavior.
 
 ```sh
 go test ./...
+go run ./cmd/pacp-validate manifest testdata/manifests/s003-comfyui-gpu.json
+go run ./cmd/pacp-validate provider-invoke -manifest testdata/manifests/s003-comfyui-gpu.json -capability cap_image_generate_gpu testdata/validate/provider-invoke-image.json
+go run ./cmd/pacp-validate tool-invoke -manifest testdata/manifests/s003-comfyui-gpu.json -capability cap_image_generate_gpu testdata/validate/tool-invoke-image.json
 go run ./cmd/pacp-contract-smoke
 go run ./cmd/pacp-contract-smoke -openapi openapi/public-gateway.v1.yaml,openapi/component-services.v1.yaml
 go run ./cmd/pacp-contract-smoke -fake-public-apis
