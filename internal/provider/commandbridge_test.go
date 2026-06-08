@@ -121,6 +121,30 @@ func TestCommandBridgeReportsCommandFailure(t *testing.T) {
 	}
 }
 
+func TestCommandBridgePreservesCommandErrorEnvelope(t *testing.T) {
+	server, err := NewCommandBridgeServer(bridgeManifest(), CommandBridgeConfig{
+		Routes: map[string]CommandBridgeRoute{
+			"cap_bridge_echo": {
+				Command: helperCommand(t, "error-envelope"),
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("new command bridge: %v", err)
+	}
+	rec := invokeBridge(t, server, contracts.ProviderInvokeRequest{Input: map[string]any{"message": "hello"}})
+	if rec.Code != http.StatusGatewayTimeout {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var envelope contracts.ErrorEnvelope
+	if err := json.NewDecoder(rec.Body).Decode(&envelope); err != nil {
+		t.Fatalf("decode error envelope: %v", err)
+	}
+	if envelope.Error.Code != "provider_timeout" || envelope.Error.Message != "command timed out" || !envelope.Error.Retryable {
+		t.Fatalf("error = %#v", envelope.Error)
+	}
+}
+
 func TestCommandBridgeReturnsTimeoutForExpiredContext(t *testing.T) {
 	handler := commandBridgeHandler(CommandBridgeRoute{Command: helperCommand(t, "echo")})
 	ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
@@ -188,6 +212,18 @@ func TestCommandBridgeHelperProcess(t *testing.T) {
 	case "fail":
 		_, _ = os.Stderr.WriteString("command failed")
 		os.Exit(3)
+	case "error-envelope":
+		_ = json.NewEncoder(os.Stdout).Encode(contracts.ErrorEnvelope{
+			OK: false,
+			Error: contracts.ErrorObject{
+				Code:      "provider_timeout",
+				Message:   "command timed out",
+				Retryable: true,
+			},
+			Links: map[string]any{},
+			Meta:  map[string]string{"request_id": "req_command_error", "schema_version": "v1"},
+		})
+		os.Exit(0)
 	default:
 		_, _ = os.Stderr.WriteString("unknown helper mode")
 		os.Exit(4)

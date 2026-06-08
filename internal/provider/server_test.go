@@ -122,6 +122,28 @@ func TestServerMapsHandlerTimeoutError(t *testing.T) {
 	}
 }
 
+func TestServerPreservesStructuredInvokeError(t *testing.T) {
+	server, err := NewServer(testManifest(), map[string]CapabilityHandler{
+		"cap_echo": func(ctx context.Context, req contracts.ProviderInvokeRequest) (contracts.ProviderInvokeResponse, error) {
+			return contracts.ProviderInvokeResponse{}, InvokeError{ErrorObject: contracts.ErrorObject{
+				Code:      "validation_failed",
+				Message:   "backend input was invalid",
+				Retryable: false,
+			}}
+		},
+	})
+	if err != nil {
+		t.Fatalf("new provider: %v", err)
+	}
+	envelope := doJSONEnvelope(t, server, http.MethodPost, "/v1/provider/capabilities/cap_echo/invoke", map[string]any{
+		"input": map[string]any{"message": "hello"},
+	}, http.StatusBadRequest)
+	errObj := envelope["error"].(map[string]any)
+	if errObj["code"] != "validation_failed" || errObj["message"] != "backend input was invalid" || errObj["retryable"] != false {
+		t.Fatalf("error = %#v", errObj)
+	}
+}
+
 func newTestProvider(t *testing.T) *Server {
 	t.Helper()
 	server, err := NewServer(testManifest(), map[string]CapabilityHandler{

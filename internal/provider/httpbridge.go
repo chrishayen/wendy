@@ -21,6 +21,21 @@ var (
 	ErrTimeout = errors.New("provider timeout")
 )
 
+type InvokeError struct {
+	contracts.ErrorObject
+	StatusCode int
+}
+
+func (e InvokeError) Error() string {
+	if e.Message != "" {
+		return e.Message
+	}
+	if e.Code != "" {
+		return e.Code
+	}
+	return "provider invocation failed"
+}
+
 type HTTPBridgeConfig struct {
 	Routes map[string]HTTPBridgeRoute `json:"routes"`
 	Client *http.Client               `json:"-"`
@@ -128,6 +143,9 @@ func httpBridgeHandler(client *http.Client, route HTTPBridgeRoute) CapabilityHan
 		defer resp.Body.Close()
 		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 			body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+			if errObj, ok := decodeHTTPBridgeErrorEnvelope(body); ok {
+				return contracts.ProviderInvokeResponse{}, InvokeError{ErrorObject: errObj, StatusCode: resp.StatusCode}
+			}
 			return contracts.ProviderInvokeResponse{}, fmt.Errorf("%w: HTTP %d: %s", ErrBackend, resp.StatusCode, strings.TrimSpace(string(body)))
 		}
 		return decodeHTTPBridgeResponse(resp.Body)
@@ -146,11 +164,10 @@ func decodeHTTPBridgeResponse(body io.Reader) (contracts.ProviderInvokeResponse,
 	}
 	if err := json.Unmarshal(data, &envelope); err == nil && envelope.OK != nil {
 		if !*envelope.OK {
-			message := "backend returned error envelope"
-			if envelope.Error != nil && envelope.Error.Message != "" {
-				message = envelope.Error.Message
+			if envelope.Error != nil {
+				return contracts.ProviderInvokeResponse{}, InvokeError{ErrorObject: *envelope.Error}
 			}
-			return contracts.ProviderInvokeResponse{}, fmt.Errorf("%w: %s", ErrBackend, message)
+			return contracts.ProviderInvokeResponse{}, fmt.Errorf("%w: backend returned error envelope", ErrBackend)
 		}
 		var out contracts.ProviderInvokeResponse
 		if err := json.Unmarshal(envelope.Data, &out); err != nil {
@@ -163,4 +180,15 @@ func decodeHTTPBridgeResponse(body io.Reader) (contracts.ProviderInvokeResponse,
 		return contracts.ProviderInvokeResponse{}, err
 	}
 	return out, nil
+}
+
+func decodeHTTPBridgeErrorEnvelope(data []byte) (contracts.ErrorObject, bool) {
+	var envelope struct {
+		OK    *bool                  `json:"ok"`
+		Error *contracts.ErrorObject `json:"error"`
+	}
+	if err := json.Unmarshal(data, &envelope); err != nil || envelope.OK == nil || *envelope.OK || envelope.Error == nil {
+		return contracts.ErrorObject{}, false
+	}
+	return *envelope.Error, true
 }

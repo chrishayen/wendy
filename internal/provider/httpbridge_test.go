@@ -137,6 +137,35 @@ func TestHTTPBridgeDecodesDirectProviderResponse(t *testing.T) {
 	}
 }
 
+func TestHTTPBridgePreservesBackendErrorEnvelope(t *testing.T) {
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeError(w, r, http.StatusGatewayTimeout, "provider_timeout", "backend timed out", true)
+	}))
+	defer backend.Close()
+
+	server, err := NewHTTPBridgeServer(bridgeManifest(), HTTPBridgeConfig{
+		Routes: map[string]HTTPBridgeRoute{
+			"cap_bridge_echo": {URL: backend.URL},
+		},
+		Client: backend.Client(),
+	})
+	if err != nil {
+		t.Fatalf("new bridge: %v", err)
+	}
+
+	rec := invokeBridge(t, server, contracts.ProviderInvokeRequest{Input: map[string]any{"message": "hello"}})
+	if rec.Code != http.StatusGatewayTimeout {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var envelope contracts.ErrorEnvelope
+	if err := json.NewDecoder(rec.Body).Decode(&envelope); err != nil {
+		t.Fatalf("decode error envelope: %v", err)
+	}
+	if envelope.Error.Code != "provider_timeout" || envelope.Error.Message != "backend timed out" || !envelope.Error.Retryable {
+		t.Fatalf("error = %#v", envelope.Error)
+	}
+}
+
 func TestHTTPBridgeReturnsTimeoutForExpiredContext(t *testing.T) {
 	handler := httpBridgeHandler(&http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
 		return nil, req.Context().Err()

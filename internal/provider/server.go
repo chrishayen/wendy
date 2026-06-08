@@ -114,6 +114,24 @@ func (s *Server) invoke(w http.ResponseWriter, r *http.Request, capabilityID str
 			writeError(w, r, http.StatusNotFound, "not_found", err.Error(), false)
 			return
 		}
+		var invokeErr InvokeError
+		if errors.As(err, &invokeErr) {
+			code := invokeErr.Code
+			if code == "" {
+				code = "provider_unavailable"
+			}
+			message := invokeErr.Message
+			if message == "" {
+				message = invokeErr.Error()
+			}
+			status := invokeErr.StatusCode
+			if status == 0 {
+				status = statusForProviderErrorCode(code)
+			}
+			record("error", code)
+			writeError(w, r, status, code, message, invokeErr.Retryable)
+			return
+		}
 		if errors.Is(err, ErrTimeout) {
 			record("error", "provider_timeout")
 			writeError(w, r, http.StatusGatewayTimeout, "provider_timeout", "provider invocation timed out", true)
@@ -130,6 +148,21 @@ func (s *Server) invoke(w http.ResponseWriter, r *http.Request, capabilityID str
 	}
 	record("success", "")
 	writeSuccess(w, r, http.StatusOK, response)
+}
+
+func statusForProviderErrorCode(code string) int {
+	switch code {
+	case "validation_failed":
+		return http.StatusBadRequest
+	case "not_found":
+		return http.StatusNotFound
+	case "provider_timeout":
+		return http.StatusGatewayTimeout
+	case "provider_unavailable":
+		return http.StatusServiceUnavailable
+	default:
+		return http.StatusInternalServerError
+	}
 }
 
 func (s *Server) capability(capabilityID string) (contracts.Capability, bool) {
