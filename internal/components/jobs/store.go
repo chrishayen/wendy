@@ -22,7 +22,7 @@ var (
 	ErrClaimConflict       = errors.New("job is claimed by another worker")
 	ErrClaimExpired        = errors.New("job claim expired")
 	ErrInvalidTransition   = errors.New("invalid job state transition")
-	ErrCancellationClosed  = errors.New("running cancellation is not defined for S003")
+	ErrCancellationClosed  = errors.New("job cancellation is only available while queued")
 	ErrTerminalState       = errors.New("job is terminal")
 	ErrInvalidCursor       = errors.New("invalid cursor")
 )

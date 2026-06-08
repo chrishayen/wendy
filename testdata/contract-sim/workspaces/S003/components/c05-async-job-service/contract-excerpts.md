@@ -1616,7 +1616,7 @@ HTTP status: `400`.
   "ok": false,
   "error": {
     "code": "validation_failed",
-    "message": "running cancellation is not defined for S003",
+    "message": "job cancellation is only available while queued",
     "retryable": false
   },
   "links": {},

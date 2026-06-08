@@ -1463,7 +1463,7 @@
         "status": 400,
         "body": {
           "ok": false,
-          "error": {"code": "validation_failed", "message": "running cancellation is not defined for S003", "retryable": false},
+          "error": {"code": "validation_failed", "message": "job cancellation is only available while queued", "retryable": false},
           "links": {},
           "meta": {"request_id": "req_s003_job_cancel_running_conflict", "schema_version": "v1"}
         }
