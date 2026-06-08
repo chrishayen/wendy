@@ -179,6 +179,8 @@ func Run(ctx context.Context) DistributedSmokeReport {
 	}))
 	defer artifactsHTTP.Close()
 
+	checkRouteAuthScopeSeparation(ctx, client, catalogHTTP.URL, leasesHTTP.URL, runnerToken, componentToken, capability, &report)
+
 	nodeStore, err := node.NewStore(contracts.NodeConfig{
 		NodeID: nodeID,
 		Resources: []contracts.NodeResource{{
@@ -292,6 +294,36 @@ func checkLeaseReleaseAudit(store *leases.Store, runnerID, jobID string, report 
 		return
 	}
 	report.add(DistributedSmokeCheck{Name: "leases.release_audit", OK: true})
+}
+
+func checkRouteAuthScopeSeparation(ctx context.Context, client *http.Client, catalogURL, leasesURL, runnerToken, componentToken, capabilityID string, report *DistributedSmokeReport) {
+	status, err := requestJSON(ctx, client, http.MethodGet, joinURLPath(catalogURL, "/v1/catalog/capabilities/"+url.PathEscape(capabilityID)+"/route"), nil, map[string]string{"Authorization": "Bearer " + runnerToken}, nil)
+	check := DistributedSmokeCheck{Name: "auth.worker_forbidden_component_route", HTTPStatus: status}
+	if err != nil {
+		check.Error = err.Error()
+		report.add(check)
+	} else if status != http.StatusForbidden {
+		check.Error = fmt.Sprintf("HTTP %d", status)
+		report.add(check)
+	} else {
+		check.OK = true
+		report.add(check)
+	}
+
+	status, err = requestJSON(ctx, client, http.MethodPost, joinURLPath(leasesURL, "/v1/leases/lease_auth_negative/heartbeat"), contracts.LeaseHeartbeatRequest{HolderID: "auth_negative"}, map[string]string{"Authorization": "Bearer " + componentToken}, nil)
+	check = DistributedSmokeCheck{Name: "auth.component_forbidden_worker_route", HTTPStatus: status}
+	if err != nil {
+		check.Error = err.Error()
+		report.add(check)
+		return
+	}
+	if status != http.StatusForbidden {
+		check.Error = fmt.Sprintf("HTTP %d", status)
+		report.add(check)
+		return
+	}
+	check.OK = true
+	report.add(check)
 }
 
 func checkArtifactMetadata(ctx context.Context, client *http.Client, artifactsURL, componentToken, artifactID, jobID, ownerSubjectID, capabilityID string, report *DistributedSmokeReport) {

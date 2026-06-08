@@ -18,6 +18,8 @@ func TestRunDistributedSmokePassesPrimaryPlusNodeFlow(t *testing.T) {
 		t.Fatalf("report missing job or artifact id: %#v", report)
 	}
 	for _, name := range []string{
+		"auth.worker_forbidden_component_route",
+		"auth.component_forbidden_worker_route",
 		"gateway.invoke",
 		"runner.run_once",
 		"jobs.succeeded",
