@@ -185,6 +185,7 @@ func (s *Store) HealthDetails() map[string]any {
 		"store_backend":      backendLabel(s.snapshotPath),
 		"content_backend":    "local_fs",
 		"artifact_count":     len(s.artifacts),
+		"registration_count": len(s.artifacts),
 		"upload_count":       len(s.uploads),
 		"content_read_count": s.contentReads,
 		"uploads_by_state":   uploadsByState,
@@ -198,6 +199,7 @@ func (s *Store) Metrics() contracts.ComponentMetrics {
 	defer s.mu.RUnlock()
 	samples := []contracts.MetricSample{
 		contracts.CountMetric("artifacts_total", len(s.artifacts), nil),
+		contracts.CountMetric("artifact_registrations_total", len(s.artifacts), nil),
 		contracts.CountMetric("artifact_uploads_total", len(s.uploads), nil),
 		contracts.CountMetric("artifact_idempotency_records_total", len(s.idempotency), nil),
 		contracts.CountMetric("artifact_content_retrievals_total", s.contentReads, nil),
