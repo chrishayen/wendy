@@ -15,15 +15,17 @@ import (
 )
 
 type CommandBridgeConfig struct {
-	Routes map[string]CommandBridgeRoute `json:"routes"`
+	Routes         map[string]CommandBridgeRoute `json:"routes"`
+	SecretResolver SecretResolver                `json:"-"`
 }
 
 type CommandBridgeRoute struct {
-	Command            []string          `json:"command"`
-	WorkingDirectory   string            `json:"working_directory,omitempty"`
-	Environment        map[string]string `json:"environment,omitempty"`
-	EnvironmentFromEnv map[string]string `json:"environment_from_env,omitempty"`
-	TimeoutSeconds     int               `json:"timeout_seconds,omitempty"`
+	Command               []string          `json:"command"`
+	WorkingDirectory      string            `json:"working_directory,omitempty"`
+	Environment           map[string]string `json:"environment,omitempty"`
+	EnvironmentFromEnv    map[string]string `json:"environment_from_env,omitempty"`
+	EnvironmentFromSecret map[string]string `json:"environment_from_secret,omitempty"`
+	TimeoutSeconds        int               `json:"timeout_seconds,omitempty"`
 }
 
 func NewCommandBridgeServer(manifest contracts.ProviderManifest, cfg CommandBridgeConfig) (*Server, error) {
@@ -33,7 +35,7 @@ func NewCommandBridgeServer(manifest contracts.ProviderManifest, cfg CommandBrid
 		if !ok {
 			return nil, fmt.Errorf("%w: route missing for capability %s", ErrValidation, capability.ID)
 		}
-		normalized, err := normalizeCommandBridgeRoute(route)
+		normalized, err := normalizeCommandBridgeRoute(context.Background(), route, cfg.SecretResolver)
 		if err != nil {
 			return nil, fmt.Errorf("%w: route %s: %s", ErrValidation, capability.ID, err)
 		}
@@ -42,7 +44,7 @@ func NewCommandBridgeServer(manifest contracts.ProviderManifest, cfg CommandBrid
 	return NewServer(manifest, handlers)
 }
 
-func normalizeCommandBridgeRoute(route CommandBridgeRoute) (CommandBridgeRoute, error) {
+func normalizeCommandBridgeRoute(ctx context.Context, route CommandBridgeRoute, secretResolver SecretResolver) (CommandBridgeRoute, error) {
 	if len(route.Command) == 0 {
 		return CommandBridgeRoute{}, errors.New("command is required")
 	}
@@ -66,6 +68,9 @@ func normalizeCommandBridgeRoute(route CommandBridgeRoute) (CommandBridgeRoute, 
 			return CommandBridgeRoute{}, fmt.Errorf("environment variable %s is not set", envName)
 		}
 		route.Environment[name] = value
+	}
+	if err := resolveSecretMap(ctx, secretResolver, "environment_from_secret", route.Environment, route.EnvironmentFromSecret); err != nil {
+		return CommandBridgeRoute{}, err
 	}
 	return route, nil
 }

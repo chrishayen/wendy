@@ -21,6 +21,9 @@ func main() {
 	manifestPath := flag.String("manifest", "", "provider manifest JSON path")
 	routesPath := flag.String("routes", "", "command route config JSON path")
 	endpoint := flag.String("endpoint", "", "provider endpoint advertised in the manifest")
+	policyURL := flag.String("policy-url", os.Getenv("PACP_PROVIDER_POLICY_URL"), "optional policy service base URL used to resolve route secret refs")
+	policyCredential := flag.String("policy-credential", envFirst("PACP_PROVIDER_POLICY_CREDENTIAL", "PACP_COMPONENT_TOKEN"), "optional policy service bearer credential used to resolve route secret refs")
+	secretSubjectID := flag.String("secret-subject-id", os.Getenv("PACP_PROVIDER_SECRET_SUBJECT_ID"), "optional policy subject id used to resolve route secret refs")
 	flag.Parse()
 	if *manifestPath == "" {
 		log.Fatal("-manifest is required")
@@ -46,7 +49,10 @@ func main() {
 	if err := loadJSONFile(*routesPath, &routeConfig); err != nil {
 		log.Fatal(err)
 	}
-	server, err := provider.NewCommandBridgeServer(manifest, provider.CommandBridgeConfig{Routes: routeConfig.Routes})
+	server, err := provider.NewCommandBridgeServer(manifest, provider.CommandBridgeConfig{
+		Routes:         routeConfig.Routes,
+		SecretResolver: secretResolver(*policyURL, *policyCredential, *secretSubjectID),
+	})
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -69,4 +75,35 @@ func defaultEndpoint(addr string) string {
 		addr = "localhost" + addr
 	}
 	return "http://" + addr
+}
+
+func secretResolver(policyURL, credential, subjectID string) provider.SecretResolver {
+	if policyURL == "" && subjectID == "" {
+		return nil
+	}
+	return provider.PolicySecretResolver{
+		PolicyURL:  policyURL,
+		Credential: authorizationHeader(credential),
+		SubjectID:  subjectID,
+	}
+}
+
+func authorizationHeader(token string) string {
+	token = strings.TrimSpace(token)
+	if token == "" {
+		return ""
+	}
+	if strings.HasPrefix(strings.ToLower(token), "bearer ") {
+		return token
+	}
+	return "Bearer " + token
+}
+
+func envFirst(names ...string) string {
+	for _, name := range names {
+		if value := os.Getenv(name); value != "" {
+			return value
+		}
+	}
+	return ""
 }

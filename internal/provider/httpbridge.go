@@ -37,16 +37,18 @@ func (e InvokeError) Error() string {
 }
 
 type HTTPBridgeConfig struct {
-	Routes map[string]HTTPBridgeRoute `json:"routes"`
-	Client *http.Client               `json:"-"`
+	Routes         map[string]HTTPBridgeRoute `json:"routes"`
+	Client         *http.Client               `json:"-"`
+	SecretResolver SecretResolver             `json:"-"`
 }
 
 type HTTPBridgeRoute struct {
-	URL            string            `json:"url"`
-	Method         string            `json:"method,omitempty"`
-	Headers        map[string]string `json:"headers,omitempty"`
-	HeadersFromEnv map[string]string `json:"headers_from_env,omitempty"`
-	TimeoutSeconds int               `json:"timeout_seconds,omitempty"`
+	URL               string            `json:"url"`
+	Method            string            `json:"method,omitempty"`
+	Headers           map[string]string `json:"headers,omitempty"`
+	HeadersFromEnv    map[string]string `json:"headers_from_env,omitempty"`
+	HeadersFromSecret map[string]string `json:"headers_from_secret,omitempty"`
+	TimeoutSeconds    int               `json:"timeout_seconds,omitempty"`
 }
 
 func NewHTTPBridgeServer(manifest contracts.ProviderManifest, cfg HTTPBridgeConfig) (*Server, error) {
@@ -60,7 +62,7 @@ func NewHTTPBridgeServer(manifest contracts.ProviderManifest, cfg HTTPBridgeConf
 		if !ok {
 			return nil, fmt.Errorf("%w: route missing for capability %s", ErrValidation, capability.ID)
 		}
-		normalized, err := normalizeHTTPBridgeRoute(route)
+		normalized, err := normalizeHTTPBridgeRoute(context.Background(), route, cfg.SecretResolver)
 		if err != nil {
 			return nil, fmt.Errorf("%w: route %s: %s", ErrValidation, capability.ID, err)
 		}
@@ -69,7 +71,7 @@ func NewHTTPBridgeServer(manifest contracts.ProviderManifest, cfg HTTPBridgeConf
 	return NewServer(manifest, handlers)
 }
 
-func normalizeHTTPBridgeRoute(route HTTPBridgeRoute) (HTTPBridgeRoute, error) {
+func normalizeHTTPBridgeRoute(ctx context.Context, route HTTPBridgeRoute, secretResolver SecretResolver) (HTTPBridgeRoute, error) {
 	if route.URL == "" {
 		return HTTPBridgeRoute{}, errors.New("url is required")
 	}
@@ -106,6 +108,9 @@ func normalizeHTTPBridgeRoute(route HTTPBridgeRoute) (HTTPBridgeRoute, error) {
 			return HTTPBridgeRoute{}, fmt.Errorf("environment variable %s is not set", envName)
 		}
 		route.Headers[header] = value
+	}
+	if err := resolveSecretMap(ctx, secretResolver, "headers_from_secret", route.Headers, route.HeadersFromSecret); err != nil {
+		return HTTPBridgeRoute{}, err
 	}
 	return route, nil
 }

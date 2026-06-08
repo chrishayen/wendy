@@ -99,6 +99,50 @@ func TestHTTPBridgeSupportsHeadersFromEnv(t *testing.T) {
 	}
 }
 
+func TestHTTPBridgeSupportsHeadersFromSecret(t *testing.T) {
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer resolved-token" {
+			t.Fatalf("Authorization = %q", r.Header.Get("Authorization"))
+		}
+		writeSuccess(w, r, http.StatusOK, contracts.ProviderInvokeResponse{
+			Output: map[string]any{"message": "secret"},
+		})
+	}))
+	defer backend.Close()
+
+	server, err := NewHTTPBridgeServer(bridgeManifest(), HTTPBridgeConfig{
+		Routes: map[string]HTTPBridgeRoute{
+			"cap_bridge_echo": {
+				URL:               backend.URL,
+				HeadersFromSecret: map[string]string{"Authorization": "secret_backend_token"},
+			},
+		},
+		Client:         backend.Client(),
+		SecretResolver: staticSecretResolver{"secret_backend_token": "Bearer resolved-token"},
+	})
+	if err != nil {
+		t.Fatalf("new bridge: %v", err)
+	}
+	rec := invokeBridge(t, server, contracts.ProviderInvokeRequest{Input: map[string]any{"message": "hello"}})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestHTTPBridgeRejectsSecretHeaderWithoutResolver(t *testing.T) {
+	_, err := NewHTTPBridgeServer(bridgeManifest(), HTTPBridgeConfig{
+		Routes: map[string]HTTPBridgeRoute{
+			"cap_bridge_echo": {
+				URL:               "http://backend.invalid/invoke",
+				HeadersFromSecret: map[string]string{"Authorization": "secret_backend_token"},
+			},
+		},
+	})
+	if err == nil {
+		t.Fatal("expected missing secret resolver error")
+	}
+}
+
 func TestHTTPBridgeRejectsMissingHeaderEnv(t *testing.T) {
 	_, err := NewHTTPBridgeServer(bridgeManifest(), HTTPBridgeConfig{
 		Routes: map[string]HTTPBridgeRoute{
@@ -218,6 +262,16 @@ type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (fn roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
 	return fn(req)
+}
+
+type staticSecretResolver map[string]string
+
+func (r staticSecretResolver) ResolveSecret(ctx context.Context, secretRef string) (string, error) {
+	value, ok := r[secretRef]
+	if !ok {
+		return "", ErrNotFound
+	}
+	return value, nil
 }
 
 func bridgeManifest() contracts.ProviderManifest {

@@ -62,6 +62,29 @@ func TestCommandBridgeSupportsEnvironmentFromEnv(t *testing.T) {
 	}
 }
 
+func TestCommandBridgeSupportsEnvironmentFromSecret(t *testing.T) {
+	server, err := NewCommandBridgeServer(bridgeManifest(), CommandBridgeConfig{
+		Routes: map[string]CommandBridgeRoute{
+			"cap_bridge_echo": {
+				Command:               helperCommand(t, "env"),
+				EnvironmentFromSecret: map[string]string{"BACKEND_TOKEN": "secret_command_token"},
+			},
+		},
+		SecretResolver: staticSecretResolver{"secret_command_token": "secret-env-token"},
+	})
+	if err != nil {
+		t.Fatalf("new command bridge: %v", err)
+	}
+	rec := invokeBridge(t, server, contracts.ProviderInvokeRequest{Input: map[string]any{"message": "hello"}})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	output := commandBridgeOutput(t, rec.Body.Bytes())
+	if output["token"] != "secret-env-token" {
+		t.Fatalf("output = %#v", output)
+	}
+}
+
 func TestCommandBridgeExposesInvokeContextEnvironment(t *testing.T) {
 	t.Setenv("PACP_TEST_COMMAND_TOKEN", "env-token")
 	server, err := NewCommandBridgeServer(bridgeManifest(), CommandBridgeConfig{
@@ -174,6 +197,20 @@ func TestCommandBridgeRejectsMissingEnvSource(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("expected missing env source error")
+	}
+}
+
+func TestCommandBridgeRejectsSecretEnvironmentWithoutResolver(t *testing.T) {
+	_, err := NewCommandBridgeServer(bridgeManifest(), CommandBridgeConfig{
+		Routes: map[string]CommandBridgeRoute{
+			"cap_bridge_echo": {
+				Command:               helperCommand(t, "echo"),
+				EnvironmentFromSecret: map[string]string{"BACKEND_TOKEN": "secret_command_token"},
+			},
+		},
+	})
+	if err == nil {
+		t.Fatal("expected missing secret resolver error")
 	}
 }
 
