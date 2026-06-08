@@ -22,6 +22,9 @@ func TestStoreLifecycleAndAuth(t *testing.T) {
 	if err := store.CheckAuth("bearer token_runner", "node.read"); !errors.Is(err, ErrUnauthorized) {
 		t.Fatalf("expected malformed credential unauthorized, got %v", err)
 	}
+	if _, _, err := store.StartService("svc_comfyui_gpu", ""); !errors.Is(err, ErrMissingIdempotency) {
+		t.Fatalf("expected missing idempotency error, got %v", err)
+	}
 
 	service, err := store.GetService("svc_comfyui_gpu")
 	if err != nil {

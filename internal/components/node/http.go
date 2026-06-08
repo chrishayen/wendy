@@ -124,6 +124,8 @@ func writeStoreError(w http.ResponseWriter, r *http.Request, err error) {
 		writeError(w, r, http.StatusForbidden, "forbidden", "caller is not allowed to perform the node action", false)
 	case errors.Is(err, ErrRuntimeUnavailable):
 		writeError(w, r, http.StatusServiceUnavailable, "provider_unavailable", "runtime adapter is unavailable", true)
+	case errors.Is(err, ErrMissingIdempotency):
+		writeError(w, r, http.StatusBadRequest, "missing_idempotency_key", "Idempotency-Key header is required for node service start", false)
 	case errors.Is(err, ErrIdempotencyConflict):
 		writeError(w, r, http.StatusConflict, "idempotency_conflict", "idempotency key was reused with different node lifecycle content", false)
 	default:

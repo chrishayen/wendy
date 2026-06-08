@@ -170,6 +170,10 @@ Node resource declarations can be converted into lease resource seed files:
 go run ./cmd/pacp-node -config testdata/node/linux-gpu-fake.json -export-lease-resources
 ```
 
+Node service start is a side-effecting operation and requires an
+`Idempotency-Key`; `pacp-admin node start` and the runner set this header for
+you.
+
 For distributed deployments, set `PACP_COMPONENT_TOKEN` or `-component-token`
 on catalog, jobs, leases, artifacts, and policy services. `pacp-gateway` and
 `pacp-runner` use `PACP_COMPONENT_TOKEN` for downstream component calls unless

@@ -22,6 +22,7 @@ var (
 	ErrUnauthorized        = errors.New("unauthorized")
 	ErrForbidden           = errors.New("forbidden")
 	ErrRuntimeUnavailable  = errors.New("runtime adapter unavailable")
+	ErrMissingIdempotency  = errors.New("missing idempotency key")
 	ErrIdempotencyConflict = errors.New("idempotency conflict")
 )
 
@@ -198,14 +199,15 @@ func (s *Store) GetService(serviceID string) (contracts.NodeService, error) {
 }
 
 func (s *Store) StartService(serviceID, idempotencyKey string) (contracts.NodeService, int, error) {
+	if idempotencyKey == "" {
+		return contracts.NodeService{}, 0, ErrMissingIdempotency
+	}
 	fingerprint := "start:" + serviceID
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if idempotencyKey != "" {
-		if existing, ok := s.idempotency[idempotencyKey]; ok {
-			if existing.fingerprint != fingerprint {
-				return contracts.NodeService{}, 0, ErrIdempotencyConflict
-			}
+	if existing, ok := s.idempotency[idempotencyKey]; ok {
+		if existing.fingerprint != fingerprint {
+			return contracts.NodeService{}, 0, ErrIdempotencyConflict
 		}
 	}
 	rec, ok := s.services[serviceID]
@@ -260,9 +262,7 @@ func (s *Store) StartService(serviceID, idempotencyKey string) (contracts.NodeSe
 	default:
 		return contracts.NodeService{}, 0, ErrRuntimeUnavailable
 	}
-	if idempotencyKey != "" {
-		s.idempotency[idempotencyKey] = idempotentStart{fingerprint: fingerprint, serviceID: serviceID}
-	}
+	s.idempotency[idempotencyKey] = idempotentStart{fingerprint: fingerprint, serviceID: serviceID}
 	return serviceProjection(rec), status, nil
 }
 

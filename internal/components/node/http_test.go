@@ -58,6 +58,17 @@ func TestHandlerRejectsUnauthorizedLifecycle(t *testing.T) {
 	}
 }
 
+func TestHandlerRequiresIdempotencyForStart(t *testing.T) {
+	handler := NewHandler(newTestStore(t))
+	envelope := doJSONEnvelope(t, handler, http.MethodPost, "/v1/node/services/svc_comfyui_gpu/start", map[string]string{
+		"Authorization": "Bearer token_runner",
+	}, http.StatusBadRequest)
+	errObj := envelope["error"].(map[string]any)
+	if errObj["code"] != "missing_idempotency_key" {
+		t.Fatalf("error = %#v", errObj)
+	}
+}
+
 func doJSON(t *testing.T, handler http.Handler, method, path string, headers map[string]string, wantStatus int) map[string]any {
 	t.Helper()
 	envelope := doJSONEnvelope(t, handler, method, path, headers, wantStatus)
