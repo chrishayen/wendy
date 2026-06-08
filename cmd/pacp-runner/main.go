@@ -24,6 +24,7 @@ func main() {
 	nodeURL := flag.String("node-url", os.Getenv("PACP_NODE_URL"), "optional node service base URL")
 	nodeURLsRaw := flag.String("node-urls", os.Getenv("PACP_NODE_URLS"), "optional comma-separated node_id=URL mappings for node-managed services")
 	credential := flag.String("credential", componentCredentialDefault("PACP_RUNNER_CREDENTIAL"), "component credential for downstream calls; defaults to PACP_RUNNER_CREDENTIAL or PACP_COMPONENT_TOKEN")
+	policyCredential := flag.String("policy-credential", componentCredentialDefault("PACP_RUNNER_POLICY_CREDENTIAL"), "component credential for policy service calls; defaults to PACP_RUNNER_POLICY_CREDENTIAL or PACP_COMPONENT_TOKEN")
 	workerSubjectID := flag.String("worker-subject-id", os.Getenv("PACP_RUNNER_SUBJECT_ID"), "optional worker subject id for policy checks; defaults to verifying the runner credential")
 	actorSubjectID := flag.String("actor-subject-id", os.Getenv("PACP_RUNNER_ACTOR_SUBJECT_ID"), "optional actor subject id for lease release audit; defaults to worker subject id")
 	addr := flag.String("addr", "", "optional HTTP listen address for runner health and metrics")
@@ -52,10 +53,11 @@ func main() {
 		NodeStartTimeout:    *nodeStartTimeout,
 		NodePollInterval:    *nodeStartPoll,
 		ComponentCredential: authorizationHeader(*credential),
+		PolicyCredential:    authorizationHeader(*policyCredential),
 		WorkerSubjectID:     *workerSubjectID,
 		ActorSubjectID:      *actorSubjectID,
 	})
-	logger := observability.NewStructuredLogger(os.Stderr, "runner", observability.WithRedactionValues(*credential, *monitorToken))
+	logger := observability.NewStructuredLogger(os.Stderr, "runner", observability.WithRedactionValues(*credential, *policyCredential, *monitorToken))
 	if strings.TrimSpace(*addr) != "" {
 		go func() {
 			ctx := observability.EnsureContextRequestID(context.Background(), "req_runner")

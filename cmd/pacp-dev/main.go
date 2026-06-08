@@ -148,6 +148,7 @@ func runDevStack(ctx context.Context, cfg devConfig) error {
 			ArtifactsURL:        artifactsURL,
 			PolicyURL:           policyURL,
 			ComponentCredential: authorizationHeader(cfg.WorkerToken),
+			PolicyCredential:    authorizationHeader(cfg.ComponentToken),
 			WorkerSubjectID:     "sub_runner_local",
 			ActorSubjectID:      "sub_runner_local",
 		})

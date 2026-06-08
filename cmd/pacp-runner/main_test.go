@@ -19,6 +19,15 @@ func TestRunnerCredentialDefaultFallsBackToComponentToken(t *testing.T) {
 	}
 }
 
+func TestRunnerPolicyCredentialDefaultPrefersPolicyCredential(t *testing.T) {
+	t.Setenv("PACP_RUNNER_POLICY_CREDENTIAL", "runner-policy-token")
+	t.Setenv("PACP_COMPONENT_TOKEN", "component-token")
+
+	if got := componentCredentialDefault("PACP_RUNNER_POLICY_CREDENTIAL"); got != "runner-policy-token" {
+		t.Fatalf("policy credential default = %q", got)
+	}
+}
+
 func TestRunnerAuthorizationHeaderNormalizesRawTokens(t *testing.T) {
 	if got := authorizationHeader("component-token"); got != "Bearer component-token" {
 		t.Fatalf("raw header = %q", got)

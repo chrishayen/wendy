@@ -26,7 +26,9 @@ import (
 	"pacp/internal/components/policy"
 	"pacp/internal/contracts"
 	"pacp/internal/provider"
+	"pacp/internal/routeauth"
 	"pacp/internal/runner"
+	"pacp/internal/transportauth"
 )
 
 type rawSuccessEnvelope struct {
@@ -56,14 +58,16 @@ func Run(ctx context.Context) DistributedSmokeReport {
 	report := DistributedSmokeReport{OK: true}
 	client := &http.Client{Timeout: 5 * time.Second}
 	const (
-		agentToken  = "token_distributed_agent"
-		runnerToken = "token_distributed_runner"
-		agentID     = "sub_distributed_agent"
-		runnerID    = "sub_distributed_runner"
-		nodeID      = "node_linux_gpu"
-		serviceID   = "svc_distributed_gpu"
-		capability  = "cap_distributed_artifact"
-		routeURL    = "http://node_linux_gpu:8188"
+		agentToken     = "token_distributed_agent"
+		componentToken = "token_distributed_component"
+		runnerToken    = "token_distributed_runner"
+		agentID        = "sub_distributed_agent"
+		componentID    = "sub_distributed_component"
+		runnerID       = "sub_distributed_runner"
+		nodeID         = "node_linux_gpu"
+		serviceID      = "svc_distributed_gpu"
+		capability     = "cap_distributed_artifact"
+		routeURL       = "http://node_linux_gpu:8188"
 	)
 
 	var providerInvocations atomic.Int32
@@ -99,12 +103,8 @@ func Run(ctx context.Context) DistributedSmokeReport {
 		report.add(DistributedSmokeCheck{Name: "catalog.seed", Error: err.Error()})
 		return report
 	}
-	catalogHTTP := httptest.NewServer(catalog.NewHandler(catalogStore))
-	defer catalogHTTP.Close()
 
 	jobStore := jobs.NewStore()
-	jobsHTTP := httptest.NewServer(jobs.NewHandler(jobStore))
-	defer jobsHTTP.Close()
 
 	leaseStore := leases.NewStore()
 	if _, err := leaseStore.RegisterResource(contracts.RegisterResourceRequest{
@@ -117,8 +117,6 @@ func Run(ctx context.Context) DistributedSmokeReport {
 		report.add(DistributedSmokeCheck{Name: "leases.seed", Error: err.Error()})
 		return report
 	}
-	leasesHTTP := httptest.NewServer(leases.NewHandler(leaseStore))
-	defer leasesHTTP.Close()
 
 	artifactRoot, err := os.MkdirTemp("", "pacp-distributed-smoke-artifacts-*")
 	if err != nil {
@@ -131,20 +129,55 @@ func Run(ctx context.Context) DistributedSmokeReport {
 		report.add(DistributedSmokeCheck{Name: "artifacts.create", Error: err.Error()})
 		return report
 	}
-	artifactsHTTP := httptest.NewServer(artifacts.NewHandler(artifactStore))
-	defer artifactsHTTP.Close()
 
 	policyStore := policy.NewStore()
 	if _, err := policyStore.CreateAPIKey(contracts.CreateAPIKeyRequest{SubjectID: agentID, Scopes: []string{"agent"}, Token: agentToken}); err != nil {
 		report.add(DistributedSmokeCheck{Name: "policy.seed.agent", Error: err.Error()})
 		return report
 	}
+	if _, err := policyStore.CreateAPIKey(contracts.CreateAPIKeyRequest{SubjectID: componentID, Scopes: []string{"component"}, Token: componentToken}); err != nil {
+		report.add(DistributedSmokeCheck{Name: "policy.seed.component", Error: err.Error()})
+		return report
+	}
 	if _, err := policyStore.CreateAPIKey(contracts.CreateAPIKeyRequest{SubjectID: runnerID, Scopes: []string{"worker"}, Token: runnerToken}); err != nil {
 		report.add(DistributedSmokeCheck{Name: "policy.seed.runner", Error: err.Error()})
 		return report
 	}
-	policyHTTP := httptest.NewServer(policy.NewHandler(policyStore))
+	policyHTTP := httptest.NewServer(transportauth.RequireBearer(policy.NewHandler(policyStore), componentToken))
 	defer policyHTTP.Close()
+	policyCredential := "Bearer " + componentToken
+
+	catalogHTTP := httptest.NewServer(transportauth.RequireVerifiedScopes(catalog.NewHandler(catalogStore), transportauth.ScopeConfig{
+		PolicyURL:        policyHTTP.URL,
+		PolicyCredential: policyCredential,
+		Rules:            routeauth.CatalogScopeRules(),
+		Client:           client,
+	}))
+	defer catalogHTTP.Close()
+
+	jobsHTTP := httptest.NewServer(transportauth.RequireVerifiedScopes(jobs.NewHandler(jobStore), transportauth.ScopeConfig{
+		PolicyURL:        policyHTTP.URL,
+		PolicyCredential: policyCredential,
+		Rules:            routeauth.JobScopeRules(),
+		Client:           client,
+	}))
+	defer jobsHTTP.Close()
+
+	leasesHTTP := httptest.NewServer(transportauth.RequireVerifiedScopes(leases.NewHandler(leaseStore), transportauth.ScopeConfig{
+		PolicyURL:        policyHTTP.URL,
+		PolicyCredential: policyCredential,
+		Rules:            routeauth.LeaseScopeRules(),
+		Client:           client,
+	}))
+	defer leasesHTTP.Close()
+
+	artifactsHTTP := httptest.NewServer(transportauth.RequireVerifiedScopes(artifacts.NewHandler(artifactStore), transportauth.ScopeConfig{
+		PolicyURL:        policyHTTP.URL,
+		PolicyCredential: policyCredential,
+		Rules:            routeauth.ArtifactScopeRules(),
+		Client:           client,
+	}))
+	defer artifactsHTTP.Close()
 
 	nodeStore, err := node.NewStore(contracts.NodeConfig{
 		NodeID: nodeID,
@@ -180,7 +213,7 @@ func Run(ctx context.Context) DistributedSmokeReport {
 		PolicyURL:         policyHTTP.URL,
 		JobsURL:           jobsHTTP.URL,
 		ArtifactsURL:      artifactsHTTP.URL,
-		GatewayCredential: "Bearer " + runnerToken,
+		GatewayCredential: policyCredential,
 		Client:            client,
 	}))
 	defer gatewayHTTP.Close()
@@ -201,6 +234,7 @@ func Run(ctx context.Context) DistributedSmokeReport {
 		NodeStartTimeout:    2 * time.Second,
 		NodePollInterval:    10 * time.Millisecond,
 		ComponentCredential: "Bearer " + runnerToken,
+		PolicyCredential:    policyCredential,
 		ActorSubjectID:      runnerID,
 		Client:              client,
 	})
@@ -215,7 +249,7 @@ func Run(ctx context.Context) DistributedSmokeReport {
 	}
 	report.add(DistributedSmokeCheck{Name: "runner.run_once", OK: true})
 
-	job := readDistributedJob(ctx, client, jobsHTTP.URL, jobID, &report)
+	job := readDistributedJob(ctx, client, jobsHTTP.URL, componentToken, jobID, &report)
 	if job.JobID == "" {
 		return report
 	}
@@ -231,7 +265,7 @@ func Run(ctx context.Context) DistributedSmokeReport {
 	report.ArtifactID = job.ArtifactRefs[0]
 	report.add(DistributedSmokeCheck{Name: "artifacts.registered", OK: true})
 
-	checkArtifactMetadata(ctx, client, artifactsHTTP.URL, report.ArtifactID, jobID, agentID, capability, &report)
+	checkArtifactMetadata(ctx, client, artifactsHTTP.URL, componentToken, report.ArtifactID, jobID, agentID, capability, &report)
 	checkGatewayProjection(ctx, client, gatewayHTTP.URL, agentToken, jobID, &report)
 	checkGatewayArtifactList(ctx, client, gatewayHTTP.URL, agentToken, jobID, report.ArtifactID, &report)
 	checkGatewayArtifactContent(ctx, client, gatewayHTTP.URL, agentToken, report.ArtifactID, &report)
@@ -260,9 +294,9 @@ func checkLeaseReleaseAudit(store *leases.Store, runnerID, jobID string, report 
 	report.add(DistributedSmokeCheck{Name: "leases.release_audit", OK: true})
 }
 
-func checkArtifactMetadata(ctx context.Context, client *http.Client, artifactsURL, artifactID, jobID, ownerSubjectID, capabilityID string, report *DistributedSmokeReport) {
+func checkArtifactMetadata(ctx context.Context, client *http.Client, artifactsURL, componentToken, artifactID, jobID, ownerSubjectID, capabilityID string, report *DistributedSmokeReport) {
 	var envelope rawSuccessEnvelope
-	status, err := requestJSON(ctx, client, http.MethodGet, joinURLPath(artifactsURL, "/v1/artifacts/"+url.PathEscape(artifactID)), nil, nil, &envelope)
+	status, err := requestJSON(ctx, client, http.MethodGet, joinURLPath(artifactsURL, "/v1/artifacts/"+url.PathEscape(artifactID)), nil, map[string]string{"Authorization": "Bearer " + componentToken}, &envelope)
 	check := DistributedSmokeCheck{Name: "artifacts.metadata", HTTPStatus: status}
 	if err != nil {
 		check.Error = err.Error()
@@ -367,9 +401,9 @@ func invokeDistributedTool(ctx context.Context, client *http.Client, gatewayURL,
 	return response.JobID
 }
 
-func readDistributedJob(ctx context.Context, client *http.Client, jobsURL, jobID string, report *DistributedSmokeReport) contracts.Job {
+func readDistributedJob(ctx context.Context, client *http.Client, jobsURL, componentToken, jobID string, report *DistributedSmokeReport) contracts.Job {
 	var envelope rawSuccessEnvelope
-	status, err := requestJSON(ctx, client, http.MethodGet, joinURLPath(jobsURL, "/v1/jobs/"+url.PathEscape(jobID)), nil, nil, &envelope)
+	status, err := requestJSON(ctx, client, http.MethodGet, joinURLPath(jobsURL, "/v1/jobs/"+url.PathEscape(jobID)), nil, map[string]string{"Authorization": "Bearer " + componentToken}, &envelope)
 	check := DistributedSmokeCheck{Name: "jobs.read", HTTPStatus: status}
 	if err != nil {
 		check.Error = err.Error()

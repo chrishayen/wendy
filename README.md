@@ -185,12 +185,16 @@ header for you. `pacp-admin leases release` and runner release operations set
 the lease release header.
 
 For distributed deployments, set `PACP_COMPONENT_TOKEN` or `-component-token`
-on catalog, jobs, leases, artifacts, and policy services. `pacp-gateway` and
-`pacp-runner` use `PACP_COMPONENT_TOKEN` for downstream component calls unless
-overridden by `PACP_GATEWAY_CREDENTIAL`, `PACP_RUNNER_CREDENTIAL`,
-`-gateway-credential`, or `-credential`. Raw tokens and `Bearer ...` values are
-both accepted. Leaving the token unset keeps local service endpoints open for
-quick isolated testing. The example policy seed creates logical policy
+on catalog, jobs, leases, artifacts, and policy services. `pacp-gateway` uses
+`PACP_COMPONENT_TOKEN` for downstream component calls unless overridden by
+`PACP_GATEWAY_CREDENTIAL` or `-gateway-credential`. `pacp-runner` uses
+`PACP_RUNNER_CREDENTIAL` or `-credential` for worker routes such as job claims,
+leases, node starts, and artifact uploads. When the policy service is
+transport-protected by a component token, set `PACP_RUNNER_POLICY_CREDENTIAL`
+or `-policy-credential` so runner C08 calls use the component credential while
+worker routes still use the worker credential. Raw tokens and `Bearer ...`
+values are both accepted. Leaving the token unset keeps local service endpoints
+open for quick isolated testing. The example policy seed creates logical policy
 credentials for the gateway, runner, and local agent; component endpoint
 authentication is a separate transport guard.
 Provider endpoints may also enforce runner/component bearer tokens. The

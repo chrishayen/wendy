@@ -24,6 +24,7 @@ import (
 	"pacp/internal/contracts"
 	"pacp/internal/observability"
 	"pacp/internal/provider"
+	"pacp/internal/transportauth"
 )
 
 func TestRunnerCompletesJobAndUploadsArtifact(t *testing.T) {
@@ -576,7 +577,7 @@ func TestRunnerChecksProviderInvokePolicy(t *testing.T) {
 	if _, err := policyStore.CreateAPIKey(contracts.CreateAPIKeyRequest{SubjectID: "sub_runner", Scopes: []string{"worker"}, Token: "token_worker"}); err != nil {
 		t.Fatalf("create runner key: %v", err)
 	}
-	policyServer := httptest.NewServer(policy.NewHandler(policyStore))
+	policyServer := httptest.NewServer(transportauth.RequireBearer(policy.NewHandler(policyStore), "token_component"))
 	defer policyServer.Close()
 
 	invoked := false
@@ -599,6 +600,7 @@ func TestRunnerChecksProviderInvokePolicy(t *testing.T) {
 		ArtifactsURL:        "http://artifacts.invalid",
 		PolicyURL:           policyServer.URL,
 		ComponentCredential: "Bearer token_worker",
+		PolicyCredential:    "Bearer token_component",
 		Client:              jobsServer.Client(),
 	})
 	jobID, ok, err := r.RunOnce(context.Background())

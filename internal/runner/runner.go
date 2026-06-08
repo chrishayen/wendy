@@ -32,6 +32,7 @@ type Config struct {
 	NodePollInterval          time.Duration
 	ProviderHeartbeatInterval time.Duration
 	ComponentCredential       string
+	PolicyCredential          string
 	WorkerSubjectID           string
 	ActorSubjectID            string
 	Client                    *http.Client
@@ -550,7 +551,7 @@ func (r *Runner) checkProviderInvokePolicy(ctx context.Context, job contracts.Jo
 		context["node_id"] = *plan.Route.NodeID
 	}
 	var decision contracts.PolicyDecision
-	if err := r.postJSON(ctx, r.cfg.PolicyURL+"/v1/policy/check", contracts.PolicyCheckRequest{
+	if err := r.postPolicyJSON(ctx, r.cfg.PolicyURL+"/v1/policy/check", contracts.PolicyCheckRequest{
 		SubjectID: subjectID,
 		Action:    "provider.invoke",
 		Resource:  plan.CapabilityID,
@@ -573,7 +574,7 @@ func (r *Runner) verifyWorkerSubject(ctx context.Context) (string, error) {
 		return "", errors.New("runner credential is required for provider.invoke policy checks")
 	}
 	var verification contracts.CredentialVerification
-	if err := r.postJSON(ctx, r.cfg.PolicyURL+"/v1/auth/verify", contracts.VerifyCredentialRequest{
+	if err := r.postPolicyJSON(ctx, r.cfg.PolicyURL+"/v1/auth/verify", contracts.VerifyCredentialRequest{
 		Credential: r.cfg.ComponentCredential,
 		Context:    map[string]any{"caller": "runner"},
 	}, "", &verification); err != nil {
@@ -824,6 +825,14 @@ func (r *Runner) postJSON(ctx context.Context, target string, body any, idempote
 }
 
 func (r *Runner) postJSONWithHeaders(ctx context.Context, target string, body any, idempotencyKey string, headers map[string]string, out any) error {
+	return r.postJSONWithCredential(ctx, target, body, idempotencyKey, headers, r.cfg.ComponentCredential, out)
+}
+
+func (r *Runner) postPolicyJSON(ctx context.Context, target string, body any, idempotencyKey string, out any) error {
+	return r.postJSONWithCredential(ctx, target, body, idempotencyKey, nil, r.policyCredential(), out)
+}
+
+func (r *Runner) postJSONWithCredential(ctx context.Context, target string, body any, idempotencyKey string, headers map[string]string, credential string, out any) error {
 	var reader io.Reader
 	if body != nil {
 		raw, err := json.Marshal(body)
@@ -845,7 +854,7 @@ func (r *Runner) postJSONWithHeaders(ctx context.Context, target string, body an
 	for key, value := range headers {
 		req.Header.Set(key, value)
 	}
-	r.addAuth(req)
+	r.addCredentialAuth(req, credential)
 	resp, err := r.client.Do(req)
 	if err != nil {
 		return err
@@ -873,10 +882,21 @@ func (r *Runner) putBytes(ctx context.Context, target string, body []byte, media
 }
 
 func (r *Runner) addAuth(req *http.Request) {
-	if r.cfg.ComponentCredential != "" {
-		req.Header.Set("Authorization", r.cfg.ComponentCredential)
+	r.addCredentialAuth(req, r.cfg.ComponentCredential)
+}
+
+func (r *Runner) addCredentialAuth(req *http.Request, credential string) {
+	if credential != "" {
+		req.Header.Set("Authorization", credential)
 	}
 	observability.PropagateRequestID(req.Context(), req)
+}
+
+func (r *Runner) policyCredential() string {
+	if strings.TrimSpace(r.cfg.PolicyCredential) != "" {
+		return r.cfg.PolicyCredential
+	}
+	return r.cfg.ComponentCredential
 }
 
 func decodeEnvelope(resp *http.Response, out any) error {
