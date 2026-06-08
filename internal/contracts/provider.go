@@ -22,8 +22,9 @@ type ProviderInvokeContext struct {
 }
 
 type ProviderInvokeResponse struct {
-	Output    map[string]any     `json:"output"`
-	Artifacts []ProviderArtifact `json:"artifacts,omitempty"`
+	Output      map[string]any       `json:"output"`
+	Artifacts   []ProviderArtifact   `json:"artifacts,omitempty"`
+	ContentRefs []ProviderContentRef `json:"content_refs,omitempty"`
 }
 
 type ProviderArtifact struct {
@@ -31,4 +32,13 @@ type ProviderArtifact struct {
 	MediaType     string `json:"media_type"`
 	ContentBase64 string `json:"content_base64,omitempty"`
 	Checksum      string `json:"checksum,omitempty"`
+}
+
+type ProviderContentRef struct {
+	ContentRef string `json:"content_ref"`
+	Name       string `json:"name"`
+	MediaType  string `json:"media_type"`
+	Size       int64  `json:"size"`
+	Checksum   string `json:"checksum"`
+	ExpiresAt  string `json:"expires_at"`
 }

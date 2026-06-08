@@ -23,6 +23,10 @@ func main() {
 	dryRun := flag.Bool("dry-run", false, "return a deterministic image artifact without contacting ComfyUI")
 	timeout := flag.Duration("timeout", 2*time.Minute, "maximum generation wait time")
 	poll := flag.Duration("poll", 500*time.Millisecond, "ComfyUI history poll interval")
+	contentTTL := flag.Duration("content-ttl", 15*time.Minute, "provider-local content reference lifetime")
+	runnerTokens := flag.String("runner-tokens", envFirst("PACP_PROVIDER_RUNNER_TOKENS", "PACP_RUNNER_CREDENTIAL"), "comma-separated runner bearer tokens allowed to invoke and fetch provider content")
+	componentTokens := flag.String("component-tokens", envFirst("PACP_PROVIDER_COMPONENT_TOKENS", "PACP_COMPONENT_TOKEN"), "comma-separated component bearer tokens allowed to invoke and fetch provider content")
+	agentTokens := flag.String("agent-tokens", os.Getenv("PACP_PROVIDER_AGENT_TOKENS"), "comma-separated agent bearer tokens that are authenticated but forbidden")
 	flag.Parse()
 
 	advertisedEndpoint := *endpoint
@@ -40,6 +44,10 @@ func main() {
 		DryRun:          *dryRun,
 		Timeout:         *timeout,
 		PollInterval:    *poll,
+		ContentTTL:      *contentTTL,
+		RunnerTokens:    tokenList(*runnerTokens),
+		ComponentTokens: tokenList(*componentTokens),
+		AgentTokens:     tokenList(*agentTokens),
 	})
 	if err != nil {
 		log.Fatal(err)
@@ -55,4 +63,24 @@ func defaultEndpoint(addr string) string {
 		addr = "localhost" + addr
 	}
 	return "http://" + addr
+}
+
+func envFirst(names ...string) string {
+	for _, name := range names {
+		if value := os.Getenv(name); value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func tokenList(raw string) []string {
+	parts := strings.Split(raw, ",")
+	out := make([]string, 0, len(parts))
+	for _, part := range parts {
+		if token := strings.TrimSpace(part); token != "" {
+			out = append(out, token)
+		}
+	}
+	return out
 }

@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -14,6 +15,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"pacp/internal/contracts"
@@ -45,6 +47,10 @@ type Config struct {
 	Timeout         time.Duration
 	PollInterval    time.Duration
 	Client          *http.Client
+	ContentTTL      time.Duration
+	RunnerTokens    []string
+	ComponentTokens []string
+	AgentTokens     []string
 }
 
 type LoraOption struct {
@@ -63,6 +69,38 @@ type generator struct {
 	client   *http.Client
 	workflow map[string]any
 	loras    map[string]LoraOption
+}
+
+type Server struct {
+	base    *provider.Server
+	cfg     Config
+	gen     *generator
+	now     func() time.Time
+	content *contentStore
+	auth    tokenPolicy
+}
+
+type tokenPolicy struct {
+	allowed   map[string]struct{}
+	forbidden map[string]struct{}
+	enabled   bool
+}
+
+type contentStore struct {
+	mu      sync.RWMutex
+	records map[string]contentRecord
+}
+
+type contentRecord struct {
+	ref         contracts.ProviderContentRef
+	body        []byte
+	unavailable bool
+}
+
+type generatedImage struct {
+	Name      string
+	MediaType string
+	Body      []byte
 }
 
 type request struct {
@@ -84,7 +122,9 @@ type comfyImage struct {
 	Type      string
 }
 
-func NewServer(cfg Config) (*provider.Server, error) {
+var errProviderTimeout = errors.New("provider timeout")
+
+func NewServer(cfg Config) (*Server, error) {
 	normalized, err := normalizeConfig(cfg)
 	if err != nil {
 		return nil, err
@@ -102,9 +142,212 @@ func NewServer(cfg Config) (*provider.Server, error) {
 		client = &http.Client{Timeout: normalized.Timeout}
 	}
 	g := &generator{cfg: normalized, client: client, workflow: workflow, loras: loras}
-	return provider.NewServer(manifest(normalized), map[string]provider.CapabilityHandler{
+	manifest := manifest(normalized)
+	base, err := provider.NewServer(manifest, map[string]provider.CapabilityHandler{
 		normalized.CapabilityID: g.generate,
 	})
+	if err != nil {
+		return nil, err
+	}
+	return &Server{
+		base:    base,
+		cfg:     normalized,
+		gen:     g,
+		now:     time.Now,
+		content: newContentStore(),
+		auth:    newTokenPolicy(normalized),
+	}, nil
+}
+
+func (s *Server) SetClock(now func() time.Time) {
+	if now == nil {
+		now = time.Now
+	}
+	s.now = now
+	s.base.SetClock(now)
+}
+
+func (s *Server) MarkContentUnavailable(contentRef string, unavailable bool) {
+	s.content.markUnavailable(contentRef, unavailable)
+}
+
+func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	path := strings.TrimSuffix(r.URL.Path, "/")
+	switch {
+	case r.Method == http.MethodGet && path == "/v1/provider/health":
+		writeSuccess(w, r, http.StatusOK, contracts.ProviderHealth{
+			Status:    "healthy",
+			Version:   "v1",
+			CheckedAt: s.now().UTC().Format(time.RFC3339),
+			Details:   map[string]any{"backend": "comfyui"},
+		})
+	case r.Method == http.MethodGet && path == "/v1/provider/manifest":
+		s.base.ServeHTTP(w, r)
+	case r.Method == http.MethodGet && path == "/v1/provider/metrics":
+		s.base.ServeHTTP(w, r)
+	case r.Method == http.MethodPost && strings.HasPrefix(path, "/v1/provider/capabilities/") && strings.HasSuffix(path, "/invoke"):
+		capabilityID := strings.TrimSuffix(strings.TrimPrefix(path, "/v1/provider/capabilities/"), "/invoke")
+		s.invoke(w, r, capabilityID)
+	case r.Method == http.MethodGet && strings.HasPrefix(path, "/v1/provider/artifacts/") && strings.HasSuffix(path, "/content"):
+		contentRef := strings.TrimSuffix(strings.TrimPrefix(path, "/v1/provider/artifacts/"), "/content")
+		s.readContent(w, r, contentRef)
+	default:
+		writeError(w, r, http.StatusNotFound, "not_found", "route not found", false)
+	}
+}
+
+func (s *Server) invoke(w http.ResponseWriter, r *http.Request, capabilityID string) {
+	if capabilityID != s.cfg.CapabilityID {
+		writeError(w, r, http.StatusNotFound, "not_found", "capability not found", false)
+		return
+	}
+	if !s.authorize(w, r, authInvoke) {
+		return
+	}
+	req, rawContext, ok := decodeInvokeBody(w, r)
+	if !ok {
+		return
+	}
+	if err := validateInvokeInput(req.Input); err != nil {
+		writeError(w, r, http.StatusBadRequest, "validation_failed", validationMessage(err), false)
+		return
+	}
+	if err := validateInvokeContext(rawContext, req.Context); err != nil {
+		writeError(w, r, http.StatusBadRequest, "validation_failed", validationMessage(err), false)
+		return
+	}
+	response, err := s.invokeComfyUI(r.Context(), req)
+	if err != nil {
+		s.writeInvokeError(w, r, err)
+		return
+	}
+	writeSuccess(w, r, http.StatusOK, providerInvokeHTTPResponse{
+		Output:      response.Output,
+		ContentRefs: response.ContentRefs,
+	})
+}
+
+func (s *Server) readContent(w http.ResponseWriter, r *http.Request, contentRef string) {
+	if !s.authorize(w, r, authContent) {
+		return
+	}
+	record, ok := s.content.get(contentRef, s.now())
+	if !ok {
+		writeError(w, r, http.StatusNotFound, "not_found", "provider content reference not found", false)
+		return
+	}
+	if record.unavailable || len(record.body) == 0 {
+		writeError(w, r, http.StatusServiceUnavailable, "provider_unavailable", "provider content could not be read", true)
+		return
+	}
+	w.Header().Set("Content-Type", record.ref.MediaType)
+	w.Header().Set("Content-Length", strconv.Itoa(len(record.body)))
+	w.Header().Set("Digest", digestHeader(record.body))
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(record.body)
+}
+
+func (s *Server) writeInvokeError(w http.ResponseWriter, r *http.Request, err error) {
+	switch {
+	case errors.Is(err, errProviderTimeout):
+		writeError(w, r, http.StatusGatewayTimeout, "provider_timeout", "provider invocation timed out", true)
+	case errors.Is(err, provider.ErrValidation):
+		writeError(w, r, http.StatusBadRequest, "validation_failed", validationMessage(err), false)
+	case errors.Is(err, provider.ErrNotFound):
+		writeError(w, r, http.StatusNotFound, "not_found", validationMessage(err), false)
+	case errors.Is(err, provider.ErrBackend):
+		writeError(w, r, http.StatusServiceUnavailable, "provider_unavailable", "ComfyUI backend is unavailable", true)
+	default:
+		writeError(w, r, http.StatusInternalServerError, "provider_unavailable", err.Error(), true)
+	}
+}
+
+type authKind string
+
+const (
+	authInvoke  authKind = "invoke"
+	authContent authKind = "content"
+)
+
+func (s *Server) authorize(w http.ResponseWriter, r *http.Request, kind authKind) bool {
+	decision := s.auth.authorize(r.Header.Get("Authorization"))
+	if decision == authAllowed {
+		return true
+	}
+	if decision == authForbidden {
+		message := "provider invocation requires a runner or component credential"
+		if kind == authContent {
+			message = "provider content reference is runner-only"
+		}
+		writeError(w, r, http.StatusForbidden, "forbidden", message, false)
+		return false
+	}
+	message := "provider invocation requires a valid runner or component credential"
+	if kind == authContent {
+		message = "provider content retrieval requires a valid runner or component credential"
+	}
+	writeError(w, r, http.StatusUnauthorized, "unauthorized", message, false)
+	return false
+}
+
+type authDecision int
+
+const (
+	authAllowed authDecision = iota
+	authUnauthorized
+	authForbidden
+)
+
+func newTokenPolicy(cfg Config) tokenPolicy {
+	policy := tokenPolicy{allowed: map[string]struct{}{}, forbidden: map[string]struct{}{}}
+	for _, token := range append(cfg.RunnerTokens, cfg.ComponentTokens...) {
+		if normalized := normalizeToken(token); normalized != "" {
+			policy.allowed[normalized] = struct{}{}
+			policy.enabled = true
+		}
+	}
+	for _, token := range cfg.AgentTokens {
+		if normalized := normalizeToken(token); normalized != "" {
+			policy.forbidden[normalized] = struct{}{}
+			policy.enabled = true
+		}
+	}
+	return policy
+}
+
+func (p tokenPolicy) authorize(header string) authDecision {
+	if !p.enabled {
+		return authAllowed
+	}
+	token, ok := bearerToken(header)
+	if !ok {
+		return authUnauthorized
+	}
+	if _, ok := p.allowed[token]; ok {
+		return authAllowed
+	}
+	if _, ok := p.forbidden[token]; ok {
+		return authForbidden
+	}
+	return authUnauthorized
+}
+
+func bearerToken(header string) (string, bool) {
+	header = strings.TrimSpace(header)
+	if !strings.HasPrefix(header, "Bearer ") {
+		return "", false
+	}
+	token := normalizeToken(header)
+	if token == "" {
+		return "", false
+	}
+	return token, true
+}
+
+func normalizeToken(token string) string {
+	token = strings.TrimSpace(token)
+	token = strings.TrimPrefix(token, "Bearer ")
+	return strings.TrimSpace(token)
 }
 
 func normalizeConfig(cfg Config) (Config, error) {
@@ -126,6 +369,9 @@ func normalizeConfig(cfg Config) (Config, error) {
 	if cfg.PollInterval <= 0 {
 		cfg.PollInterval = defaultPollInterval
 	}
+	if cfg.ContentTTL <= 0 {
+		cfg.ContentTTL = 15 * time.Minute
+	}
 	cfg.ComfyUIURL = strings.TrimRight(strings.TrimSpace(cfg.ComfyUIURL), "/")
 	if !cfg.DryRun {
 		if cfg.ComfyUIURL == "" {
@@ -139,6 +385,291 @@ func normalizeConfig(cfg Config) (Config, error) {
 		}
 	}
 	return cfg, nil
+}
+
+type providerInvokeHTTPResponse struct {
+	Output      map[string]any                 `json:"output"`
+	ContentRefs []contracts.ProviderContentRef `json:"content_refs"`
+}
+
+func (s *Server) invokeComfyUI(ctx context.Context, req contracts.ProviderInvokeRequest) (contracts.ProviderInvokeResponse, error) {
+	parsed, err := s.gen.parseRequest(req.Input)
+	if err != nil {
+		return contracts.ProviderInvokeResponse{}, err
+	}
+	if req.Context.DryRun {
+		return contracts.ProviderInvokeResponse{
+			Output: map[string]any{
+				"result":     "dry_run_valid",
+				"media_type": "image/png",
+				"filename":   nil,
+			},
+			ContentRefs: []contracts.ProviderContentRef{},
+		}, nil
+	}
+	images, err := s.gen.generateImages(ctx, parsed, req.Context.RequestID)
+	if err != nil {
+		return contracts.ProviderInvokeResponse{}, err
+	}
+	contentRefs := s.content.putImages(req.Context.JobID, images, s.now(), s.cfg.ContentTTL)
+	filename := any(nil)
+	if len(contentRefs) > 0 {
+		filename = contentRefs[0].Name
+	}
+	return contracts.ProviderInvokeResponse{
+		Output: map[string]any{
+			"result":     "image_generated",
+			"media_type": "image/png",
+			"filename":   filename,
+		},
+		ContentRefs: contentRefs,
+	}, nil
+}
+
+func decodeInvokeBody(w http.ResponseWriter, r *http.Request) (contracts.ProviderInvokeRequest, map[string]any, bool) {
+	defer r.Body.Close()
+	var body struct {
+		Input   map[string]any `json:"input"`
+		Context map[string]any `json:"context"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeError(w, r, http.StatusBadRequest, "validation_failed", "request body is invalid JSON", false)
+		return contracts.ProviderInvokeRequest{}, nil, false
+	}
+	req := contracts.ProviderInvokeRequest{
+		Input: body.Input,
+		Context: contracts.ProviderInvokeContext{
+			SubjectID:       stringContextField(body.Context, "subject_id"),
+			RequestID:       stringContextField(body.Context, "request_id"),
+			JobID:           stringContextField(body.Context, "job_id"),
+			ArtifactBaseURL: stringContextField(body.Context, "artifact_base_url"),
+			ResourceLeaseID: stringContextField(body.Context, "resource_lease_id"),
+			DryRun:          boolContextField(body.Context, "dry_run"),
+		},
+	}
+	return req, body.Context, true
+}
+
+func validateInvokeInput(input map[string]any) error {
+	if _, err := requiredString(input, "prompt"); err != nil {
+		return fmt.Errorf("%w: input.prompt is required", provider.ErrValidation)
+	}
+	width, err := requiredInt(input, "width")
+	if err != nil {
+		return err
+	}
+	height, err := requiredInt(input, "height")
+	if err != nil {
+		return err
+	}
+	if width < 64 || width > 2048 || height < 64 || height > 2048 {
+		return fmt.Errorf("%w: width and height must be multiples of 8 between 64 and 2048", provider.ErrValidation)
+	}
+	if width%8 != 0 {
+		return fmt.Errorf("%w: input.width must be a multiple of 8", provider.ErrValidation)
+	}
+	if height%8 != 0 {
+		return fmt.Errorf("%w: input.height must be a multiple of 8", provider.ErrValidation)
+	}
+	return nil
+}
+
+func validateInvokeContext(raw map[string]any, context contracts.ProviderInvokeContext) error {
+	missing := []string{}
+	if context.SubjectID == "" {
+		missing = append(missing, "context.subject_id")
+	}
+	if context.RequestID == "" {
+		missing = append(missing, "context.request_id")
+	}
+	if context.JobID == "" {
+		missing = append(missing, "context.job_id")
+	}
+	_, dryRunPresent := raw["dry_run"]
+	if !context.DryRun && context.ResourceLeaseID == "" {
+		missing = append(missing, "context.resource_lease_id")
+	}
+	if !dryRunPresent {
+		missing = append(missing, "context.dry_run")
+	}
+	if len(missing) > 0 {
+		return fmt.Errorf("%w: %s required", provider.ErrValidation, requiredList(missing))
+	}
+	return nil
+}
+
+func requiredList(fields []string) string {
+	switch len(fields) {
+	case 0:
+		return "no fields are"
+	case 1:
+		return fields[0] + " is"
+	case 2:
+		return fields[0] + " and " + fields[1] + " are"
+	default:
+		return strings.Join(fields[:len(fields)-1], ", ") + ", and " + fields[len(fields)-1] + " are"
+	}
+}
+
+func stringContextField(context map[string]any, key string) string {
+	value, _ := context[key].(string)
+	return strings.TrimSpace(value)
+}
+
+func boolContextField(context map[string]any, key string) bool {
+	value, _ := context[key].(bool)
+	return value
+}
+
+func requiredInt(input map[string]any, key string) (int, error) {
+	if _, ok := input[key]; !ok {
+		return 0, fmt.Errorf("%w: input.%s is required", provider.ErrValidation, key)
+	}
+	value, err := intInput(input, key, 0)
+	if err != nil {
+		return 0, fmt.Errorf("%w: input.%s must be an integer", provider.ErrValidation, key)
+	}
+	return value, nil
+}
+
+func validationMessage(err error) string {
+	message := err.Error()
+	for _, prefix := range []string{
+		provider.ErrValidation.Error() + ": ",
+		provider.ErrBackend.Error() + ": ",
+		provider.ErrNotFound.Error() + ": ",
+	} {
+		message = strings.TrimPrefix(message, prefix)
+	}
+	return message
+}
+
+func newContentStore() *contentStore {
+	return &contentStore{records: map[string]contentRecord{}}
+}
+
+func (s *contentStore) putImages(jobID string, images []generatedImage, now time.Time, ttl time.Duration) []contracts.ProviderContentRef {
+	refs := make([]contracts.ProviderContentRef, 0, len(images))
+	expiresAt := now.UTC().Add(ttl).Format(time.RFC3339)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i, image := range images {
+		name := providerFilename(jobID, i, image.Name)
+		refID := providerContentRef(jobID, i, image.Body)
+		ref := contracts.ProviderContentRef{
+			ContentRef: refID,
+			Name:       name,
+			MediaType:  mediaTypeOrDefault(image.MediaType),
+			Size:       int64(len(image.Body)),
+			Checksum:   checksum(image.Body),
+			ExpiresAt:  expiresAt,
+		}
+		s.records[refID] = contentRecord{ref: ref, body: append([]byte(nil), image.Body...)}
+		refs = append(refs, ref)
+	}
+	return refs
+}
+
+func (s *contentStore) get(contentRef string, now time.Time) (contentRecord, bool) {
+	s.mu.RLock()
+	record, ok := s.records[contentRef]
+	s.mu.RUnlock()
+	if !ok {
+		return contentRecord{}, false
+	}
+	expiresAt, err := time.Parse(time.RFC3339, record.ref.ExpiresAt)
+	if err != nil || !now.Before(expiresAt) {
+		return contentRecord{}, false
+	}
+	return record, true
+}
+
+func (s *contentStore) markUnavailable(contentRef string, unavailable bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	record, ok := s.records[contentRef]
+	if !ok {
+		return
+	}
+	record.unavailable = unavailable
+	s.records[contentRef] = record
+}
+
+func providerFilename(jobID string, index int, fallback string) string {
+	base := strings.TrimSpace(jobID)
+	if base == "" {
+		base = strings.TrimSuffix(strings.TrimSpace(fallback), ".png")
+	}
+	if base == "" {
+		base = "provider-image"
+	}
+	if index == 0 {
+		return base + ".png"
+	}
+	return base + "-" + strconv.Itoa(index+1) + ".png"
+}
+
+func providerContentRef(jobID string, index int, body []byte) string {
+	if strings.HasPrefix(jobID, "job_") {
+		ref := "pcr_" + strings.TrimPrefix(jobID, "job_")
+		if index > 0 {
+			ref += "_" + strconv.Itoa(index+1)
+		}
+		return ref
+	}
+	sum := sha256.Sum256(body)
+	ref := "pcr_" + hex.EncodeToString(sum[:8])
+	if index > 0 {
+		ref += "_" + strconv.Itoa(index+1)
+	}
+	return ref
+}
+
+func mediaTypeOrDefault(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return "image/png"
+	}
+	return value
+}
+
+func digestHeader(body []byte) string {
+	sum := sha256.Sum256(body)
+	return "sha-256=" + base64.StdEncoding.EncodeToString(sum[:])
+}
+
+func writeSuccess(w http.ResponseWriter, r *http.Request, status int, data any) {
+	writeEnvelopeJSON(w, status, contracts.SuccessEnvelope{
+		OK:    true,
+		Data:  data,
+		Links: map[string]any{},
+		Meta:  meta(r),
+	})
+}
+
+func writeError(w http.ResponseWriter, r *http.Request, status int, code, message string, retryable bool) {
+	writeEnvelopeJSON(w, status, contracts.ErrorEnvelope{
+		OK: false,
+		Error: contracts.ErrorObject{
+			Code: code, Message: message, Retryable: retryable,
+		},
+		Links: map[string]any{},
+		Meta:  meta(r),
+	})
+}
+
+func writeEnvelopeJSON(w http.ResponseWriter, status int, body any) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(body)
+}
+
+func meta(r *http.Request) map[string]string {
+	requestID := r.Header.Get("X-Request-ID")
+	if requestID == "" {
+		requestID = "req_provider"
+	}
+	return map[string]string{"request_id": requestID, "schema_version": "v1"}
 }
 
 func loadWorkflow(path string) (map[string]any, error) {
@@ -183,22 +714,53 @@ func (g *generator) generate(ctx context.Context, req contracts.ProviderInvokeRe
 	if err != nil {
 		return contracts.ProviderInvokeResponse{}, err
 	}
-	if g.cfg.DryRun {
-		return g.dryRun(parsed), nil
+	if req.Context.DryRun {
+		return contracts.ProviderInvokeResponse{
+			Output: map[string]any{
+				"result":     "dry_run_valid",
+				"media_type": "image/png",
+				"filename":   nil,
+			},
+			ContentRefs: []contracts.ProviderContentRef{},
+		}, nil
 	}
-	return g.generateWithComfyUI(ctx, parsed, req.Context.RequestID)
+	images, err := g.generateImages(ctx, parsed, req.Context.RequestID)
+	if err != nil {
+		return contracts.ProviderInvokeResponse{}, err
+	}
+	artifacts := make([]contracts.ProviderArtifact, 0, len(images))
+	for _, image := range images {
+		artifacts = append(artifacts, contracts.ProviderArtifact{
+			Name:          image.Name,
+			MediaType:     mediaTypeOrDefault(image.MediaType),
+			ContentBase64: base64.StdEncoding.EncodeToString(image.Body),
+			Checksum:      checksum(image.Body),
+		})
+	}
+	filename := any(nil)
+	if len(images) > 0 {
+		filename = images[0].Name
+	}
+	return contracts.ProviderInvokeResponse{
+		Output: map[string]any{
+			"result":     "image_generated",
+			"media_type": "image/png",
+			"filename":   filename,
+		},
+		Artifacts: artifacts,
+	}, nil
 }
 
 func (g *generator) parseRequest(input map[string]any) (request, error) {
 	prompt, err := requiredString(input, "prompt")
 	if err != nil {
-		return request{}, err
+		return request{}, fmt.Errorf("%w: input.prompt is required", provider.ErrValidation)
 	}
-	width, err := intInput(input, "width", defaultWidth)
+	width, err := requiredInt(input, "width")
 	if err != nil {
 		return request{}, err
 	}
-	height, err := intInput(input, "height", defaultHeight)
+	height, err := requiredInt(input, "height")
 	if err != nil {
 		return request{}, err
 	}
@@ -229,41 +791,53 @@ func (g *generator) parseRequest(input map[string]any) (request, error) {
 }
 
 func validateDimension(name string, value int) error {
-	if value < 64 || value > 4096 {
-		return fmt.Errorf("%w: %s must be between 64 and 4096", provider.ErrValidation, name)
+	if value < 64 || value > 2048 {
+		return fmt.Errorf("%w: width and height must be multiples of 8 between 64 and 2048", provider.ErrValidation)
 	}
 	if value%8 != 0 {
-		return fmt.Errorf("%w: %s must be divisible by 8", provider.ErrValidation, name)
+		return fmt.Errorf("%w: input.%s must be a multiple of 8", provider.ErrValidation, name)
 	}
 	return nil
 }
 
-func (g *generator) dryRun(req request) contracts.ProviderInvokeResponse {
-	body := dryRunPNG()
-	checksum := checksum(body)
-	return contracts.ProviderInvokeResponse{
-		Output: map[string]any{
-			"prompt_id":   "dry_run",
-			"image_count": 1,
-			"width":       req.Width,
-			"height":      req.Height,
-			"seed":        req.Seed,
-			"steps":       req.Steps,
-			"lora":        req.Lora,
-			"dry_run":     true,
-		},
-		Artifacts: []contracts.ProviderArtifact{{
-			Name:          "comfyui-dry-run.png",
-			MediaType:     "image/png",
-			ContentBase64: base64.StdEncoding.EncodeToString(body),
-			Checksum:      checksum,
-		}},
+func (g *generator) generateImages(ctx context.Context, req request, requestID string) ([]generatedImage, error) {
+	if g.cfg.DryRun {
+		return []generatedImage{{
+			Name:      "comfyui-dry-run.png",
+			MediaType: "image/png",
+			Body:      dryRunPNG(),
+		}}, nil
 	}
+	return g.generateImagesWithComfyUI(ctx, req, requestID)
 }
 
 func (g *generator) generateWithComfyUI(ctx context.Context, req request, requestID string) (contracts.ProviderInvokeResponse, error) {
+	images, err := g.generateImagesWithComfyUI(ctx, req, requestID)
+	if err != nil {
+		return contracts.ProviderInvokeResponse{}, err
+	}
+	artifacts := make([]contracts.ProviderArtifact, 0, len(images))
+	for _, image := range images {
+		artifacts = append(artifacts, contracts.ProviderArtifact{
+			Name:          image.Name,
+			MediaType:     mediaTypeOrDefault(image.MediaType),
+			ContentBase64: base64.StdEncoding.EncodeToString(image.Body),
+			Checksum:      checksum(image.Body),
+		})
+	}
+	return contracts.ProviderInvokeResponse{
+		Output: map[string]any{
+			"result":     "image_generated",
+			"media_type": "image/png",
+			"filename":   artifacts[0].Name,
+		},
+		Artifacts: artifacts,
+	}, nil
+}
+
+func (g *generator) generateImagesWithComfyUI(ctx context.Context, req request, requestID string) ([]generatedImage, error) {
 	if g.workflow == nil {
-		return contracts.ProviderInvokeResponse{}, fmt.Errorf("%w: workflow template is not configured", provider.ErrValidation)
+		return nil, fmt.Errorf("%w: workflow template is not configured", provider.ErrValidation)
 	}
 	if g.cfg.Timeout > 0 {
 		var cancel context.CancelFunc
@@ -272,42 +846,29 @@ func (g *generator) generateWithComfyUI(ctx context.Context, req request, reques
 	}
 	promptID, err := g.submitPrompt(ctx, req, requestID)
 	if err != nil {
-		return contracts.ProviderInvokeResponse{}, err
+		return nil, err
 	}
 	images, err := g.waitForImages(ctx, promptID)
 	if err != nil {
-		return contracts.ProviderInvokeResponse{}, err
+		return nil, err
 	}
-	artifacts := make([]contracts.ProviderArtifact, 0, len(images))
+	out := make([]generatedImage, 0, len(images))
 	for index, image := range images {
 		body, mediaType, err := g.fetchImage(ctx, image)
 		if err != nil {
-			return contracts.ProviderInvokeResponse{}, err
+			return nil, err
 		}
 		name := image.Filename
 		if name == "" {
 			name = "comfyui-image-" + strconv.Itoa(index+1)
 		}
-		artifacts = append(artifacts, contracts.ProviderArtifact{
-			Name:          name,
-			MediaType:     mediaType,
-			ContentBase64: base64.StdEncoding.EncodeToString(body),
-			Checksum:      checksum(body),
+		out = append(out, generatedImage{
+			Name:      name,
+			MediaType: mediaType,
+			Body:      body,
 		})
 	}
-	return contracts.ProviderInvokeResponse{
-		Output: map[string]any{
-			"prompt_id":   promptID,
-			"image_count": len(artifacts),
-			"width":       req.Width,
-			"height":      req.Height,
-			"seed":        req.Seed,
-			"steps":       req.Steps,
-			"lora":        req.Lora,
-			"dry_run":     false,
-		},
-		Artifacts: artifacts,
-	}, nil
+	return out, nil
 }
 
 func (g *generator) submitPrompt(ctx context.Context, req request, requestID string) (string, error) {
@@ -388,7 +949,7 @@ func (g *generator) waitForImages(ctx context.Context, promptID string) ([]comfy
 		}
 		select {
 		case <-ctx.Done():
-			return nil, fmt.Errorf("%w: ComfyUI prompt %s did not produce images before timeout", provider.ErrBackend, promptID)
+			return nil, fmt.Errorf("%w: %w", provider.ErrBackend, errProviderTimeout)
 		case <-ticker.C:
 		}
 	}
@@ -460,6 +1021,9 @@ func (g *generator) fetchImage(ctx context.Context, image comfyImage) ([]byte, s
 	}
 	resp, err := g.client.Do(req)
 	if err != nil {
+		if errors.Is(err, context.DeadlineExceeded) || errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			return nil, "", fmt.Errorf("%w: %w", provider.ErrBackend, errProviderTimeout)
+		}
 		return nil, "", fmt.Errorf("%w: %s", provider.ErrBackend, err)
 	}
 	defer resp.Body.Close()
@@ -490,6 +1054,9 @@ func (g *generator) postJSON(ctx context.Context, target string, body any, out a
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := g.client.Do(req)
 	if err != nil {
+		if errors.Is(err, context.DeadlineExceeded) || errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			return fmt.Errorf("%w: %w", provider.ErrBackend, errProviderTimeout)
+		}
 		return fmt.Errorf("%w: %s", provider.ErrBackend, err)
 	}
 	defer resp.Body.Close()
@@ -507,6 +1074,9 @@ func (g *generator) getJSON(ctx context.Context, target string, out any) error {
 	}
 	resp, err := g.client.Do(req)
 	if err != nil {
+		if errors.Is(err, context.DeadlineExceeded) || errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			return fmt.Errorf("%w: %w", provider.ErrBackend, errProviderTimeout)
+		}
 		return fmt.Errorf("%w: %s", provider.ErrBackend, err)
 	}
 	defer resp.Body.Close()
@@ -601,7 +1171,7 @@ func manifest(cfg Config) contracts.ProviderManifest {
 			ExecutionMode: "sync",
 			InputSchema: map[string]any{
 				"type":     "object",
-				"required": []any{"prompt"},
+				"required": []any{"prompt", "width", "height"},
 				"properties": map[string]any{
 					"prompt": map[string]any{"type": "string"},
 					"width":  map[string]any{"type": "integer"},
@@ -613,16 +1183,11 @@ func manifest(cfg Config) contracts.ProviderManifest {
 			},
 			OutputSchema: map[string]any{
 				"type":     "object",
-				"required": []any{"prompt_id", "image_count", "width", "height", "seed", "steps", "dry_run"},
+				"required": []any{"result", "media_type", "filename"},
 				"properties": map[string]any{
-					"prompt_id":   map[string]any{"type": "string"},
-					"image_count": map[string]any{"type": "integer"},
-					"width":       map[string]any{"type": "integer"},
-					"height":      map[string]any{"type": "integer"},
-					"seed":        map[string]any{"type": "integer"},
-					"steps":       map[string]any{"type": "integer"},
-					"lora":        map[string]any{"type": "string"},
-					"dry_run":     map[string]any{"type": "boolean"},
+					"result":     map[string]any{"type": "string"},
+					"media_type": map[string]any{"type": "string"},
+					"filename":   map[string]any{"type": "string"},
 				},
 			},
 			Examples: []map[string]any{{

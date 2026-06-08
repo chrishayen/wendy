@@ -1363,6 +1363,10 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/ProviderArtifact"
+        content_refs:
+          type: array
+          items:
+            $ref: "#/components/schemas/ProviderContentRef"
     ProviderArtifact:
       type: object
       required: [name, media_type]
@@ -1375,6 +1379,24 @@ components:
           type: string
         checksum:
           type: string
+    ProviderContentRef:
+      type: object
+      required: [content_ref, name, media_type, size, checksum, expires_at]
+      properties:
+        content_ref:
+          type: string
+        name:
+          type: string
+        media_type:
+          type: string
+        size:
+          type: integer
+          format: int64
+        checksum:
+          type: string
+        expires_at:
+          type: string
+          format: date-time
     Service:
       type: object
       required: [id, name, description, version, provider_kind]
