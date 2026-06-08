@@ -1527,7 +1527,7 @@ components:
           type: string
     JobLogEntry:
       type: object
-      required: [timestamp, level, message]
+      required: [timestamp, level, message, fields]
       properties:
         timestamp:
           type: string

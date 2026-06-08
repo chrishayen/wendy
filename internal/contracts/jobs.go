@@ -85,7 +85,7 @@ type JobLogEntry struct {
 	Timestamp string         `json:"timestamp"`
 	Level     string         `json:"level"`
 	Message   string         `json:"message"`
-	Fields    map[string]any `json:"fields,omitempty"`
+	Fields    map[string]any `json:"fields"`
 }
 
 type AppendJobLogRequest struct {

@@ -182,6 +182,8 @@ func TestGatewayReplaysS003PublicJobAndArtifactFixtures(t *testing.T) {
 		"public_job_context_build_failure",
 		"public_job_running",
 		"public_job_succeeded",
+		"public_logs_first_page",
+		"public_logs_final_page",
 		"public_artifact_list_ok",
 		"public_artifact_content_proxy",
 		"public_artifact_content_not_found",
@@ -215,6 +217,8 @@ func TestGatewayReplaysS003AgentUserFixtures(t *testing.T) {
 		"public_cancel_queued_ok",
 		"public_job_running",
 		"public_job_succeeded",
+		"public_logs_first_page",
+		"public_logs_final_page",
 		"public_artifact_list_ok",
 		"public_artifact_content_ok",
 	} {
@@ -397,6 +401,10 @@ func (d *s003GatewayFixtureDependencies) fixtureIDFor(r *http.Request, raw []byt
 		return "c05_agent_projection_running", true
 	case r.Method == http.MethodGet && path == "/v1/jobs/job_s003_0001/agent-projection":
 		return "c05_agent_projection_succeeded", true
+	case r.Method == http.MethodGet && path == "/v1/jobs/job_s003_0001/logs" && d.activePublicFixture == "public_logs_final_page":
+		return "c05_logs_final_page", true
+	case r.Method == http.MethodGet && path == "/v1/jobs/job_s003_0001/logs":
+		return "c05_logs_read", true
 	case r.Method == http.MethodPost && path == "/v1/jobs/job_s003_0001/cancel":
 		return "c05_cancel_queued_ok", true
 	case r.Method == http.MethodGet && path == "/v1/artifacts" && r.URL.Query().Get("producer_ref") == "job_s003_0001":
@@ -416,9 +424,9 @@ func (d *s003GatewayFixtureDependencies) jobPolicyContextFixtureID() (string, bo
 	switch d.activePublicFixture {
 	case "public_cancel_queued_ok", "public_job_policy_missing_context_forbidden":
 		return "c05_job_policy_context_queued", true
-	case "public_running_cancel_forbidden", "public_job_running":
+	case "public_running_cancel_forbidden", "public_job_running", "public_logs_first_page":
 		return "c05_job_policy_context_running", true
-	case "public_job_succeeded", "public_artifact_list_ok":
+	case "public_job_succeeded", "public_logs_final_page", "public_artifact_list_ok":
 		return "c05_job_policy_context_succeeded", true
 	case "public_job_missing_owner_context":
 		return "c05_job_policy_context_missing_owner", true

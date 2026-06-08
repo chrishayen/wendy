@@ -546,7 +546,7 @@ components:
           $ref: "#/components/schemas/Links"
     JobLogEntry:
       type: object
-      required: [timestamp, level, message]
+      required: [timestamp, level, message, fields]
       properties:
         timestamp:
           type: string
@@ -555,6 +555,8 @@ components:
           type: string
         message:
           type: string
+        fields:
+          $ref: "#/components/schemas/AnyMap"
     AgentArtifact:
       type: object
       required: [artifact_id, name, media_type, size, checksum, created_at, links]
@@ -582,6 +584,9 @@ components:
       properties:
         reason:
           type: string
+    AnyMap:
+      type: object
+      additionalProperties: true
     Links:
       type: object
       additionalProperties: true

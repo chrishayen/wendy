@@ -397,7 +397,7 @@ func (h *Handler) getAgentLogs(w http.ResponseWriter, r *http.Request, jobID str
 	}
 	items := make([]contracts.JobLogEntry, 0, len(data.Items))
 	for _, item := range data.Items {
-		item.Fields = nil
+		item.Fields = map[string]any{}
 		item.Message = publicLogMessage(item.Message)
 		items = append(items, item)
 	}
