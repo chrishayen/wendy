@@ -55,6 +55,14 @@ type Artifact struct {
 	Links          map[string]any `json:"links"`
 }
 
+type ArtifactRetentionSweepResult struct {
+	CheckedAt            string `json:"checked_at"`
+	ExpiredUploads       int    `json:"expired_uploads"`
+	ExpiredArtifacts     int    `json:"expired_artifacts"`
+	DeletedUploadFiles   int    `json:"deleted_upload_files"`
+	DeletedArtifactFiles int    `json:"deleted_artifact_files"`
+}
+
 type RegisterLocalArtifactRequest struct {
 	Path           string         `json:"path"`
 	Name           string         `json:"name,omitempty"`

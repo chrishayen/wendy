@@ -71,6 +71,7 @@ func ArtifactScopeRules() []transportauth.ScopeRule {
 		{Method: http.MethodPut, Path: "/v1/artifact-uploads/{upload_id}/content", Scopes: []string{"worker"}, UnauthorizedMessage: workerMessage, ForbiddenMessage: forbiddenMessage},
 		{Method: http.MethodPost, Path: "/v1/artifact-uploads/{upload_id}/complete", Scopes: []string{"worker"}, UnauthorizedMessage: workerMessage, ForbiddenMessage: forbiddenMessage},
 		{Method: http.MethodGet, Path: "/v1/artifacts", Scopes: []string{"component"}, UnauthorizedMessage: componentMessage, ForbiddenMessage: forbiddenMessage},
+		{Method: http.MethodPost, Path: "/v1/artifacts/retention/sweep", Scopes: []string{"component"}, UnauthorizedMessage: componentMessage, ForbiddenMessage: forbiddenMessage},
 		{Method: http.MethodPost, Path: "/v1/artifacts/register-local", Scopes: []string{"worker"}, UnauthorizedMessage: workerMessage, ForbiddenMessage: forbiddenMessage},
 		{Method: http.MethodGet, Path: "/v1/artifacts/{artifact_id}", Scopes: []string{"component"}, UnauthorizedMessage: componentMessage, ForbiddenMessage: forbiddenMessage},
 		{Method: http.MethodGet, Path: "/v1/artifacts/{artifact_id}/policy-context", Scopes: []string{"component"}, UnauthorizedMessage: componentMessage, ForbiddenMessage: forbiddenMessage},

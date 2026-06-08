@@ -210,7 +210,7 @@ func TestStorePolicyScopesAndExplicitRules(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create component key: %v", err)
 	}
-	for _, action := range []string{"lease.read", "lease.cancel", "lease.resource.register", "catalog.register"} {
+	for _, action := range []string{"lease.read", "lease.cancel", "lease.resource.register", "catalog.register", "artifact.retention.sweep"} {
 		decision, err := store.CheckPolicy(contracts.PolicyCheckRequest{
 			SubjectID: "sub_component",
 			Action:    action,

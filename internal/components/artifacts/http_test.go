@@ -112,6 +112,57 @@ func TestHandlerHealth(t *testing.T) {
 	}
 }
 
+func TestHandlerRetentionSweep(t *testing.T) {
+	store := newTestStore(t)
+	now := time.Date(2026, 6, 7, 12, 0, 0, 0, time.UTC)
+	store.SetClock(func() time.Time { return now })
+	store.SetArtifactTTL(time.Minute)
+
+	body := []byte("artifact bytes")
+	checksum, _ := checksumAndDigest(body)
+	size := int64(len(body))
+	session, _, err := store.CreateUpload(contracts.CreateArtifactUploadRequest{
+		Name:             "result.txt",
+		MediaType:        "text/plain",
+		ProducerRef:      "job_sweep",
+		OwnerSubjectID:   "sub_agent",
+		ExpectedSize:     &size,
+		ExpectedChecksum: checksum,
+	}, "http-sweep-create-complete")
+	if err != nil {
+		t.Fatalf("create upload: %v", err)
+	}
+	if _, err := store.PutContent(session.UploadID, validContentUpload(body, "text/plain"), "http-sweep-content-complete"); err != nil {
+		t.Fatalf("put content: %v", err)
+	}
+	if _, _, err := store.CompleteUpload(session.UploadID, contracts.CompleteArtifactUploadRequest{Checksum: checksum, Size: size}, "http-sweep-complete"); err != nil {
+		t.Fatalf("complete upload: %v", err)
+	}
+
+	partial, _, err := store.CreateUpload(contracts.CreateArtifactUploadRequest{
+		Name:           "partial.txt",
+		MediaType:      "text/plain",
+		ProducerRef:    "job_sweep",
+		OwnerSubjectID: "sub_agent",
+	}, "http-sweep-create-partial")
+	if err != nil {
+		t.Fatalf("create partial upload: %v", err)
+	}
+	if _, err := store.PutContent(partial.UploadID, validContentUpload([]byte("partial"), "text/plain"), "http-sweep-content-partial"); err != nil {
+		t.Fatalf("put partial content: %v", err)
+	}
+
+	now = now.Add(defaultUploadTTL + time.Second)
+	data := doJSON(t, NewHandler(store), http.MethodPost, "/v1/artifacts/retention/sweep", nil, nil, http.StatusOK)
+	if data["checked_at"] != now.Format(time.RFC3339) ||
+		data["expired_uploads"] != float64(1) ||
+		data["expired_artifacts"] != float64(1) ||
+		data["deleted_upload_files"] != float64(1) ||
+		data["deleted_artifact_files"] != float64(1) {
+		t.Fatalf("sweep response = %#v", data)
+	}
+}
+
 func TestHandlerReplaysS003ArtifactStoreFixtures(t *testing.T) {
 	scenario, err := testkit.LoadScenario(filepath.Join("..", "..", "..", "testdata", "contract-sim"), filepath.Join("fixtures", "S003", "manifest.json"))
 	if err != nil {

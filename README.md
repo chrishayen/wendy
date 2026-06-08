@@ -26,8 +26,8 @@ Contract simulation data is kept as test input, not as product behavior.
   release, expiration, and inspection service with in-memory or file-backed
   durable storage, startup resource seeding, health, and HTTP handlers.
 - `internal/components/artifacts`: upload-session, blob storage, durable
-  metadata snapshots, policy context, guarded local registration, and retrieval
-  service with health and a local filesystem root.
+  metadata snapshots, policy context, guarded local registration, retention
+  sweep, and retrieval service with health and a local filesystem root.
 - `internal/components/policy`: API key verification, policy decision, secret
   reference, redaction, startup policy seeding, health, and durable sensitive
   state snapshots.

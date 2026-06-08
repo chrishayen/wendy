@@ -573,7 +573,7 @@ func builtinDecision(req contracts.PolicyCheckRequest, scopes []string) contract
 		if hasScope(scopes, "component") {
 			return allow("allowed_by_component_scope")
 		}
-	case "auth.verify", "policy.check", "catalog.read", "catalog.route.read", "catalog.register", "job.create":
+	case "auth.verify", "policy.check", "catalog.read", "catalog.route.read", "catalog.register", "job.create", "artifact.retention.sweep":
 		if hasScope(scopes, "component") {
 			return allow("allowed_by_component_scope")
 		}

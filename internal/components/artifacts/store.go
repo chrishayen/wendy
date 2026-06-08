@@ -573,7 +573,7 @@ func (s *Store) GetArtifact(artifactID string) (contracts.Artifact, error) {
 		return contracts.Artifact{}, ErrNotFound
 	}
 	if s.artifactExpiredLocked(rec) {
-		s.expireArtifactContentLocked(rec)
+		_, _ = s.expireArtifactContentLocked(rec)
 		return contracts.Artifact{}, ErrArtifactExpired
 	}
 	return cloneArtifact(rec.artifact), nil
@@ -605,6 +605,47 @@ func (s *Store) ListArtifacts(filter ListFilter) []contracts.Artifact {
 	return items
 }
 
+func (s *Store) SweepExpired() (contracts.ArtifactRetentionSweepResult, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	result := contracts.ArtifactRetentionSweepResult{CheckedAt: s.formatNow()}
+	for _, rec := range s.uploads {
+		previous := rec.session.State
+		s.expireUploadLocked(rec)
+		if rec.session.State != contracts.ArtifactUploadExpired {
+			continue
+		}
+		if previous != contracts.ArtifactUploadExpired {
+			result.ExpiredUploads++
+		}
+		deleted, err := s.expireUploadContentLocked(rec)
+		if err != nil {
+			return result, err
+		}
+		if deleted {
+			result.DeletedUploadFiles++
+		}
+	}
+	for _, rec := range s.artifacts {
+		if !s.artifactExpiredLocked(rec) {
+			continue
+		}
+		result.ExpiredArtifacts++
+		deleted, err := s.expireArtifactContentLocked(rec)
+		if err != nil {
+			return result, err
+		}
+		if deleted {
+			result.DeletedArtifactFiles++
+		}
+	}
+	if err := s.saveLocked(); err != nil {
+		return result, err
+	}
+	return result, nil
+}
+
 func (s *Store) PolicyContext(artifactID string) (contracts.ArtifactPolicyContext, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -633,7 +674,7 @@ func (s *Store) ReadContent(artifactID string) (ArtifactContent, error) {
 		return ArtifactContent{}, ErrNotFound
 	}
 	if s.artifactExpiredLocked(rec) {
-		s.expireArtifactContentLocked(rec)
+		_, _ = s.expireArtifactContentLocked(rec)
 		s.mu.Unlock()
 		return ArtifactContent{}, ErrArtifactExpired
 	}
@@ -710,12 +751,45 @@ func (s *Store) artifactExpiredLocked(rec *artifactRecord) bool {
 	return !s.now().UTC().Before(expiresAt)
 }
 
-func (s *Store) expireArtifactContentLocked(rec *artifactRecord) {
-	if rec == nil || rec.path == "" {
-		return
+func (s *Store) expireUploadContentLocked(rec *uploadRecord) (bool, error) {
+	if rec == nil || rec.receivedPath == "" {
+		return false, nil
 	}
-	_ = os.Remove(rec.path)
+	deleted, err := removeFileIfExists(rec.receivedPath)
+	if err != nil {
+		return false, err
+	}
+	rec.receivedPath = ""
+	rec.receivedDigest = ""
+	rec.receivedChecksum = ""
+	return deleted, nil
+}
+
+func (s *Store) expireArtifactContentLocked(rec *artifactRecord) (bool, error) {
+	if rec == nil || rec.path == "" {
+		return false, nil
+	}
+	deleted, err := removeFileIfExists(rec.path)
+	if err != nil {
+		return false, err
+	}
+	rec.path = ""
+	rec.digest = ""
 	rec.artifact.Links = map[string]any{}
+	return deleted, nil
+}
+
+func removeFileIfExists(path string) (bool, error) {
+	if path == "" {
+		return false, nil
+	}
+	if err := os.Remove(path); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return false, nil
+		}
+		return false, err
+	}
+	return true, nil
 }
 
 func (s *Store) checkIdempotencyLocked(operation, key, fp string) (idempotentRecord, bool, error) {

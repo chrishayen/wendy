@@ -760,6 +760,17 @@ paths:
           $ref: "#/components/responses/Success"
         default:
           $ref: "#/components/responses/Error"
+  /v1/artifacts/retention/sweep:
+    post:
+      tags: [artifacts]
+      operationId: sweepArtifactRetention
+      x-operation-audience: component
+      x-policy-action: artifact.retention.sweep
+      responses:
+        "200":
+          $ref: "#/components/responses/Success"
+        default:
+          $ref: "#/components/responses/Error"
   /v1/artifacts/register-local:
     post:
       tags: [artifacts]
@@ -1812,6 +1823,21 @@ components:
           type: string
         metadata:
           $ref: "#/components/schemas/AnyMap"
+    ArtifactRetentionSweepResult:
+      type: object
+      required: [checked_at, expired_uploads, expired_artifacts, deleted_upload_files, deleted_artifact_files]
+      properties:
+        checked_at:
+          type: string
+          format: date-time
+        expired_uploads:
+          type: integer
+        expired_artifacts:
+          type: integer
+        deleted_upload_files:
+          type: integer
+        deleted_artifact_files:
+          type: integer
 
     CreateAPIKeyRequest:
       type: object

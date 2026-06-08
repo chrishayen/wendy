@@ -187,6 +187,90 @@ func TestStoreExpiresArtifactsByRetentionPolicy(t *testing.T) {
 	}
 }
 
+func TestStoreSweepExpiredRemovesUploadAndArtifactContent(t *testing.T) {
+	store := newTestStore(t)
+	now := time.Date(2026, 6, 7, 12, 0, 0, 0, time.UTC)
+	store.SetClock(func() time.Time { return now })
+	store.SetArtifactTTL(time.Minute)
+
+	artifactBody := []byte("artifact sweep bytes")
+	artifactChecksum, artifactDigest := checksumAndDigest(artifactBody)
+	artifactSize := int64(len(artifactBody))
+	completeSession, _, err := store.CreateUpload(contracts.CreateArtifactUploadRequest{
+		Name:             "complete.txt",
+		MediaType:        "text/plain",
+		ProducerRef:      "job_sweep",
+		OwnerSubjectID:   "sub_agent",
+		ExpectedSize:     &artifactSize,
+		ExpectedChecksum: artifactChecksum,
+	}, "sweep-create-complete")
+	if err != nil {
+		t.Fatalf("create completed upload: %v", err)
+	}
+	if _, err := store.PutContent(completeSession.UploadID, ContentUpload{
+		Body:          artifactBody,
+		ContentType:   "text/plain",
+		ContentLength: strconv.FormatInt(artifactSize, 10),
+		Digest:        artifactDigest,
+	}, "sweep-content-complete"); err != nil {
+		t.Fatalf("put completed content: %v", err)
+	}
+	artifact, _, err := store.CompleteUpload(completeSession.UploadID, contracts.CompleteArtifactUploadRequest{
+		Checksum: artifactChecksum,
+		Size:     artifactSize,
+	}, "sweep-complete")
+	if err != nil {
+		t.Fatalf("complete upload: %v", err)
+	}
+	artifactPath := store.artifacts[artifact.ArtifactID].path
+
+	partialBody := []byte("partial sweep bytes")
+	partialSession, _, err := store.CreateUpload(contracts.CreateArtifactUploadRequest{
+		Name:           "partial.txt",
+		MediaType:      "text/plain",
+		ProducerRef:    "job_sweep",
+		OwnerSubjectID: "sub_agent",
+	}, "sweep-create-partial")
+	if err != nil {
+		t.Fatalf("create partial upload: %v", err)
+	}
+	if _, err := store.PutContent(partialSession.UploadID, validContentUpload(partialBody, "text/plain"), "sweep-content-partial"); err != nil {
+		t.Fatalf("put partial content: %v", err)
+	}
+	uploadPath := store.uploads[partialSession.UploadID].receivedPath
+
+	now = now.Add(defaultUploadTTL + time.Second)
+	result, err := store.SweepExpired()
+	if err != nil {
+		t.Fatalf("sweep expired: %v", err)
+	}
+	if result.CheckedAt != now.Format(time.RFC3339) ||
+		result.ExpiredUploads != 1 ||
+		result.ExpiredArtifacts != 1 ||
+		result.DeletedUploadFiles != 1 ||
+		result.DeletedArtifactFiles != 1 {
+		t.Fatalf("sweep result = %#v", result)
+	}
+	if state := store.uploads[partialSession.UploadID].session.State; state != contracts.ArtifactUploadExpired {
+		t.Fatalf("partial upload state = %s", state)
+	}
+	if store.uploads[partialSession.UploadID].receivedPath != "" {
+		t.Fatalf("partial upload path was not cleared")
+	}
+	if store.artifacts[artifact.ArtifactID].path != "" || len(store.artifacts[artifact.ArtifactID].artifact.Links) != 0 {
+		t.Fatalf("expired artifact record = %#v", store.artifacts[artifact.ArtifactID])
+	}
+	if _, err := os.Stat(uploadPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("expected expired upload cleanup, stat err=%v", err)
+	}
+	if _, err := os.Stat(artifactPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("expected expired artifact cleanup, stat err=%v", err)
+	}
+	if _, err := store.ReadContent(artifact.ArtifactID); !errors.Is(err, ErrArtifactExpired) {
+		t.Fatalf("expected expired artifact after sweep, got %v", err)
+	}
+}
+
 func TestStoreRejectsUploadValidationFailures(t *testing.T) {
 	store := newTestStore(t)
 	body := []byte("artifact bytes")

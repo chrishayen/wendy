@@ -14,6 +14,7 @@ func TestArtifactScopeRulesSeparateComponentAndWorkerRoutes(t *testing.T) {
 	assertRuleScopes(t, rules, http.MethodPost, "/v1/artifact-uploads", []string{"worker"})
 	assertRuleScopes(t, rules, http.MethodPut, "/v1/artifact-uploads/{upload_id}/content", []string{"worker"})
 	assertRuleScopes(t, rules, http.MethodPost, "/v1/artifact-uploads/{upload_id}/complete", []string{"worker"})
+	assertRuleScopes(t, rules, http.MethodPost, "/v1/artifacts/retention/sweep", []string{"component"})
 	assertRuleScopes(t, rules, http.MethodGet, "/v1/artifacts/{artifact_id}/policy-context", []string{"component"})
 	assertRuleScopes(t, rules, http.MethodGet, "/v1/artifacts/{artifact_id}/content", []string{"component"})
 	assertRuleScopes(t, rules, http.MethodPost, "/v1/artifacts/register-local", []string{"worker"})

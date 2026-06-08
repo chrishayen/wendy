@@ -40,6 +40,8 @@ func (h Handler) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		h.uploadRoute(w, r, strings.TrimPrefix(path, "/v1/artifact-uploads/"))
 	case path == "/v1/artifacts" && r.Method == http.MethodGet:
 		h.listArtifacts(w, r)
+	case path == "/v1/artifacts/retention/sweep" && r.Method == http.MethodPost:
+		h.sweepRetention(w, r)
 	case path == "/v1/artifacts/register-local" && r.Method == http.MethodPost:
 		h.registerLocalArtifact(w, r)
 	case strings.HasPrefix(path, "/v1/artifacts/"):
@@ -183,6 +185,15 @@ func (h Handler) listArtifacts(w http.ResponseWriter, r *http.Request) {
 		OwnerSubjectID: r.URL.Query().Get("owner_subject_id"),
 	})
 	writeSuccess(w, r, http.StatusOK, map[string]any{"items": items, "next_cursor": nil})
+}
+
+func (h Handler) sweepRetention(w http.ResponseWriter, r *http.Request) {
+	result, err := h.store.SweepExpired()
+	if err != nil {
+		writeStoreError(w, r, err)
+		return
+	}
+	writeSuccess(w, r, http.StatusOK, result)
 }
 
 func (h Handler) getArtifact(w http.ResponseWriter, r *http.Request, artifactID string) {
