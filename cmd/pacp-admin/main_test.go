@@ -92,6 +92,43 @@ func TestHealthChecksConfiguredNodeWithNodeToken(t *testing.T) {
 	}
 }
 
+func TestHealthChecksMultipleConfiguredNodesWithNodeToken(t *testing.T) {
+	nodeHealthHits := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v1/node/health" {
+			nodeHealthHits++
+			if r.Header.Get("Authorization") != "Bearer node-token" {
+				t.Fatalf("node Authorization = %q", r.Header.Get("Authorization"))
+			}
+			writeHealth(t, w, http.StatusOK, "healthy")
+			return
+		}
+		writeHealth(t, w, http.StatusOK, "healthy")
+	}))
+	defer server.Close()
+
+	args := append(coreURLArgs(server.URL),
+		"-node-urls", "linux="+server.URL+",mac="+server.URL,
+		"-node-token", "node-token",
+		"health",
+	)
+	var stdout, stderr bytes.Buffer
+	code := run(args, &stdout, &stderr, server.Client())
+	if code != 0 {
+		t.Fatalf("code=%d stderr=%s stdout=%s", code, stderr.String(), stdout.String())
+	}
+	if nodeHealthHits != 2 {
+		t.Fatalf("node health hits = %d", nodeHealthHits)
+	}
+	report := decodeReport(t, stdout.Bytes())
+	if report.Data.Summary.Healthy != 8 || report.Data.Summary.Skipped != 0 {
+		t.Fatalf("report = %#v", report)
+	}
+	if !hasHealthItem(report, "node:linux") || !hasHealthItem(report, "node:mac") {
+		t.Fatalf("node targets missing from report: %#v", report.Data.Items)
+	}
+}
+
 func TestHealthFailsForConfiguredUnhealthyNode(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/v1/node/health" {
@@ -111,6 +148,102 @@ func TestHealthFailsForConfiguredUnhealthyNode(t *testing.T) {
 	report := decodeReport(t, stdout.Bytes())
 	if report.OK || report.Data.Summary.Unhealthy != 1 {
 		t.Fatalf("report = %#v", report)
+	}
+}
+
+func TestHealthCanCheckCatalogProviderHealth(t *testing.T) {
+	providerHealthHits := 0
+	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/v1/provider/health" {
+			t.Fatalf("provider request = %s %s", r.Method, r.URL.Path)
+		}
+		providerHealthHits++
+		writeHealth(t, w, http.StatusOK, "healthy")
+	}))
+	defer provider.Close()
+
+	sawCatalogCapabilities := false
+	catalog := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v1/catalog/capabilities" {
+			sawCatalogCapabilities = true
+			if r.Header.Get("Authorization") != "Bearer component-token" {
+				t.Fatalf("catalog capabilities Authorization = %q", r.Header.Get("Authorization"))
+			}
+			writeEnvelope(t, w, http.StatusOK, map[string]any{
+				"items": []map[string]any{{
+					"route": map[string]any{
+						"capability_id":        "cap_search",
+						"service_id":           "svc_search",
+						"provider_endpoint":    provider.URL,
+						"provider_health_path": "/v1/provider/health",
+					},
+					"service": map[string]any{"id": "svc_search"},
+				}},
+			})
+			return
+		}
+		writeHealth(t, w, http.StatusOK, "healthy")
+	}))
+	defer catalog.Close()
+
+	args := append(coreURLArgs(catalog.URL), "-component-token", "component-token", "health", "-providers")
+	var stdout, stderr bytes.Buffer
+	code := run(args, &stdout, &stderr, catalog.Client())
+	if code != 0 {
+		t.Fatalf("code=%d stderr=%s stdout=%s", code, stderr.String(), stdout.String())
+	}
+	if !sawCatalogCapabilities {
+		t.Fatal("catalog capabilities were not requested")
+	}
+	if providerHealthHits != 1 {
+		t.Fatalf("provider health hits = %d", providerHealthHits)
+	}
+	report := decodeReport(t, stdout.Bytes())
+	if report.Data.Summary.Healthy != 7 || report.Data.Summary.Skipped != 1 {
+		t.Fatalf("report = %#v", report)
+	}
+	providerItem := findHealthItem(report, "provider:svc_search")
+	if providerItem == nil || providerItem.Kind != "provider" || providerItem.ServiceID != "svc_search" {
+		t.Fatalf("provider item = %#v", providerItem)
+	}
+}
+
+func TestHealthFailsWhenCatalogProviderIsUnhealthy(t *testing.T) {
+	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeHealth(t, w, http.StatusServiceUnavailable, "unhealthy")
+	}))
+	defer provider.Close()
+
+	catalog := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v1/catalog/capabilities" {
+			writeEnvelope(t, w, http.StatusOK, map[string]any{
+				"items": []map[string]any{{
+					"route": map[string]any{
+						"capability_id":        "cap_search",
+						"service_id":           "svc_search",
+						"provider_endpoint":    provider.URL,
+						"provider_health_path": "/v1/provider/health",
+					},
+				}},
+			})
+			return
+		}
+		writeHealth(t, w, http.StatusOK, "healthy")
+	}))
+	defer catalog.Close()
+
+	var stdout, stderr bytes.Buffer
+	code := run(append(coreURLArgs(catalog.URL), "health", "-providers"), &stdout, &stderr, catalog.Client())
+	if code != 1 {
+		t.Fatalf("code=%d stderr=%s stdout=%s", code, stderr.String(), stdout.String())
+	}
+	report := decodeReport(t, stdout.Bytes())
+	if report.OK || report.Data.Summary.Unhealthy != 1 {
+		t.Fatalf("report = %#v", report)
+	}
+	providerItem := findHealthItem(report, "provider:svc_search")
+	if providerItem == nil || providerItem.Status != "unhealthy" || providerItem.HTTPStatus != http.StatusServiceUnavailable {
+		t.Fatalf("provider item = %#v", providerItem)
 	}
 }
 
@@ -1018,4 +1151,17 @@ func decodeReport(t *testing.T, raw []byte) healthReport {
 		t.Fatalf("decode report: %v\n%s", err, string(raw))
 	}
 	return report
+}
+
+func findHealthItem(report healthReport, name string) *healthItem {
+	for i := range report.Data.Items {
+		if report.Data.Items[i].Name == name {
+			return &report.Data.Items[i]
+		}
+	}
+	return nil
+}
+
+func hasHealthItem(report healthReport, name string) bool {
+	return findHealthItem(report, name) != nil
 }

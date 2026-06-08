@@ -27,6 +27,7 @@ type adminConfig struct {
 	PolicyURL      string
 	GatewayURL     string
 	NodeURL        string
+	NodeURLs       string
 	ComponentToken string
 	GatewayToken   string
 	NodeToken      string
@@ -35,11 +36,15 @@ type adminConfig struct {
 
 type serviceTarget struct {
 	Name        string
+	Kind        string
 	URL         string
 	HealthPath  string
 	Credential  string
 	Required    bool
 	Description string
+	ServiceID   string
+	NodeID      string
+	ConfigError string
 }
 
 type healthReport struct {
@@ -56,6 +61,9 @@ type healthReportData struct {
 
 type healthItem struct {
 	Name       string `json:"name"`
+	Kind       string `json:"kind,omitempty"`
+	ServiceID  string `json:"service_id,omitempty"`
+	NodeID     string `json:"node_id,omitempty"`
 	URL        string `json:"url"`
 	HealthURL  string `json:"health_url"`
 	Status     string `json:"status"`
@@ -84,6 +92,7 @@ func run(args []string, stdout, stderr io.Writer, httpClient *http.Client) int {
 	flags.StringVar(&cfg.PolicyURL, "policy-url", envOrDefault("PACP_POLICY_URL", "http://localhost:18085"), "policy service base URL")
 	flags.StringVar(&cfg.GatewayURL, "gateway-url", envOrDefault("PACP_GATEWAY_URL", "http://localhost:18086"), "gateway service base URL")
 	flags.StringVar(&cfg.NodeURL, "node-url", os.Getenv("PACP_NODE_URL"), "optional node service base URL")
+	flags.StringVar(&cfg.NodeURLs, "node-urls", os.Getenv("PACP_NODE_URLS"), "optional comma-separated node_id=URL entries")
 	flags.StringVar(&cfg.ComponentToken, "component-token", os.Getenv("PACP_COMPONENT_TOKEN"), "optional component API bearer token or raw token")
 	flags.StringVar(&cfg.GatewayToken, "gateway-token", envFirst("PACP_GATEWAY_TOKEN", "PACP_AGENT_TOKEN"), "optional gateway API bearer token or raw token")
 	flags.StringVar(&cfg.NodeToken, "node-token", os.Getenv("PACP_NODE_TOKEN"), "optional node API bearer token or raw token")
@@ -101,19 +110,7 @@ func run(args []string, stdout, stderr io.Writer, httpClient *http.Client) int {
 	}
 	switch remaining[0] {
 	case "health":
-		if len(remaining) != 1 {
-			fmt.Fprintln(stderr, "usage: pacp-admin [flags] health")
-			return 2
-		}
-		report := checkHealth(cfg, httpClient)
-		if err := writeJSON(stdout, report); err != nil {
-			fmt.Fprintf(stderr, "write health report: %v\n", err)
-			return 1
-		}
-		if report.OK {
-			return 0
-		}
-		return 1
+		return healthCommand(cfg, httpClient, remaining[1:], stdout, stderr)
 	case "catalog":
 		return catalogCommand(cfg, httpClient, remaining[1:], stdout, stderr)
 	case "jobs":
@@ -131,6 +128,32 @@ func run(args []string, stdout, stderr io.Writer, httpClient *http.Client) int {
 		fmt.Fprintf(stderr, "unknown command %q\n", remaining[0])
 		return 2
 	}
+}
+
+type healthOptions struct {
+	Providers bool
+}
+
+func healthCommand(cfg adminConfig, httpClient *http.Client, args []string, stdout, stderr io.Writer) int {
+	flags := flag.NewFlagSet("health", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	providers := flags.Bool("providers", false, "check registered provider health through catalog routes")
+	remaining, err := parseSubcommandFlags(flags, args)
+	if err != nil {
+		return 2
+	}
+	if len(remaining) != 0 {
+		return usage(stderr, "usage: pacp-admin [flags] health [-providers]")
+	}
+	report := checkHealth(cfg, httpClient, healthOptions{Providers: *providers})
+	if err := writeJSON(stdout, report); err != nil {
+		fmt.Fprintf(stderr, "write health report: %v\n", err)
+		return 1
+	}
+	if report.OK {
+		return 0
+	}
+	return 1
 }
 
 func catalogCommand(cfg adminConfig, httpClient *http.Client, args []string, stdout, stderr io.Writer) int {
@@ -860,7 +883,7 @@ func nodeStartCommand(cfg adminConfig, httpClient *http.Client, args []string, s
 	return postJSON(cfg, httpClient, cfg.NodeURL, path, authorizationHeader(cfg.NodeToken), *idempotencyKey, stdout, stderr)
 }
 
-func checkHealth(cfg adminConfig, httpClient *http.Client) healthReport {
+func checkHealth(cfg adminConfig, httpClient *http.Client, opts healthOptions) healthReport {
 	ctx := context.Background()
 	if cfg.Timeout > 0 {
 		var cancel context.CancelFunc
@@ -869,14 +892,14 @@ func checkHealth(cfg adminConfig, httpClient *http.Client) healthReport {
 	}
 	componentCredential := authorizationHeader(cfg.ComponentToken)
 	targets := []serviceTarget{
-		{Name: "catalog", URL: cfg.CatalogURL, HealthPath: "/v1/catalog/health", Credential: componentCredential, Required: true},
-		{Name: "jobs", URL: cfg.JobsURL, HealthPath: "/v1/jobs/health", Credential: componentCredential, Required: true},
-		{Name: "leases", URL: cfg.LeasesURL, HealthPath: "/v1/leases/health", Credential: componentCredential, Required: true},
-		{Name: "artifacts", URL: cfg.ArtifactsURL, HealthPath: "/v1/artifacts/health", Credential: componentCredential, Required: true},
-		{Name: "policy", URL: cfg.PolicyURL, HealthPath: "/v1/policy/health", Credential: componentCredential, Required: true},
-		{Name: "gateway", URL: cfg.GatewayURL, HealthPath: "/v1/gateway/health", Required: true},
-		{Name: "node", URL: cfg.NodeURL, HealthPath: "/v1/node/health", Credential: authorizationHeader(cfg.NodeToken), Required: false},
+		{Name: "catalog", Kind: "component", URL: cfg.CatalogURL, HealthPath: "/v1/catalog/health", Credential: componentCredential, Required: true},
+		{Name: "jobs", Kind: "component", URL: cfg.JobsURL, HealthPath: "/v1/jobs/health", Credential: componentCredential, Required: true},
+		{Name: "leases", Kind: "component", URL: cfg.LeasesURL, HealthPath: "/v1/leases/health", Credential: componentCredential, Required: true},
+		{Name: "artifacts", Kind: "component", URL: cfg.ArtifactsURL, HealthPath: "/v1/artifacts/health", Credential: componentCredential, Required: true},
+		{Name: "policy", Kind: "component", URL: cfg.PolicyURL, HealthPath: "/v1/policy/health", Credential: componentCredential, Required: true},
+		{Name: "gateway", Kind: "component", URL: cfg.GatewayURL, HealthPath: "/v1/gateway/health", Required: true},
 	}
+	targets = append(targets, nodeHealthTargets(cfg)...)
 	report := healthReport{
 		OK:    true,
 		Links: map[string]any{},
@@ -889,17 +912,16 @@ func checkHealth(cfg adminConfig, httpClient *http.Client) healthReport {
 	}
 	for _, target := range targets {
 		item := checkTarget(ctx, httpClient, target)
-		report.Data.Items = append(report.Data.Items, item)
-		switch item.Status {
-		case "healthy":
-			report.Data.Summary.Healthy++
-		case "skipped":
-			report.Data.Summary.Skipped++
-		default:
-			report.Data.Summary.Unhealthy++
-			if target.Required || target.URL != "" {
-				report.OK = false
-			}
+		addHealthItem(&report, item, target.Required || target.URL != "")
+	}
+	if opts.Providers {
+		providerTargets, discoveryItem := discoverProviderHealthTargets(ctx, httpClient, cfg)
+		if discoveryItem != nil {
+			addHealthItem(&report, *discoveryItem, discoveryItem.Status != "skipped")
+		}
+		for _, target := range providerTargets {
+			item := checkTarget(ctx, httpClient, target)
+			addHealthItem(&report, item, true)
 		}
 	}
 	return report
@@ -907,7 +929,19 @@ func checkHealth(cfg adminConfig, httpClient *http.Client) healthReport {
 
 func checkTarget(ctx context.Context, httpClient *http.Client, target serviceTarget) healthItem {
 	baseURL := strings.TrimRight(strings.TrimSpace(target.URL), "/")
-	item := healthItem{Name: target.Name, URL: baseURL, Status: "skipped"}
+	item := healthItem{
+		Name:      target.Name,
+		Kind:      target.Kind,
+		ServiceID: target.ServiceID,
+		NodeID:    target.NodeID,
+		URL:       baseURL,
+		Status:    "skipped",
+	}
+	if target.ConfigError != "" {
+		item.Status = "unhealthy"
+		item.Error = target.ConfigError
+		return item
+	}
 	if baseURL == "" {
 		if target.Required {
 			item.Status = "unhealthy"
@@ -915,7 +949,7 @@ func checkTarget(ctx context.Context, httpClient *http.Client, target serviceTar
 		}
 		return item
 	}
-	item.HealthURL = baseURL + target.HealthPath
+	item.HealthURL = joinURLPath(baseURL, target.HealthPath)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, item.HealthURL, nil)
 	if err != nil {
 		item.Status = "unhealthy"
@@ -959,6 +993,198 @@ func checkTarget(ctx context.Context, httpClient *http.Client, target serviceTar
 		item.Error = "reported status " + item.Status
 	}
 	return item
+}
+
+func addHealthItem(report *healthReport, item healthItem, affectsOK bool) {
+	report.Data.Items = append(report.Data.Items, item)
+	switch item.Status {
+	case "healthy":
+		report.Data.Summary.Healthy++
+	case "skipped":
+		report.Data.Summary.Skipped++
+	default:
+		report.Data.Summary.Unhealthy++
+		if affectsOK {
+			report.OK = false
+		}
+	}
+}
+
+func nodeHealthTargets(cfg adminConfig) []serviceTarget {
+	credential := authorizationHeader(cfg.NodeToken)
+	targets := []serviceTarget{}
+	seen := map[string]bool{}
+	add := func(name, nodeID, rawURL, configError string, required bool) {
+		key := name + "\x00" + rawURL
+		if seen[key] {
+			return
+		}
+		seen[key] = true
+		targets = append(targets, serviceTarget{
+			Name:        name,
+			Kind:        "node",
+			URL:         rawURL,
+			HealthPath:  "/v1/node/health",
+			Credential:  credential,
+			Required:    required,
+			NodeID:      nodeID,
+			ConfigError: configError,
+		})
+	}
+	if strings.TrimSpace(cfg.NodeURL) != "" {
+		add("node", "", cfg.NodeURL, "", false)
+	}
+	for _, entry := range splitCSV(cfg.NodeURLs) {
+		nodeID, rawURL, ok := strings.Cut(entry, "=")
+		nodeID = strings.TrimSpace(nodeID)
+		rawURL = strings.TrimSpace(rawURL)
+		if !ok || nodeID == "" || rawURL == "" {
+			add("node:"+entry, "", "", "node target must be formatted as node_id=url", true)
+			continue
+		}
+		add("node:"+nodeID, nodeID, rawURL, "", true)
+	}
+	if len(targets) == 0 {
+		add("node", "", "", "", false)
+	}
+	return targets
+}
+
+func discoverProviderHealthTargets(ctx context.Context, httpClient *http.Client, cfg adminConfig) ([]serviceTarget, *healthItem) {
+	baseURL := strings.TrimRight(strings.TrimSpace(cfg.CatalogURL), "/")
+	if baseURL == "" {
+		return nil, &healthItem{
+			Name:   "provider-discovery",
+			Kind:   "provider",
+			Status: "unhealthy",
+			Error:  "catalog service URL is required",
+		}
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, baseURL+"/v1/catalog/capabilities", nil)
+	if err != nil {
+		return nil, &healthItem{
+			Name:   "provider-discovery",
+			Kind:   "provider",
+			URL:    baseURL,
+			Status: "unhealthy",
+			Error:  err.Error(),
+		}
+	}
+	if credential := authorizationHeader(cfg.ComponentToken); credential != "" {
+		req.Header.Set("Authorization", credential)
+	}
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return nil, &healthItem{
+			Name:   "provider-discovery",
+			Kind:   "provider",
+			URL:    baseURL,
+			Status: "unhealthy",
+			Error:  err.Error(),
+		}
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, &healthItem{
+			Name:       "provider-discovery",
+			Kind:       "provider",
+			URL:        baseURL,
+			HealthURL:  baseURL + "/v1/catalog/capabilities",
+			Status:     "unhealthy",
+			HTTPStatus: resp.StatusCode,
+			Error:      resp.Status,
+		}
+	}
+	var envelope struct {
+		OK   bool `json:"ok"`
+		Data struct {
+			Items []contracts.CatalogCapabilityRecord `json:"items"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&envelope); err != nil {
+		return nil, &healthItem{
+			Name:       "provider-discovery",
+			Kind:       "provider",
+			URL:        baseURL,
+			HealthURL:  baseURL + "/v1/catalog/capabilities",
+			Status:     "unhealthy",
+			HTTPStatus: resp.StatusCode,
+			Error:      "invalid catalog response: " + err.Error(),
+		}
+	}
+	if !envelope.OK {
+		return nil, &healthItem{
+			Name:       "provider-discovery",
+			Kind:       "provider",
+			URL:        baseURL,
+			HealthURL:  baseURL + "/v1/catalog/capabilities",
+			Status:     "unhealthy",
+			HTTPStatus: resp.StatusCode,
+			Error:      "catalog response was not ok",
+		}
+	}
+	targets := []serviceTarget{}
+	seen := map[string]bool{}
+	for _, record := range envelope.Data.Items {
+		route := record.Route
+		serviceID := route.ServiceID
+		if serviceID == "" {
+			serviceID = record.Service.ID
+		}
+		if serviceID == "" {
+			serviceID = record.Capability.ServiceID
+		}
+		if serviceID == "" {
+			serviceID = "unknown"
+		}
+		healthPath := route.ProviderHealthPath
+		if healthPath == "" {
+			healthPath = "/v1/provider/health"
+		}
+		endpoint := strings.TrimSpace(route.ProviderEndpoint)
+		nodeID := ""
+		if route.NodeID != nil {
+			nodeID = *route.NodeID
+		}
+		key := serviceID + "\x00" + endpoint + "\x00" + healthPath
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		target := serviceTarget{
+			Name:       "provider:" + serviceID,
+			Kind:       "provider",
+			URL:        endpoint,
+			HealthPath: healthPath,
+			Required:   true,
+			ServiceID:  serviceID,
+			NodeID:     nodeID,
+		}
+		if endpoint == "" {
+			target.ConfigError = "provider endpoint is empty"
+		}
+		targets = append(targets, target)
+	}
+	if len(targets) == 0 {
+		return nil, &healthItem{
+			Name:   "providers",
+			Kind:   "provider",
+			Status: "skipped",
+			Error:  "catalog returned no provider endpoints",
+		}
+	}
+	return targets, nil
+}
+
+func joinURLPath(baseURL, path string) string {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return baseURL
+	}
+	if strings.HasPrefix(path, "/") {
+		return baseURL + path
+	}
+	return baseURL + "/" + path
 }
 
 func getJSON(cfg adminConfig, httpClient *http.Client, baseURL, path, credential string, stdout, stderr io.Writer) int {

@@ -65,8 +65,9 @@ Contract simulation data is kept as test input, not as product behavior.
   seed files.
 - `cmd/pacp-bundle`: renders one deployment bundle into catalog manifests,
   node config, lease resource seed, and optional policy seed files.
-- `cmd/pacp-admin`: JSON-first operator CLI for component, gateway, and node
-  health, inspection, job cancellation through C04, and node lifecycle actions.
+- `cmd/pacp-admin`: JSON-first operator CLI for component, gateway, node, and
+  provider health, inspection, job cancellation through C04, and node lifecycle
+  actions.
 - `cmd/pacp-control`: JSON-first CLI for gateway health and agent-facing
   gateway operations.
 - `cmd/pacp-dev`: one-command local development stack using the real service
@@ -92,6 +93,7 @@ go run ./cmd/pacp-comfyui-provider -addr localhost:18090 -dry-run -workflow test
 go run ./cmd/pacp-speech-provider -addr localhost:18091 -dry-run -voice-catalog testdata/speech/catalog.json
 go run ./cmd/pacp-ai-toolkit-provider -addr localhost:18092 -dry-run -workspace testdata/ai-toolkit
 go run ./cmd/pacp-admin health
+go run ./cmd/pacp-admin -node-urls node_mac=http://mac:18087,node_linux_gpu=http://linux-box:18087 health -providers
 go run ./cmd/pacp-admin catalog capabilities
 go run ./cmd/pacp-admin catalog import /tmp/pacp-bundle/catalog
 go run ./cmd/pacp-admin jobs list
@@ -205,6 +207,7 @@ curl http://localhost:18084/v1/artifacts/health
 curl http://localhost:18085/v1/policy/health
 curl http://localhost:18086/v1/gateway/health
 go run ./cmd/pacp-admin -node-url http://localhost:18087 -node-token token_agent_smoke health
+go run ./cmd/pacp-admin -node-urls node_linux_gpu=http://localhost:18087 -node-token token_agent_smoke health -providers
 go run ./cmd/pacp-admin catalog route cap_image_generate_gpu
 go run ./cmd/pacp-admin -node-url http://localhost:18087 -node-token token_agent_smoke node services
 go run ./cmd/pacp-admin -node-url http://localhost:18087 -node-token token_runner_smoke node start svc_comfyui_gpu -idempotency-key start-comfy-1
@@ -215,5 +218,5 @@ go run ./cmd/pacp-control -gateway-url http://localhost:18086 -token token_agent
 This is not the full production control plane yet. It is a usable service stack
 with public HTTP boundaries, file-backed local durability, a provider SDK, a
 generic HTTP provider bridge, a composition runner, runtime node adapters, and a
-gateway control CLI. Production databases, richer provider-specific wrappers,
-broader workflow automation, and hardening remain.
+gateway and admin control CLI. Production databases, broader workflow
+automation, and hardening remain.
