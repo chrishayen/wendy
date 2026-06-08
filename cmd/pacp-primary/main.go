@@ -116,6 +116,7 @@ func main() {
 }
 
 func runPrimaryStack(ctx context.Context, cfg primaryConfig) error {
+	cfg = normalizePrimaryConfig(cfg)
 	bound, endpoints, err := bindPrimaryServices(cfg)
 	if err != nil {
 		return err
@@ -484,6 +485,19 @@ func componentCredentialDefault(primaryEnv string) string {
 		return value
 	}
 	return os.Getenv("PACP_COMPONENT_TOKEN")
+}
+
+func normalizePrimaryConfig(cfg primaryConfig) primaryConfig {
+	if cfg.GatewayCredential == "" {
+		cfg.GatewayCredential = cfg.ComponentToken
+	}
+	if cfg.RunnerCredential == "" {
+		cfg.RunnerCredential = cfg.ComponentToken
+	}
+	if cfg.RunnerPolicyCredential == "" {
+		cfg.RunnerPolicyCredential = cfg.ComponentToken
+	}
+	return cfg
 }
 
 func authorizationHeader(token string) string {
