@@ -27,12 +27,13 @@ var (
 )
 
 type Store struct {
-	mu           sync.RWMutex
-	now          func() time.Time
-	nextID       int
-	jobs         map[string]*record
-	idempotency  map[string]idempotentCreate
-	snapshotPath string
+	mu                sync.RWMutex
+	now               func() time.Time
+	nextID            int
+	jobs              map[string]*record
+	idempotency       map[string]idempotentCreate
+	cancelIdempotency map[string]idempotentCancel
+	snapshotPath      string
 }
 
 type record struct {
@@ -48,11 +49,17 @@ type idempotentCreate struct {
 	jobID       string
 }
 
+type idempotentCancel struct {
+	fingerprint string
+	jobID       string
+}
+
 type snapshotFile struct {
-	Version     int                           `json:"version"`
-	NextID      int                           `json:"next_id"`
-	Jobs        map[string]recordSnapshot     `json:"jobs"`
-	Idempotency map[string]idempotentSnapshot `json:"idempotency"`
+	Version           int                           `json:"version"`
+	NextID            int                           `json:"next_id"`
+	Jobs              map[string]recordSnapshot     `json:"jobs"`
+	Idempotency       map[string]idempotentSnapshot `json:"idempotency"`
+	CancelIdempotency map[string]idempotentSnapshot `json:"cancel_idempotency,omitempty"`
 }
 
 type recordSnapshot struct {
@@ -89,10 +96,11 @@ func NewPersistentStore(path string) (*Store, error) {
 
 func NewStore() *Store {
 	return &Store{
-		now:         time.Now,
-		nextID:      1,
-		jobs:        map[string]*record{},
-		idempotency: map[string]idempotentCreate{},
+		now:               time.Now,
+		nextID:            1,
+		jobs:              map[string]*record{},
+		idempotency:       map[string]idempotentCreate{},
+		cancelIdempotency: map[string]idempotentCancel{},
 	}
 }
 
@@ -444,14 +452,40 @@ func (s *Store) Fail(jobID string, req contracts.JobFailRequest) (contracts.Job,
 	return cloneJob(rec.job), nil
 }
 
-func (s *Store) Cancel(jobID string, req contracts.CancelRequest) (contracts.Job, error) {
+func (s *Store) Cancel(jobID string, req contracts.CancelRequest, idempotencyKey string) (contracts.Job, error) {
+	if idempotencyKey == "" {
+		return contracts.Job{}, ErrMissingIdempotency
+	}
+	fingerprint, err := fingerprint(struct {
+		JobID   string                  `json:"job_id"`
+		Request contracts.CancelRequest `json:"request"`
+	}{JobID: jobID, Request: req})
+	if err != nil {
+		return contracts.Job{}, err
+	}
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if existing, ok := s.cancelIdempotency[idempotencyKey]; ok {
+		if existing.fingerprint != fingerprint {
+			return contracts.Job{}, ErrIdempotencyConflict
+		}
+		rec, ok := s.jobs[existing.jobID]
+		if !ok {
+			return contracts.Job{}, ErrNotFound
+		}
+		return cloneJob(rec.job), nil
+	}
+
 	rec, ok := s.jobs[jobID]
 	if !ok {
 		return contracts.Job{}, ErrNotFound
 	}
 	if isTerminal(rec.job.State) {
+		s.cancelIdempotency[idempotencyKey] = idempotentCancel{fingerprint: fingerprint, jobID: jobID}
+		if err := s.saveLocked(); err != nil {
+			return contracts.Job{}, err
+		}
 		return cloneJob(rec.job), nil
 	}
 	rec.job.State = contracts.JobCanceled
@@ -463,6 +497,7 @@ func (s *Store) Cancel(jobID string, req contracts.CancelRequest) (contracts.Job
 	rec.job.StatusMessage = message
 	rec.job.TerminalError = &contracts.ErrorObject{Code: "canceled", Message: message, Retryable: false}
 	rec.job.Claim = nil
+	s.cancelIdempotency[idempotencyKey] = idempotentCancel{fingerprint: fingerprint, jobID: jobID}
 	if err := s.saveLocked(); err != nil {
 		return contracts.Job{}, err
 	}
@@ -712,6 +747,13 @@ func (s *Store) loadSnapshot(path string) error {
 		}
 		s.idempotency[key] = idempotentCreate{fingerprint: rec.Fingerprint, jobID: rec.JobID}
 	}
+	s.cancelIdempotency = map[string]idempotentCancel{}
+	for key, rec := range snapshot.CancelIdempotency {
+		if rec.JobID == "" {
+			continue
+		}
+		s.cancelIdempotency[key] = idempotentCancel{fingerprint: rec.Fingerprint, jobID: rec.JobID}
+	}
 	return nil
 }
 
@@ -720,10 +762,11 @@ func (s *Store) saveLocked() error {
 		return nil
 	}
 	snapshot := snapshotFile{
-		Version:     1,
-		NextID:      s.nextID,
-		Jobs:        map[string]recordSnapshot{},
-		Idempotency: map[string]idempotentSnapshot{},
+		Version:           1,
+		NextID:            s.nextID,
+		Jobs:              map[string]recordSnapshot{},
+		Idempotency:       map[string]idempotentSnapshot{},
+		CancelIdempotency: map[string]idempotentSnapshot{},
 	}
 	for jobID, rec := range s.jobs {
 		snapshot.Jobs[jobID] = recordSnapshot{
@@ -736,6 +779,9 @@ func (s *Store) saveLocked() error {
 	}
 	for key, rec := range s.idempotency {
 		snapshot.Idempotency[key] = idempotentSnapshot{Fingerprint: rec.fingerprint, JobID: rec.jobID}
+	}
+	for key, rec := range s.cancelIdempotency {
+		snapshot.CancelIdempotency[key] = idempotentSnapshot{Fingerprint: rec.fingerprint, JobID: rec.jobID}
 	}
 	raw, err := json.MarshalIndent(snapshot, "", "  ")
 	if err != nil {

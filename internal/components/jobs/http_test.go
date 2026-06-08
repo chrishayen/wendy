@@ -76,6 +76,48 @@ func TestHTTPErrors(t *testing.T) {
 	assertMetric(t, data, "http_errors_total", map[string]string{"method": "GET", "route_group": "/v1/jobs/{job_id}", "status_class": "4xx"}, 1)
 }
 
+func TestHTTPCancelRequiresIdempotencyAndReplays(t *testing.T) {
+	handler := NewHandler(NewStore())
+	createResp := requestJSON(t, handler, http.MethodPost, "/v1/jobs", createRequest(), map[string]string{"Idempotency-Key": "create-http-cancel"})
+	if createResp.Code != http.StatusCreated {
+		t.Fatalf("create status=%d body=%s", createResp.Code, createResp.Body.String())
+	}
+	jobID := responseData(t, createResp)["job_id"].(string)
+	cancelReq := contracts.CancelRequest{Reason: "stop requested"}
+
+	missingID := requestJSON(t, handler, http.MethodPost, "/v1/jobs/"+jobID+"/cancel", cancelReq)
+	if missingID.Code != http.StatusBadRequest {
+		t.Fatalf("cancel without idempotency status=%d body=%s", missingID.Code, missingID.Body.String())
+	}
+	if code := responseErrorCode(t, missingID); code != "missing_idempotency_key" {
+		t.Fatalf("cancel without idempotency code=%s", code)
+	}
+
+	canceled := requestJSON(t, handler, http.MethodPost, "/v1/jobs/"+jobID+"/cancel", cancelReq, map[string]string{"Idempotency-Key": "cancel-http-1"})
+	if canceled.Code != http.StatusOK {
+		t.Fatalf("cancel status=%d body=%s", canceled.Code, canceled.Body.String())
+	}
+	if data := responseData(t, canceled); data["state"] != string(contracts.JobCanceled) || data["status_message"] != "stop requested" {
+		t.Fatalf("canceled = %#v", data)
+	}
+
+	replay := requestJSON(t, handler, http.MethodPost, "/v1/jobs/"+jobID+"/cancel", cancelReq, map[string]string{"Idempotency-Key": "cancel-http-1"})
+	if replay.Code != http.StatusOK {
+		t.Fatalf("cancel replay status=%d body=%s", replay.Code, replay.Body.String())
+	}
+	if data := responseData(t, replay); data["status_message"] != "stop requested" {
+		t.Fatalf("replay = %#v", data)
+	}
+
+	conflict := requestJSON(t, handler, http.MethodPost, "/v1/jobs/"+jobID+"/cancel", contracts.CancelRequest{Reason: "different"}, map[string]string{"Idempotency-Key": "cancel-http-1"})
+	if conflict.Code != http.StatusConflict {
+		t.Fatalf("cancel conflict status=%d body=%s", conflict.Code, conflict.Body.String())
+	}
+	if code := responseErrorCode(t, conflict); code != "idempotency_conflict" {
+		t.Fatalf("cancel conflict code=%s", code)
+	}
+}
+
 func TestHTTPHealth(t *testing.T) {
 	handler := NewHandler(NewStore())
 	resp := requestJSON(t, handler, http.MethodGet, "/v1/jobs/health", nil)

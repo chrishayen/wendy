@@ -334,7 +334,7 @@ func TestRunnerDoesNotCompleteOrUploadArtifactsAfterRunningCancel(t *testing.T) 
 		}},
 	}, map[string]provider.CapabilityHandler{
 		"cap_cancel_image": func(ctx context.Context, req contracts.ProviderInvokeRequest) (contracts.ProviderInvokeResponse, error) {
-			if _, err := jobStore.Cancel(created.JobID, contracts.CancelRequest{Reason: "canceled while running"}); err != nil {
+			if _, err := jobStore.Cancel(created.JobID, contracts.CancelRequest{Reason: "canceled while running"}, "runner-test-cancel-running"); err != nil {
 				t.Fatalf("cancel running job: %v", err)
 			}
 			body := []byte("late artifact bytes")

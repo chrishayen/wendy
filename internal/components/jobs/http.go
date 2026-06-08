@@ -214,7 +214,7 @@ func (h Handler) cancelJob(w http.ResponseWriter, r *http.Request, jobID string)
 	if r.Body != nil {
 		_ = json.NewDecoder(r.Body).Decode(&req)
 	}
-	job, err := h.store.Cancel(jobID, req)
+	job, err := h.store.Cancel(jobID, req, r.Header.Get("Idempotency-Key"))
 	if err != nil {
 		writeStoreError(w, r, err)
 		return
@@ -265,7 +265,7 @@ func writeStoreError(w http.ResponseWriter, r *http.Request, err error) {
 	case errors.Is(err, ErrValidation):
 		writeError(w, r, http.StatusBadRequest, "validation_failed", err.Error(), false)
 	case errors.Is(err, ErrMissingIdempotency):
-		writeError(w, r, http.StatusBadRequest, "missing_idempotency_key", "Idempotency-Key header is required for job creation", false)
+		writeError(w, r, http.StatusBadRequest, "missing_idempotency_key", "Idempotency-Key header is required for this job operation", false)
 	case errors.Is(err, ErrIdempotencyConflict):
 		writeError(w, r, http.StatusConflict, "idempotency_conflict", "idempotency key was reused with different request content", false)
 	case errors.Is(err, ErrWorkerMismatch):

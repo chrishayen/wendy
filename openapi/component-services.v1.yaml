@@ -322,6 +322,7 @@ paths:
       operationId: cancelJob
       parameters:
         - $ref: "#/components/parameters/JobID"
+        - $ref: "#/components/parameters/IdempotencyKeyRequired"
       requestBody:
         required: false
         content:
