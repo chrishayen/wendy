@@ -303,8 +303,12 @@ func readInvocationInput(kind, path string) (map[string]any, []validationFinding
 	}
 	if kind == "tool-invoke" {
 		if preferredMode, exists := object["preferred_mode"]; exists {
-			if _, ok := preferredMode.(string); !ok {
+			value, ok := preferredMode.(string)
+			if !ok {
 				return nil, []validationFinding{{Path: path, Code: "payload_preferred_mode_invalid", Message: "preferred_mode must be a string when present"}}
+			}
+			if value != "sync" && value != "async" {
+				return nil, []validationFinding{{Path: path, Code: "payload_preferred_mode_invalid", Message: "preferred_mode must be sync or async"}}
 			}
 		}
 	}

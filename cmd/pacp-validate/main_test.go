@@ -96,6 +96,26 @@ func TestValidateToolInvokeChecksEnvelopeFields(t *testing.T) {
 	}
 }
 
+func TestValidateToolInvokeRejectsInvalidPreferredMode(t *testing.T) {
+	manifestPath := writeValidationManifest(t, validValidationManifest("svc_validate", "cap_validate_echo"))
+	payloadPath := writeValidationJSON(t, "payload.json", map[string]any{
+		"input":          map[string]any{"message": "hello"},
+		"preferred_mode": "streaming",
+	})
+	var stdout, stderr bytes.Buffer
+	code := run([]string{"tool-invoke", "-manifest", manifestPath, "-capability", "cap_validate_echo", payloadPath}, &stdout, &stderr)
+	if code != 1 {
+		t.Fatalf("code=%d stderr=%s stdout=%s", code, stderr.String(), stdout.String())
+	}
+	report := decodeValidationReport(t, stdout.Bytes())
+	if len(report.Data.Findings) != 1 || report.Data.Findings[0].Code != "payload_preferred_mode_invalid" {
+		t.Fatalf("findings = %+v", report.Data.Findings)
+	}
+	if report.Data.Findings[0].Message != "preferred_mode must be sync or async" {
+		t.Fatalf("message = %q", report.Data.Findings[0].Message)
+	}
+}
+
 func TestValidateInvokeReportsMissingCapability(t *testing.T) {
 	manifestPath := writeValidationManifest(t, validValidationManifest("svc_validate", "cap_validate_echo"))
 	payloadPath := writeValidationJSON(t, "payload.json", map[string]any{
