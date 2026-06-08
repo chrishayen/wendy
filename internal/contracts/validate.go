@@ -45,6 +45,7 @@ func ValidateFixtureFile(path string, raw []byte) (FixtureFile, Report) {
 
 		validateFixture(path, fixture, &report)
 	}
+	validateFixtureReferences(path, file, seenIDs, &report)
 
 	return file, report
 }
@@ -286,6 +287,36 @@ func validateStep(path, stepID string, step OrchestrationStep, report *Report) {
 	}
 	if step.Request != nil || step.Response != nil {
 		validateHTTPExchange(path, stepID, step.Request, step.Response, report)
+	}
+}
+
+func validateFixtureReferences(path string, file FixtureFile, known map[string]struct{}, report *Report) {
+	for _, fixture := range file.Fixtures {
+		if fixture.ID == "" {
+			continue
+		}
+		for i, step := range fixture.Steps {
+			validateFixtureRef(path, fmt.Sprintf("%s.steps[%d]", fixture.ID, i), fixture.ID, step.FixtureRef, known, report)
+		}
+		if fixture.TimeoutInvoke != nil {
+			validateFixtureRef(path, fixture.ID+".timeout_invoke", fixture.ID, fixture.TimeoutInvoke.FixtureRef, known, report)
+		}
+		for i, step := range fixture.TimeoutCleanup {
+			validateFixtureRef(path, fmt.Sprintf("%s.timeout_cleanup[%d]", fixture.ID, i), fixture.ID, step.FixtureRef, known, report)
+		}
+	}
+}
+
+func validateFixtureRef(path, stepID, ownerID, ref string, known map[string]struct{}, report *Report) {
+	if ref == "" {
+		return
+	}
+	if ref == ownerID {
+		report.add(path, stepID, "self_fixture_ref", "fixture_ref must not point to its containing fixture")
+		return
+	}
+	if _, ok := known[ref]; !ok {
+		report.add(path, stepID, "missing_fixture_ref", "fixture_ref points to an unknown fixture id: "+ref)
 	}
 }
 
