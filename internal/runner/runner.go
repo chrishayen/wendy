@@ -30,6 +30,7 @@ type Config struct {
 	NodeURLs                  map[string]string
 	NodeStartTimeout          time.Duration
 	NodePollInterval          time.Duration
+	LeasePollInterval         time.Duration
 	ProviderHeartbeatInterval time.Duration
 	ComponentCredential       string
 	PolicyCredential          string
@@ -102,6 +103,9 @@ func New(cfg Config) *Runner {
 	}
 	if cfg.NodePollInterval <= 0 {
 		cfg.NodePollInterval = 500 * time.Millisecond
+	}
+	if cfg.LeasePollInterval <= 0 {
+		cfg.LeasePollInterval = time.Second
 	}
 	if cfg.ProviderHeartbeatInterval <= 0 {
 		cfg.ProviderHeartbeatInterval = 30 * time.Second
@@ -411,10 +415,51 @@ func (r *Runner) acquireLease(ctx context.Context, jobID, selector string) (*con
 	if err != nil {
 		return nil, err
 	}
-	if request.Lease == nil {
-		return nil, fmt.Errorf("lease request %s is %s", request.RequestID, request.State)
+	return r.waitForLeaseGrant(ctx, jobID, request)
+}
+
+func (r *Runner) waitForLeaseGrant(ctx context.Context, jobID string, request contracts.LeaseRequest) (*contracts.Lease, error) {
+	for {
+		switch request.State {
+		case contracts.LeaseRequestGranted:
+			if request.Lease == nil {
+				return nil, fmt.Errorf("lease request %s is granted without a lease", request.RequestID)
+			}
+			return request.Lease, nil
+		case contracts.LeaseRequestPending:
+			if err := r.heartbeatJob(ctx, jobID, "", leaseWaitStatusMessage(request.ResourceSelector)); err != nil {
+				return nil, err
+			}
+			if err := r.waitLeasePollInterval(ctx); err != nil {
+				return nil, err
+			}
+			var next contracts.LeaseRequest
+			if err := r.getJSON(ctx, r.cfg.LeasesURL+"/v1/lease-requests/"+url.PathEscape(request.RequestID), &next); err != nil {
+				return nil, err
+			}
+			request = next
+		default:
+			return nil, fmt.Errorf("lease request %s is %s", request.RequestID, request.State)
+		}
 	}
-	return request.Lease, nil
+}
+
+func leaseWaitStatusMessage(selector string) string {
+	if selector == "" {
+		return "waiting for resource lease"
+	}
+	return "waiting for " + selector + " lease"
+}
+
+func (r *Runner) waitLeasePollInterval(ctx context.Context) error {
+	timer := time.NewTimer(r.cfg.LeasePollInterval)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
 }
 
 func (r *Runner) releaseLease(ctx context.Context, leaseID, holderID, reason string) (contracts.Lease, error) {

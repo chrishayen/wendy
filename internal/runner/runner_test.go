@@ -120,6 +120,167 @@ func TestRunnerCompletesJobAndUploadsArtifact(t *testing.T) {
 	assertContractMetricExists(t, metrics.Samples, "runner_last_successful_heartbeat_unix_seconds", nil)
 }
 
+func TestRunnerWaitsForPendingResourceLease(t *testing.T) {
+	jobStore := jobs.NewStore()
+	var leaseWaitHeartbeats atomic.Int32
+	jobsHandler := jobs.NewHandler(jobStore)
+	jobsServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/heartbeat") {
+			raw, err := io.ReadAll(r.Body)
+			if err != nil {
+				t.Fatalf("read heartbeat body: %v", err)
+			}
+			var body contracts.JobHeartbeatRequest
+			if err := json.Unmarshal(raw, &body); err != nil {
+				t.Fatalf("decode heartbeat body: %v", err)
+			}
+			if body.StatusMessage == "waiting for gpu lease" {
+				leaseWaitHeartbeats.Add(1)
+			}
+			r.Body = io.NopCloser(bytes.NewReader(raw))
+		}
+		jobsHandler.ServeHTTP(w, r)
+	}))
+	defer jobsServer.Close()
+
+	artifactStore, err := artifacts.NewStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("artifact store: %v", err)
+	}
+	artifactsServer := httptest.NewServer(artifacts.NewHandler(artifactStore))
+	defer artifactsServer.Close()
+
+	var providerInvocations atomic.Int32
+	providerServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/v1/provider/capabilities/cap_fake_image/invoke" {
+			t.Fatalf("unexpected provider request %s %s", r.Method, r.URL.Path)
+		}
+		if leaseWaitHeartbeats.Load() == 0 {
+			t.Fatal("provider invoked before runner reported lease wait")
+		}
+		providerInvocations.Add(1)
+		body := []byte("artifact bytes")
+		sum := sha256.Sum256(body)
+		writeRunnerTestSuccess(w, http.StatusOK, contracts.ProviderInvokeResponse{
+			Output: map[string]any{"artifact_count": 1},
+			Artifacts: []contracts.ProviderArtifact{{
+				Name:          "fake-image.txt",
+				MediaType:     "text/plain",
+				ContentBase64: base64.StdEncoding.EncodeToString(body),
+				Checksum:      "sha256:" + hex.EncodeToString(sum[:]),
+			}},
+		})
+	}))
+	defer providerServer.Close()
+
+	route := contracts.CapabilityRoute{
+		CapabilityID:       "cap_fake_image",
+		ServiceID:          "svc_fake_provider",
+		ProviderEndpoint:   providerServer.URL,
+		ProviderHealthPath: "/v1/provider/health",
+		ProviderInvokePath: "/v1/provider/capabilities/cap_fake_image/invoke",
+		ServiceStartMode:   "manual",
+		ResourceHints:      []contracts.ResourceHint{{Selector: "gpu", Required: true}},
+		ArtifactHints:      []contracts.ArtifactHint{{MediaType: "text/plain", Count: "one"}},
+	}
+	created, _, err := jobStore.Create(contracts.CreateJobRequest{
+		RequesterID:  "sub_agent",
+		CapabilityID: "cap_fake_image",
+		InputSummary: map[string]any{"prompt_present": true},
+		Metadata: map[string]any{"execution_plan": map[string]any{
+			"capability_id":     "cap_fake_image",
+			"subject_id":        "sub_agent",
+			"input":             map[string]any{"prompt": "red mug"},
+			"route":             route,
+			"resource_selector": "gpu",
+			"timeout_seconds":   30,
+		}},
+	}, "create-lease-wait-job")
+	if err != nil {
+		t.Fatalf("create job: %v", err)
+	}
+
+	leaseStore := leases.NewStore()
+	if _, err := leaseStore.RegisterResource(contracts.RegisterResourceRequest{Selector: "gpu", Status: contracts.ResourceAvailable}); err != nil {
+		t.Fatalf("register resource: %v", err)
+	}
+	holder, err := leaseStore.CreateLeaseRequest(contracts.CreateLeaseRequest{RequesterID: "job_holder", ResourceSelector: "gpu"})
+	if err != nil {
+		t.Fatalf("create holder lease: %v", err)
+	}
+	leaseRequestSeen := make(chan struct{})
+	var leaseRequestSeenOnce sync.Once
+	leasesHandler := leases.NewHandler(leaseStore)
+	leasesServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost && r.URL.Path == "/v1/lease-requests" {
+			raw, err := io.ReadAll(r.Body)
+			if err != nil {
+				t.Fatalf("read lease request body: %v", err)
+			}
+			var body contracts.CreateLeaseRequest
+			if err := json.Unmarshal(raw, &body); err != nil {
+				t.Fatalf("decode lease request body: %v", err)
+			}
+			if body.RequesterID == created.JobID {
+				leaseRequestSeenOnce.Do(func() { close(leaseRequestSeen) })
+			}
+			r.Body = io.NopCloser(bytes.NewReader(raw))
+		}
+		leasesHandler.ServeHTTP(w, r)
+	}))
+	defer leasesServer.Close()
+
+	releaseErrs := make(chan error, 1)
+	go func() {
+		select {
+		case <-leaseRequestSeen:
+		case <-time.After(time.Second):
+			releaseErrs <- context.DeadlineExceeded
+			return
+		}
+		for i := 0; i < 100 && leaseWaitHeartbeats.Load() == 0; i++ {
+			time.Sleep(time.Millisecond)
+		}
+		_, err := leaseStore.Release(holder.Lease.LeaseID, contracts.LeaseReleaseRequest{HolderID: "job_holder", Reason: "test released resource"}, "release-holder", "sub_test")
+		releaseErrs <- err
+	}()
+
+	runner := New(Config{
+		WorkerID:          "runner_test",
+		JobsURL:           jobsServer.URL,
+		LeasesURL:         leasesServer.URL,
+		ArtifactsURL:      artifactsServer.URL,
+		ActorSubjectID:    "sub_runner_test",
+		LeasePollInterval: 10 * time.Millisecond,
+		Client:            jobsServer.Client(),
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	jobID, ok, err := runner.RunOnce(ctx)
+	if releaseErr := <-releaseErrs; releaseErr != nil {
+		t.Fatalf("release holder lease: %v", releaseErr)
+	}
+	if err != nil {
+		t.Fatalf("run once: %v", err)
+	}
+	if !ok || jobID != created.JobID {
+		t.Fatalf("run result jobID=%q ok=%v", jobID, ok)
+	}
+	if leaseWaitHeartbeats.Load() == 0 {
+		t.Fatal("runner did not heartbeat while waiting for lease")
+	}
+	if providerInvocations.Load() != 1 {
+		t.Fatalf("provider invocations = %d", providerInvocations.Load())
+	}
+	completed, err := jobStore.Get(created.JobID)
+	if err != nil {
+		t.Fatalf("get completed job: %v", err)
+	}
+	if completed.State != contracts.JobSucceeded || len(completed.ArtifactRefs) != 1 {
+		t.Fatalf("completed job = %#v", completed)
+	}
+}
+
 func TestRunnerFetchesProviderContentRefsAndUploadsArtifact(t *testing.T) {
 	jobStore := jobs.NewStore()
 	jobsServer := httptest.NewServer(jobs.NewHandler(jobStore))
