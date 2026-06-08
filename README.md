@@ -328,6 +328,10 @@ Provider metrics additionally expose invocation count, error count, and average
 duration by service id, capability id, status, and error code.
 Runner metrics expose active job count, run loop results, successful heartbeat
 timestamps, and dependency reachability for configured primary APIs and nodes.
+Gateway health includes per-downstream dependency status for catalog, policy,
+jobs, leases, and artifacts. Gateway metrics expose configured and reachable
+samples for those downstreams, and `pacp-admin alerts` reports configured
+gateway dependencies that are missing or not healthy.
 Runner operational logs are JSON records with request id, job id when present,
 and configured credentials redacted.
 Gateway and runner requests propagate `X-Request-ID` to downstream component,
