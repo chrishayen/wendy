@@ -1,10 +1,12 @@
 package testkit
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"pacp/internal/contracts"
 )
@@ -99,6 +101,7 @@ func ValidateScenario(s Scenario) contracts.Report {
 				Message: fmt.Sprintf("fixture scenario_id %q does not match manifest %q", pkg.File.ScenarioID, s.Manifest.ScenarioID),
 			})
 		}
+		validatePackageBinaryFixtures(s.Root, pkg, &report)
 	}
 	return report
 }
@@ -118,4 +121,69 @@ func cleanJoin(root, rel string) (string, error) {
 		return "", fmt.Errorf("path %q escapes fixture root", rel)
 	}
 	return filepath.Join(root, cleanRel), nil
+}
+
+func validatePackageBinaryFixtures(root string, pkg FixturePackage, report *contracts.Report) {
+	for _, rel := range pkg.BinaryFixtures {
+		validateBase64Fixture(root, rel, pkg.Path, "", "manifest_binary_fixture", report)
+	}
+	packageDir := filepath.Dir(pkg.AbsPath)
+	for _, fixture := range pkg.File.Fixtures {
+		validateFixtureBinaryRefs(packageDir, pkg.Path, fixture.ID, fixture, report)
+	}
+}
+
+func validateFixtureBinaryRefs(packageDir, path, fixtureID string, fixture contracts.Fixture, report *contracts.Report) {
+	validateRequestBinaryRef(packageDir, path, fixtureID, fixture.Request, report)
+	validateResponseBinaryRef(packageDir, path, fixtureID, fixture.Response, report)
+	for _, step := range fixture.Steps {
+		validateStepBinaryRefs(packageDir, path, fixtureID, step, report)
+	}
+	if fixture.TimeoutInvoke != nil {
+		validateStepBinaryRefs(packageDir, path, fixtureID, *fixture.TimeoutInvoke, report)
+	}
+	for _, step := range fixture.TimeoutCleanup {
+		validateStepBinaryRefs(packageDir, path, fixtureID, step, report)
+	}
+}
+
+func validateStepBinaryRefs(packageDir, path, fixtureID string, step contracts.OrchestrationStep, report *contracts.Report) {
+	validateRequestBinaryRef(packageDir, path, fixtureID, step.Request, report)
+	validateResponseBinaryRef(packageDir, path, fixtureID, step.Response, report)
+}
+
+func validateRequestBinaryRef(packageDir, path, fixtureID string, req *contracts.HTTPRequest, report *contracts.Report) {
+	if req == nil || req.BodyFixture == "" {
+		return
+	}
+	validateBase64Fixture(packageDir, req.BodyFixture, path, fixtureID, "request_body_fixture", report)
+}
+
+func validateResponseBinaryRef(packageDir, path, fixtureID string, resp *contracts.HTTPResponse, report *contracts.Report) {
+	if resp == nil || resp.BodyFixture == "" {
+		return
+	}
+	validateBase64Fixture(packageDir, resp.BodyFixture, path, fixtureID, "response_body_fixture", report)
+}
+
+func validateBase64Fixture(root, rel, reportPath, fixtureID, kind string, report *contracts.Report) {
+	absPath, err := cleanJoin(root, rel)
+	if err != nil {
+		report.Findings = append(report.Findings, contracts.Finding{
+			File: reportPath, Fixture: fixtureID, Code: kind + "_path_invalid", Message: err.Error(),
+		})
+		return
+	}
+	raw, err := os.ReadFile(absPath)
+	if err != nil {
+		report.Findings = append(report.Findings, contracts.Finding{
+			File: reportPath, Fixture: fixtureID, Code: kind + "_read_failed", Message: err.Error(),
+		})
+		return
+	}
+	if _, err := base64.StdEncoding.DecodeString(strings.TrimSpace(string(raw))); err != nil {
+		report.Findings = append(report.Findings, contracts.Finding{
+			File: reportPath, Fixture: fixtureID, Code: kind + "_invalid_base64", Message: err.Error(),
+		})
+	}
 }
