@@ -436,6 +436,7 @@ func TestAlertsReportsHealthAndMetricFindings(t *testing.T) {
 			writeMetrics(t, w, http.StatusOK, "jobs", []map[string]any{
 				{"name": "jobs_by_state", "value": 2, "unit": "count", "labels": map[string]string{"state": "failed"}},
 				{"name": "jobs_by_state", "value": 1, "unit": "count", "labels": map[string]string{"state": "queued"}},
+				{"name": "jobs_expired_claims", "value": 1, "unit": "count"},
 			})
 		case "/v1/leases/metrics":
 			writeMetrics(t, w, http.StatusOK, "leases", []map[string]any{
@@ -474,6 +475,7 @@ func TestAlertsReportsHealthAndMetricFindings(t *testing.T) {
 		`"code": "target_unhealthy"`,
 		`"code": "jobs_failed"`,
 		`"code": "jobs_queued"`,
+		`"code": "jobs_expired_claims"`,
 		`"code": "lease_queue_depth"`,
 		`"code": "artifact_uploads_not_completed"`,
 		`"code": "policy_denies"`,

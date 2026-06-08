@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"pacp/internal/contracts"
 )
@@ -99,6 +100,33 @@ func TestHTTPMetrics(t *testing.T) {
 	}
 	assertMetric(t, data, "jobs_by_state", map[string]string{"state": "queued"}, 1)
 	assertMetric(t, data, "http_requests_total", map[string]string{"method": "POST", "route_group": "/v1/jobs", "status_class": "2xx"}, 1)
+}
+
+func TestHTTPMetricsReportsExpiredClaims(t *testing.T) {
+	now := time.Date(2026, 6, 8, 12, 0, 0, 0, time.UTC)
+	store := NewStore()
+	store.SetClock(func() time.Time { return now })
+	handler := NewHandler(store)
+
+	createResp := requestJSON(t, handler, http.MethodPost, "/v1/jobs", createRequest())
+	if createResp.Code != http.StatusCreated {
+		t.Fatalf("create status=%d body=%s", createResp.Code, createResp.Body.String())
+	}
+	jobID := responseData(t, createResp)["job_id"].(string)
+
+	claimResp := requestJSON(t, handler, http.MethodPost, "/v1/jobs/"+jobID+"/claim", contracts.JobClaimRequest{WorkerID: "runner_1", LeaseSeconds: 1})
+	if claimResp.Code != http.StatusOK {
+		t.Fatalf("claim status=%d body=%s", claimResp.Code, claimResp.Body.String())
+	}
+	now = now.Add(2 * time.Second)
+
+	resp := requestJSON(t, handler, http.MethodGet, "/v1/jobs/metrics", nil)
+	if resp.Code != http.StatusOK {
+		t.Fatalf("metrics status=%d body=%s", resp.Code, resp.Body.String())
+	}
+	data := responseData(t, resp)
+	assertMetric(t, data, "jobs_active_claims", nil, 0)
+	assertMetric(t, data, "jobs_expired_claims", nil, 1)
 }
 
 func requestJSON(t *testing.T, handler http.Handler, method, path string, body any) *httptest.ResponseRecorder {

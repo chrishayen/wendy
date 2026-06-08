@@ -108,22 +108,28 @@ func (s *Store) HealthDetails() map[string]any {
 		string(contracts.JobExpired):   0,
 	}
 	activeClaims := 0
+	expiredClaims := 0
 	logEntries := 0
 	for _, rec := range s.jobs {
 		byState[string(rec.job.State)]++
-		if rec.job.Claim != nil && !s.claimExpired(rec.job.Claim) {
-			activeClaims++
+		if rec.job.Claim != nil {
+			if s.claimExpired(rec.job.Claim) {
+				expiredClaims++
+			} else {
+				activeClaims++
+			}
 		}
 		logEntries += len(rec.logs)
 	}
 	return map[string]any{
-		"store_backend":      backendLabel(s.snapshotPath),
-		"job_count":          len(s.jobs),
-		"jobs_by_state":      byState,
-		"active_claim_count": activeClaims,
-		"log_entry_count":    logEntries,
-		"schema_version":     "v1",
-		"claim_expiry_loop":  "inline_on_access",
+		"store_backend":       backendLabel(s.snapshotPath),
+		"job_count":           len(s.jobs),
+		"jobs_by_state":       byState,
+		"active_claim_count":  activeClaims,
+		"expired_claim_count": expiredClaims,
+		"log_entry_count":     logEntries,
+		"schema_version":      "v1",
+		"claim_expiry_loop":   "inline_on_access",
 	}
 }
 
@@ -143,14 +149,19 @@ func (s *Store) Metrics() contracts.ComponentMetrics {
 		string(contracts.JobExpired):   0,
 	}
 	activeClaims := 0
+	expiredClaims := 0
 	logEntries := 0
 	durationTotals := map[string]float64{}
 	durationCounts := map[string]int{}
 	for _, rec := range s.jobs {
 		state := string(rec.job.State)
 		byState[state]++
-		if rec.job.Claim != nil && !s.claimExpired(rec.job.Claim) {
-			activeClaims++
+		if rec.job.Claim != nil {
+			if s.claimExpired(rec.job.Claim) {
+				expiredClaims++
+			} else {
+				activeClaims++
+			}
 		}
 		logEntries += len(rec.logs)
 		if isTerminal(rec.job.State) {
@@ -169,6 +180,7 @@ func (s *Store) Metrics() contracts.ComponentMetrics {
 	}
 	samples = append(samples,
 		contracts.CountMetric("jobs_active_claims", activeClaims, nil),
+		contracts.CountMetric("jobs_expired_claims", expiredClaims, nil),
 		contracts.CountMetric("job_log_entries_total", logEntries, nil),
 	)
 	for capability, total := range durationTotals {

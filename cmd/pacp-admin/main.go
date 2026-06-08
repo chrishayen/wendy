@@ -1510,6 +1510,10 @@ func addMetricFindings(report *alertsReport, item metricsItem, opts alertOptions
 			if sample.Value > 0 {
 				addAlertFinding(report, diagnosticFinding{Severity: "info", Code: "jobs_claimed", Message: fmt.Sprintf("%s has %.0f active job claim(s)", item.Name, sample.Value)})
 			}
+		case "jobs_expired_claims":
+			if sample.Value > 0 {
+				addAlertFinding(report, diagnosticFinding{Severity: "warning", Code: "jobs_expired_claims", Message: fmt.Sprintf("%s has %.0f expired job claim(s)", item.Name, sample.Value)})
+			}
 		case "lease_queue_depth":
 			if sample.Value > float64(opts.QueueDepthThreshold) {
 				selector := sample.Labels["selector"]
