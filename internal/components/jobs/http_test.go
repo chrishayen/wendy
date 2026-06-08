@@ -71,7 +71,11 @@ func TestHTTPHealth(t *testing.T) {
 		t.Fatalf("health status=%d body=%s", resp.Code, resp.Body.String())
 	}
 	data := responseData(t, resp)
-	if data["status"] != "healthy" || data["details"].(map[string]any)["component"] != "jobs" {
+	details := data["details"].(map[string]any)
+	if data["status"] != "healthy" || details["component"] != "jobs" {
+		t.Fatalf("health = %#v", data)
+	}
+	if details["store_backend"] != "memory" || details["job_count"] != float64(0) || details["active_claim_count"] != float64(0) {
 		t.Fatalf("health = %#v", data)
 	}
 }

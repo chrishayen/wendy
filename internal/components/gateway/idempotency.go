@@ -41,6 +41,15 @@ func newPersistentIdempotencyStore(path string) (*idempotencyStore, error) {
 	return store, nil
 }
 
+func (s *idempotencyStore) healthDetails() map[string]any {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return map[string]any{
+		"store_backend": backendLabel(s.snapshotPath),
+		"record_count":  len(s.records),
+	}
+}
+
 func (s *idempotencyStore) replay(key, fingerprint string) (invokeRecord, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -125,4 +134,11 @@ func cloneLinks(in map[string]any) map[string]any {
 		out[key] = value
 	}
 	return out
+}
+
+func backendLabel(path string) string {
+	if path == "" {
+		return "memory"
+	}
+	return "file_snapshot"
 }

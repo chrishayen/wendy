@@ -21,7 +21,7 @@ func (h Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	path := strings.TrimSuffix(r.URL.Path, "/")
 	switch {
 	case path == "/v1/leases/health" && r.Method == http.MethodGet:
-		writeSuccess(w, r, http.StatusOK, contracts.NewComponentHealth("leases", nil))
+		writeSuccess(w, r, http.StatusOK, contracts.NewComponentHealth("leases", h.store.HealthDetails()))
 	case path == "/v1/resources" && r.Method == http.MethodGet:
 		h.listResources(w, r)
 	case path == "/v1/resources" && r.Method == http.MethodPost:

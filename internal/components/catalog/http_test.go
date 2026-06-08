@@ -75,7 +75,11 @@ func TestHealthHTTP(t *testing.T) {
 		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
 	}
 	data := decodeData(t, rec.Body)
-	if data["status"] != "healthy" || data["details"].(map[string]any)["component"] != "catalog" {
+	details := data["details"].(map[string]any)
+	if data["status"] != "healthy" || details["component"] != "catalog" {
+		t.Fatalf("health = %#v", data)
+	}
+	if details["store_backend"] != "memory" || details["service_count"] != float64(0) || details["capability_count"] != float64(0) {
 		t.Fatalf("health = %#v", data)
 	}
 }

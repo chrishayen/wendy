@@ -90,7 +90,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	path := strings.TrimSuffix(r.URL.Path, "/")
 	switch {
 	case path == "/v1/gateway/health" && r.Method == http.MethodGet:
-		writeSuccess(w, r, http.StatusOK, contracts.NewComponentHealth("gateway", nil))
+		writeSuccess(w, r, http.StatusOK, contracts.NewComponentHealth("gateway", h.healthDetails()))
 	case path == "/v1/tools" && r.Method == http.MethodGet:
 		h.listTools(w, r)
 	case strings.HasPrefix(path, "/v1/tools/"):
@@ -102,6 +102,19 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.readArtifactContent(w, r, artifactID)
 	default:
 		writeError(w, r, http.StatusNotFound, "not_found", "gateway route not found", false)
+	}
+}
+
+func (h *Handler) healthDetails() map[string]any {
+	return map[string]any{
+		"schema_version": "v1",
+		"downstreams_configured": map[string]bool{
+			"catalog":   h.cfg.CatalogURL != "",
+			"policy":    h.cfg.PolicyURL != "",
+			"jobs":      h.cfg.JobsURL != "",
+			"artifacts": h.cfg.ArtifactsURL != "",
+		},
+		"idempotency": h.idempotency.healthDetails(),
 	}
 }
 

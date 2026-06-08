@@ -23,7 +23,7 @@ func (h Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	path := strings.TrimSuffix(r.URL.Path, "/")
 	switch {
 	case path == "/v1/artifacts/health" && r.Method == http.MethodGet:
-		writeSuccess(w, r, http.StatusOK, contracts.NewComponentHealth("artifacts", nil))
+		writeSuccess(w, r, http.StatusOK, contracts.NewComponentHealth("artifacts", h.store.HealthDetails()))
 	case path == "/v1/artifact-uploads" && r.Method == http.MethodPost:
 		h.createUpload(w, r)
 	case strings.HasPrefix(path, "/v1/artifact-uploads/"):

@@ -22,7 +22,7 @@ func (h Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	path := strings.TrimSuffix(r.URL.Path, "/")
 	switch {
 	case r.Method == http.MethodGet && path == "/v1/catalog/health":
-		writeSuccess(w, r, http.StatusOK, contracts.NewComponentHealth("catalog", nil))
+		writeSuccess(w, r, http.StatusOK, contracts.NewComponentHealth("catalog", h.store.HealthDetails()))
 	case r.Method == http.MethodPost && path == "/v1/catalog/manifests":
 		h.registerManifest(w, r)
 	case r.Method == http.MethodGet && path == "/v1/catalog/services":

@@ -138,6 +138,43 @@ func NewStore() *Store {
 	}
 }
 
+func (s *Store) HealthDetails() map[string]any {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	activeLeases := 0
+	for _, lease := range s.leases {
+		if lease.state == leaseActive {
+			activeLeases++
+		}
+	}
+	pendingRequests := 0
+	grantedRequests := 0
+	for _, request := range s.requests {
+		switch request.request.State {
+		case contracts.LeaseRequestPending:
+			pendingRequests++
+		case contracts.LeaseRequestGranted:
+			grantedRequests++
+		}
+	}
+	queueDepth := 0
+	for _, queue := range s.queues {
+		queueDepth += len(queue)
+	}
+	return map[string]any{
+		"store_backend":         backendLabel(s.snapshotPath),
+		"resource_count":        len(s.resources),
+		"lease_request_count":   len(s.requests),
+		"pending_request_count": pendingRequests,
+		"granted_request_count": grantedRequests,
+		"active_lease_count":    activeLeases,
+		"queue_depth":           queueDepth,
+		"audit_event_count":     len(s.audit),
+		"schema_version":        "v1",
+		"queue_manager":         "inline_on_request",
+	}
+}
+
 func (s *Store) SetClock(now func() time.Time) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -922,4 +959,11 @@ func positiveOrDefault(value, fallback int) int {
 		return fallback
 	}
 	return value
+}
+
+func backendLabel(path string) string {
+	if path == "" {
+		return "memory"
+	}
+	return "file_snapshot"
 }

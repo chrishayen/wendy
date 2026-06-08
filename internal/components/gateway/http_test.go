@@ -35,7 +35,16 @@ func TestGatewayHealthDoesNotRequireDownstreamServices(t *testing.T) {
 		t.Fatalf("decode health response: %v", err)
 	}
 	data := envelope["data"].(map[string]any)
-	if data["status"] != "healthy" || data["details"].(map[string]any)["component"] != "gateway" {
+	details := data["details"].(map[string]any)
+	if data["status"] != "healthy" || details["component"] != "gateway" {
+		t.Fatalf("health response = %#v", envelope)
+	}
+	downstreams := details["downstreams_configured"].(map[string]any)
+	if downstreams["catalog"] != false || downstreams["jobs"] != false {
+		t.Fatalf("health response = %#v", envelope)
+	}
+	idempotency := details["idempotency"].(map[string]any)
+	if idempotency["store_backend"] != "memory" || idempotency["record_count"] != float64(0) {
 		t.Fatalf("health response = %#v", envelope)
 	}
 }

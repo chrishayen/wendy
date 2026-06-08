@@ -69,6 +69,19 @@ func NewStore() *Store {
 	}
 }
 
+func (s *Store) HealthDetails() map[string]any {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return map[string]any{
+		"store_backend":     backendLabel(s.snapshotPath),
+		"service_count":     len(s.services),
+		"provider_count":    len(s.providers),
+		"capability_count":  len(s.capabilities),
+		"schema_version":    "v1",
+		"catalog_available": true,
+	}
+}
+
 func (s *Store) RegisterManifest(manifest contracts.ProviderManifest) ([]string, error) {
 	if errs := contracts.ValidateProviderManifest(manifest); len(errs) > 0 {
 		return nil, fmt.Errorf("%w: %s", ErrInvalidManifest, strings.Join(errs, "; "))
@@ -352,4 +365,11 @@ func cloneCapability(capability contracts.Capability) contracts.Capability {
 	var cloned contracts.Capability
 	_ = json.Unmarshal(raw, &cloned)
 	return cloned
+}
+
+func backendLabel(path string) string {
+	if path == "" {
+		return "memory"
+	}
+	return "file_snapshot"
 }

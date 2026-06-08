@@ -94,6 +94,31 @@ func NewStore() *Store {
 	}
 }
 
+func (s *Store) HealthDetails() map[string]any {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	activeKeys := 0
+	revokedKeys := 0
+	for _, key := range s.keysByID {
+		if key.revoked {
+			revokedKeys++
+			continue
+		}
+		activeKeys++
+	}
+	return map[string]any{
+		"store_backend":         backendLabel(s.snapshotPath),
+		"api_key_count":         len(s.keysByID),
+		"active_api_key_count":  activeKeys,
+		"revoked_api_key_count": revokedKeys,
+		"policy_rule_count":     len(s.rules),
+		"secret_ref_count":      len(s.secrets),
+		"secret_backend":        "local_state_redacted",
+		"audit_event_count":     len(s.audit),
+		"schema_version":        "v1",
+	}
+}
+
 func (s *Store) SetClock(now func() time.Time) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -648,4 +673,11 @@ func positiveOrDefault(value, fallback int) int {
 		return fallback
 	}
 	return value
+}
+
+func backendLabel(path string) string {
+	if path == "" {
+		return "memory"
+	}
+	return "file_snapshot"
 }

@@ -87,7 +87,11 @@ func TestHandlerMissingIdempotencyEnvelope(t *testing.T) {
 func TestHandlerHealth(t *testing.T) {
 	handler := NewHandler(newTestStore(t))
 	data := doJSON(t, handler, http.MethodGet, "/v1/artifacts/health", nil, nil, http.StatusOK)
-	if data["status"] != "healthy" || data["details"].(map[string]any)["component"] != "artifacts" {
+	details := data["details"].(map[string]any)
+	if data["status"] != "healthy" || details["component"] != "artifacts" {
+		t.Fatalf("health = %#v", data)
+	}
+	if details["store_backend"] != "memory" || details["content_backend"] != "local_fs" || details["artifact_count"] != float64(0) {
 		t.Fatalf("health = %#v", data)
 	}
 }

@@ -167,6 +167,30 @@ func NewStore(root string) (*Store, error) {
 	}, nil
 }
 
+func (s *Store) HealthDetails() map[string]any {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	uploadsByState := map[string]int{
+		string(contracts.ArtifactUploadCreated):   0,
+		string(contracts.ArtifactUploadReceived):  0,
+		string(contracts.ArtifactUploadCompleted): 0,
+		string(contracts.ArtifactUploadAborted):   0,
+		string(contracts.ArtifactUploadExpired):   0,
+	}
+	for _, upload := range s.uploads {
+		uploadsByState[string(upload.session.State)]++
+	}
+	return map[string]any{
+		"store_backend":     backendLabel(s.snapshotPath),
+		"content_backend":   "local_fs",
+		"artifact_count":    len(s.artifacts),
+		"upload_count":      len(s.uploads),
+		"uploads_by_state":  uploadsByState,
+		"idempotency_count": len(s.idempotency),
+		"schema_version":    "v1",
+	}
+}
+
 func (s *Store) SetClock(now func() time.Time) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -887,4 +911,11 @@ func HeadersFromRequest(r *http.Request, body []byte) ContentUpload {
 		ContentLength: contentLength,
 		Digest:        r.Header.Get("Digest"),
 	}
+}
+
+func backendLabel(path string) string {
+	if path == "" {
+		return "memory"
+	}
+	return "file_snapshot"
 }

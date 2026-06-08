@@ -95,6 +95,38 @@ func NewStore() *Store {
 	}
 }
 
+func (s *Store) HealthDetails() map[string]any {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	byState := map[string]int{
+		string(contracts.JobQueued):    0,
+		string(contracts.JobClaimed):   0,
+		string(contracts.JobRunning):   0,
+		string(contracts.JobSucceeded): 0,
+		string(contracts.JobFailed):    0,
+		string(contracts.JobCanceled):  0,
+		string(contracts.JobExpired):   0,
+	}
+	activeClaims := 0
+	logEntries := 0
+	for _, rec := range s.jobs {
+		byState[string(rec.job.State)]++
+		if rec.job.Claim != nil && !s.claimExpired(rec.job.Claim) {
+			activeClaims++
+		}
+		logEntries += len(rec.logs)
+	}
+	return map[string]any{
+		"store_backend":      backendLabel(s.snapshotPath),
+		"job_count":          len(s.jobs),
+		"jobs_by_state":      byState,
+		"active_claim_count": activeClaims,
+		"log_entry_count":    logEntries,
+		"schema_version":     "v1",
+		"claim_expiry_loop":  "inline_on_access",
+	}
+}
+
 func (s *Store) SetClock(now func() time.Time) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -651,4 +683,11 @@ func (s *Store) saveLocked() error {
 		return err
 	}
 	return os.Rename(tmpPath, s.snapshotPath)
+}
+
+func backendLabel(path string) string {
+	if path == "" {
+		return "memory"
+	}
+	return "file_snapshot"
 }

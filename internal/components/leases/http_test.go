@@ -87,7 +87,11 @@ func TestHandlerErrorsUseStableEnvelopes(t *testing.T) {
 func TestHandlerHealth(t *testing.T) {
 	handler := NewHandler(NewStore())
 	data := doJSON(t, handler, http.MethodGet, "/v1/leases/health", nil, nil)
-	if data["status"] != "healthy" || data["details"].(map[string]any)["component"] != "leases" {
+	details := data["details"].(map[string]any)
+	if data["status"] != "healthy" || details["component"] != "leases" {
+		t.Fatalf("health = %#v", data)
+	}
+	if details["store_backend"] != "memory" || details["resource_count"] != float64(0) || details["queue_depth"] != float64(0) {
 		t.Fatalf("health = %#v", data)
 	}
 }

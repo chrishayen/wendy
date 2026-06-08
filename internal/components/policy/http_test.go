@@ -66,7 +66,11 @@ func TestHandlerMalformedCredentialError(t *testing.T) {
 func TestHandlerHealth(t *testing.T) {
 	handler := NewHandler(NewStore())
 	data := doJSON(t, handler, http.MethodGet, "/v1/policy/health", nil, http.StatusOK)
-	if data["status"] != "healthy" || data["details"].(map[string]any)["component"] != "policy" {
+	details := data["details"].(map[string]any)
+	if data["status"] != "healthy" || details["component"] != "policy" {
+		t.Fatalf("health = %#v", data)
+	}
+	if details["store_backend"] != "memory" || details["secret_backend"] != "local_state_redacted" || details["api_key_count"] != float64(0) {
 		t.Fatalf("health = %#v", data)
 	}
 }
