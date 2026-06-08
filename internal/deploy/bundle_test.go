@@ -34,6 +34,9 @@ func TestRenderBundleProducesNativeComponentInputs(t *testing.T) {
 	if service.ProviderEndpoint != "http://linux-gpu-node:18088" {
 		t.Fatalf("provider endpoint = %q", service.ProviderEndpoint)
 	}
+	if service.IdleTimeoutSeconds != 900 {
+		t.Fatalf("idle timeout = %d", service.IdleTimeoutSeconds)
+	}
 	if service.Manifest == nil {
 		t.Fatal("service manifest was not embedded in node config")
 	}
@@ -125,5 +128,25 @@ func TestRenderRejectsProviderNodeMismatch(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "provider.node_id must match") {
 		t.Fatalf("error did not mention provider node mismatch: %v", err)
+	}
+}
+
+func TestRenderRejectsNegativeIdleTimeout(t *testing.T) {
+	raw, err := os.ReadFile("../../testdata/deploy/generic-gpu-bundle.json")
+	if err != nil {
+		t.Fatalf("read bundle: %v", err)
+	}
+	bundle, err := Parse(raw)
+	if err != nil {
+		t.Fatalf("parse bundle: %v", err)
+	}
+	bundle.Services[0].IdleTimeoutSeconds = -1
+
+	_, err = Render(bundle)
+	if err == nil {
+		t.Fatal("expected negative idle timeout error")
+	}
+	if !strings.Contains(err.Error(), "idle_timeout_seconds must be >= 0") {
+		t.Fatalf("error did not mention idle timeout: %v", err)
 	}
 }

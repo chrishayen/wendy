@@ -32,13 +32,14 @@ type BundleNode struct {
 }
 
 type ServiceBundle struct {
-	Manifest         contracts.ProviderManifest      `json:"manifest"`
-	RuntimeAdapter   string                          `json:"runtime_adapter,omitempty"`
-	ProviderEndpoint string                          `json:"provider_endpoint,omitempty"`
-	InitialStatus    string                          `json:"initial_status,omitempty"`
-	Process          *contracts.ProcessRuntimeConfig `json:"process,omitempty"`
-	Docker           *contracts.DockerRuntimeConfig  `json:"docker,omitempty"`
-	Metadata         map[string]any                  `json:"metadata,omitempty"`
+	Manifest           contracts.ProviderManifest      `json:"manifest"`
+	RuntimeAdapter     string                          `json:"runtime_adapter,omitempty"`
+	ProviderEndpoint   string                          `json:"provider_endpoint,omitempty"`
+	InitialStatus      string                          `json:"initial_status,omitempty"`
+	IdleTimeoutSeconds int                             `json:"idle_timeout_seconds,omitempty"`
+	Process            *contracts.ProcessRuntimeConfig `json:"process,omitempty"`
+	Docker             *contracts.DockerRuntimeConfig  `json:"docker,omitempty"`
+	Metadata           map[string]any                  `json:"metadata,omitempty"`
 }
 
 type PolicySeedFile struct {
@@ -133,6 +134,10 @@ func Render(bundle Bundle) (RenderedBundle, error) {
 		if len(serviceFindings) > 0 {
 			continue
 		}
+		if service.IdleTimeoutSeconds < 0 {
+			findings = append(findings, fmt.Sprintf("services[%d].idle_timeout_seconds must be >= 0", i))
+			continue
+		}
 		runtimeAdapter := strings.TrimSpace(service.RuntimeAdapter)
 		if runtimeAdapter == "" {
 			runtimeAdapter = defaultRuntimeAdapter
@@ -147,15 +152,16 @@ func Render(bundle Bundle) (RenderedBundle, error) {
 		}
 		manifestCopy := manifest
 		nodeServices = append(nodeServices, contracts.NodeServiceConfig{
-			ServiceID:        manifest.Service.ID,
-			DisplayName:      manifest.Service.Name,
-			RuntimeAdapter:   runtimeAdapter,
-			ProviderEndpoint: endpoint,
-			InitialStatus:    initialStatus,
-			Manifest:         &manifestCopy,
-			Process:          cloneProcessConfig(service.Process),
-			Docker:           cloneDockerConfig(service.Docker),
-			Metadata:         cloneMap(service.Metadata),
+			ServiceID:          manifest.Service.ID,
+			DisplayName:        manifest.Service.Name,
+			RuntimeAdapter:     runtimeAdapter,
+			ProviderEndpoint:   endpoint,
+			InitialStatus:      initialStatus,
+			IdleTimeoutSeconds: service.IdleTimeoutSeconds,
+			Manifest:           &manifestCopy,
+			Process:            cloneProcessConfig(service.Process),
+			Docker:             cloneDockerConfig(service.Docker),
+			Metadata:           cloneMap(service.Metadata),
 		})
 		manifests = append(manifests, ManifestFile{
 			ServiceID: manifest.Service.ID,
