@@ -8,23 +8,31 @@ import (
 	"strings"
 
 	"pacp/internal/contracts"
+	"pacp/internal/observability"
 )
 
 type Handler struct {
-	store *Store
+	store       *Store
+	httpMetrics *observability.HTTPMetrics
 }
 
 func NewHandler(store *Store) http.Handler {
-	return Handler{store: store}
+	return Handler{store: store, httpMetrics: observability.NewHTTPMetrics()}
 }
 
 func (h Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	h.httpMetrics.Record(w, r, h.serveHTTP)
+}
+
+func (h Handler) serveHTTP(w http.ResponseWriter, r *http.Request) {
 	path := strings.TrimSuffix(r.URL.Path, "/")
 	switch {
 	case path == "/v1/jobs/health" && r.Method == http.MethodGet:
 		writeSuccess(w, r, http.StatusOK, contracts.NewComponentHealth("jobs", h.store.HealthDetails()))
 	case path == "/v1/jobs/metrics" && r.Method == http.MethodGet:
-		writeSuccess(w, r, http.StatusOK, h.store.Metrics())
+		metrics := h.store.Metrics()
+		metrics.Samples = append(metrics.Samples, h.httpMetrics.Samples()...)
+		writeSuccess(w, r, http.StatusOK, metrics)
 	case path == "/v1/jobs" && r.Method == http.MethodGet:
 		h.listJobs(w, r)
 	case path == "/v1/jobs" && r.Method == http.MethodPost:

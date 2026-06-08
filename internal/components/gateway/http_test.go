@@ -51,6 +51,13 @@ func TestGatewayHealthDoesNotRequireDownstreamServices(t *testing.T) {
 
 func TestGatewayMetricsReportsConfiguredDownstreams(t *testing.T) {
 	handler := NewHandler(Config{CatalogURL: "http://catalog.local", JobsURL: "http://jobs.local"})
+	healthReq := httptest.NewRequest(http.MethodGet, "/v1/gateway/health", nil)
+	healthRec := httptest.NewRecorder()
+	handler.ServeHTTP(healthRec, healthReq)
+	if healthRec.Code != http.StatusOK {
+		t.Fatalf("health status=%d body=%s", healthRec.Code, healthRec.Body.String())
+	}
+
 	req := httptest.NewRequest(http.MethodGet, "/v1/gateway/metrics", nil)
 	rec := httptest.NewRecorder()
 
@@ -68,6 +75,7 @@ func TestGatewayMetricsReportsConfiguredDownstreams(t *testing.T) {
 	}
 	assertMetric(t, data, "gateway_downstream_configured", map[string]string{"downstream": "catalog"}, 1)
 	assertMetric(t, data, "gateway_downstream_configured", map[string]string{"downstream": "policy"}, 0)
+	assertMetric(t, data, "http_requests_total", map[string]string{"method": "GET", "route_group": "/v1/gateway/health", "status_class": "2xx"}, 1)
 }
 
 func TestGatewayDiscoveryInvokeAndJobProjection(t *testing.T) {

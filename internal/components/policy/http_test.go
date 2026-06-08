@@ -56,6 +56,7 @@ func TestHandlerCredentialPolicyAndSecretFlow(t *testing.T) {
 	}
 	assertMetric(t, metrics, "policy_api_keys_total", nil, 1)
 	assertMetric(t, metrics, "policy_decisions_total", map[string]string{"action": "tool.invoke", "decision": "allow"}, 1)
+	assertMetric(t, metrics, "http_requests_total", map[string]string{"method": "POST", "route_group": "/v1/policy/check", "status_class": "2xx"}, 1)
 }
 
 func TestHandlerMalformedCredentialError(t *testing.T) {

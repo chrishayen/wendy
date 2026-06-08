@@ -8,23 +8,31 @@ import (
 	"strings"
 
 	"pacp/internal/contracts"
+	"pacp/internal/observability"
 )
 
 type Handler struct {
-	store *Store
+	store       *Store
+	httpMetrics *observability.HTTPMetrics
 }
 
 func NewHandler(store *Store) http.Handler {
-	return Handler{store: store}
+	return Handler{store: store, httpMetrics: observability.NewHTTPMetrics()}
 }
 
 func (h Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	h.httpMetrics.Record(w, r, h.serveHTTP)
+}
+
+func (h Handler) serveHTTP(w http.ResponseWriter, r *http.Request) {
 	path := strings.TrimSuffix(r.URL.Path, "/")
 	switch {
 	case r.Method == http.MethodGet && path == "/v1/catalog/health":
 		writeSuccess(w, r, http.StatusOK, contracts.NewComponentHealth("catalog", h.store.HealthDetails()))
 	case r.Method == http.MethodGet && path == "/v1/catalog/metrics":
-		writeSuccess(w, r, http.StatusOK, h.store.Metrics())
+		metrics := h.store.Metrics()
+		metrics.Samples = append(metrics.Samples, h.httpMetrics.Samples()...)
+		writeSuccess(w, r, http.StatusOK, metrics)
 	case r.Method == http.MethodPost && path == "/v1/catalog/manifests":
 		h.registerManifest(w, r)
 	case r.Method == http.MethodGet && path == "/v1/catalog/services":

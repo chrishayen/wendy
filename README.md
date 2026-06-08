@@ -225,6 +225,9 @@ go run ./cmd/pacp-admin -node-url http://localhost:18087 -node-token token_runne
 go run ./cmd/pacp-control -gateway-url http://localhost:18086 -token token_agent tools
 ```
 
+Component metrics include component-specific state samples plus HTTP request
+count, error count, and average latency by method and normalized route group.
+
 This is not the full production control plane yet. It is a usable service stack
 with public HTTP boundaries, file-backed local durability, a provider SDK, a
 generic HTTP provider bridge, a composition runner, runtime node adapters, and a

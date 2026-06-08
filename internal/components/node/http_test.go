@@ -44,6 +44,7 @@ func TestHandlerNodeLifecycle(t *testing.T) {
 	}
 	assertMetric(t, metrics, "node_service_start_total", map[string]string{"node_id": "node_linux_gpu"}, 1)
 	assertMetric(t, metrics, "node_service_stop_total", map[string]string{"node_id": "node_linux_gpu"}, 1)
+	assertMetric(t, metrics, "http_requests_total", map[string]string{"method": "POST", "route_group": "/v1/node/services/{service_id}/start", "status_class": "2xx"}, 1)
 }
 
 func TestHandlerRejectsUnauthorizedLifecycle(t *testing.T) {

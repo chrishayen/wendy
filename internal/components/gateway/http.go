@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"pacp/internal/contracts"
+	"pacp/internal/observability"
 )
 
 var (
@@ -39,6 +40,7 @@ type Handler struct {
 	cfg         Config
 	client      *http.Client
 	idempotency *idempotencyStore
+	httpMetrics *observability.HTTPMetrics
 }
 
 type invokeRecord struct {
@@ -83,10 +85,14 @@ func NewPersistentHandler(cfg Config, idempotencyStatePath string) (http.Handler
 	if err != nil {
 		return nil, err
 	}
-	return &Handler{cfg: cfg, client: client, idempotency: idempotency}, nil
+	return &Handler{cfg: cfg, client: client, idempotency: idempotency, httpMetrics: observability.NewHTTPMetrics()}, nil
 }
 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	h.httpMetrics.Record(w, r, h.serveHTTP)
+}
+
+func (h *Handler) serveHTTP(w http.ResponseWriter, r *http.Request) {
 	path := strings.TrimSuffix(r.URL.Path, "/")
 	switch {
 	case path == "/v1/gateway/health" && r.Method == http.MethodGet:
@@ -124,6 +130,7 @@ func (h *Handler) metrics() contracts.ComponentMetrics {
 		}
 		samples = append(samples, contracts.CountMetric("gateway_downstream_configured", value, map[string]string{"downstream": name}))
 	}
+	samples = append(samples, h.httpMetrics.Samples()...)
 	return contracts.NewComponentMetrics("gateway", samples)
 }
 

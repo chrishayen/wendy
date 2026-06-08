@@ -117,6 +117,7 @@ func TestHandlerMetricsReportsQueueDepth(t *testing.T) {
 		t.Fatalf("metrics = %#v", data)
 	}
 	assertMetric(t, data, "lease_queue_depth", map[string]string{"selector": "gpu"}, 1)
+	assertMetric(t, data, "http_requests_total", map[string]string{"method": "POST", "route_group": "/v1/lease-requests", "status_class": "2xx"}, 2)
 }
 
 func doJSON(t *testing.T, handler http.Handler, method, path string, body any, headers map[string]string) map[string]any {

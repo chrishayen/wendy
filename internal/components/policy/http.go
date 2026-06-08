@@ -7,23 +7,31 @@ import (
 	"strings"
 
 	"pacp/internal/contracts"
+	"pacp/internal/observability"
 )
 
 type Handler struct {
-	store *Store
+	store       *Store
+	httpMetrics *observability.HTTPMetrics
 }
 
 func NewHandler(store *Store) http.Handler {
-	return Handler{store: store}
+	return Handler{store: store, httpMetrics: observability.NewHTTPMetrics()}
 }
 
 func (h Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	h.httpMetrics.Record(w, r, h.serveHTTP)
+}
+
+func (h Handler) serveHTTP(w http.ResponseWriter, r *http.Request) {
 	path := strings.TrimSuffix(r.URL.Path, "/")
 	switch {
 	case path == "/v1/policy/health" && r.Method == http.MethodGet:
 		writeSuccess(w, r, http.StatusOK, contracts.NewComponentHealth("policy", h.store.HealthDetails()))
 	case path == "/v1/policy/metrics" && r.Method == http.MethodGet:
-		writeSuccess(w, r, http.StatusOK, h.store.Metrics())
+		metrics := h.store.Metrics()
+		metrics.Samples = append(metrics.Samples, h.httpMetrics.Samples()...)
+		writeSuccess(w, r, http.StatusOK, metrics)
 	case path == "/v1/api-keys" && r.Method == http.MethodPost:
 		h.createAPIKey(w, r)
 	case strings.HasPrefix(path, "/v1/api-keys/"):

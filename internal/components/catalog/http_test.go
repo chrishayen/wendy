@@ -86,6 +86,13 @@ func TestHealthHTTP(t *testing.T) {
 
 func TestMetricsHTTP(t *testing.T) {
 	handler := NewHandler(NewStore())
+	healthReq := httptest.NewRequest(http.MethodGet, "/v1/catalog/health", nil)
+	healthRec := httptest.NewRecorder()
+	handler.ServeHTTP(healthRec, healthReq)
+	if healthRec.Code != http.StatusOK {
+		t.Fatalf("health status = %d, want 200; body=%s", healthRec.Code, healthRec.Body.String())
+	}
+
 	req := httptest.NewRequest(http.MethodGet, "/v1/catalog/metrics", nil)
 	rec := httptest.NewRecorder()
 
@@ -98,6 +105,7 @@ func TestMetricsHTTP(t *testing.T) {
 		t.Fatalf("metrics = %#v", data)
 	}
 	assertMetric(t, data, "catalog_capabilities_total", nil, 0)
+	assertMetric(t, data, "http_requests_total", map[string]string{"method": "GET", "route_group": "/v1/catalog/health", "status_class": "2xx"}, 1)
 }
 
 func TestLoadManifestsFromDirectory(t *testing.T) {

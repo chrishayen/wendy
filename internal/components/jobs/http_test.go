@@ -62,6 +62,9 @@ func TestHTTPErrors(t *testing.T) {
 	if resp.Code != http.StatusNotFound {
 		t.Fatalf("status=%d body=%s", resp.Code, resp.Body.String())
 	}
+	metrics := requestJSON(t, handler, http.MethodGet, "/v1/jobs/metrics", nil)
+	data := responseData(t, metrics)
+	assertMetric(t, data, "http_errors_total", map[string]string{"method": "GET", "route_group": "/v1/jobs/{job_id}", "status_class": "4xx"}, 1)
 }
 
 func TestHTTPHealth(t *testing.T) {
@@ -95,6 +98,7 @@ func TestHTTPMetrics(t *testing.T) {
 		t.Fatalf("metrics = %#v", data)
 	}
 	assertMetric(t, data, "jobs_by_state", map[string]string{"state": "queued"}, 1)
+	assertMetric(t, data, "http_requests_total", map[string]string{"method": "POST", "route_group": "/v1/jobs", "status_class": "2xx"}, 1)
 }
 
 func requestJSON(t *testing.T, handler http.Handler, method, path string, body any) *httptest.ResponseRecorder {
