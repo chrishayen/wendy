@@ -1,0 +1,188 @@
+package policy
+
+import (
+	"errors"
+	"testing"
+
+	"pacp/internal/contracts"
+)
+
+func TestStoreCreatesVerifiesAndRevokesAPIKeys(t *testing.T) {
+	store := NewStore()
+	key, err := store.CreateAPIKey(contracts.CreateAPIKeyRequest{
+		SubjectID: "sub_agent",
+		Scopes:    []string{"agent"},
+		Token:     "token_agent",
+	})
+	if err != nil {
+		t.Fatalf("create key: %v", err)
+	}
+	if key.Token != "token_agent" {
+		t.Fatalf("create response token = %q", key.Token)
+	}
+
+	valid, err := store.VerifyCredential(contracts.VerifyCredentialRequest{Credential: "Bearer token_agent"})
+	if err != nil {
+		t.Fatalf("verify valid: %v", err)
+	}
+	if !valid.Valid || valid.SubjectID == nil || *valid.SubjectID != "sub_agent" || len(valid.Scopes) != 1 || valid.Scopes[0] != "agent" {
+		t.Fatalf("valid response = %#v", valid)
+	}
+
+	unknown, err := store.VerifyCredential(contracts.VerifyCredentialRequest{Credential: "Bearer token_unknown"})
+	if err != nil {
+		t.Fatalf("verify unknown: %v", err)
+	}
+	if unknown.Valid || unknown.SubjectID != nil || len(unknown.Scopes) != 0 {
+		t.Fatalf("unknown response = %#v", unknown)
+	}
+
+	_, err = store.VerifyCredential(contracts.VerifyCredentialRequest{Credential: "bearer token_agent"})
+	if !errors.Is(err, ErrMalformedCredential) {
+		t.Fatalf("expected malformed credential, got %v", err)
+	}
+
+	revoked, err := store.RevokeAPIKey(key.KeyID)
+	if err != nil {
+		t.Fatalf("revoke key: %v", err)
+	}
+	if revoked.Token != "" || revoked.RevokedAt == "" {
+		t.Fatalf("revoked response = %#v", revoked)
+	}
+	afterRevoke, err := store.VerifyCredential(contracts.VerifyCredentialRequest{Credential: "Bearer token_agent"})
+	if err != nil {
+		t.Fatalf("verify revoked: %v", err)
+	}
+	if afterRevoke.Valid {
+		t.Fatalf("revoked credential verified: %#v", afterRevoke)
+	}
+}
+
+func TestStorePolicyOwnerContextAndJobState(t *testing.T) {
+	store := NewStore()
+	_, err := store.CreateAPIKey(contracts.CreateAPIKeyRequest{SubjectID: "sub_agent", Scopes: []string{"agent"}, Token: "token_agent"})
+	if err != nil {
+		t.Fatalf("create key: %v", err)
+	}
+
+	allowed, err := store.CheckPolicy(contracts.PolicyCheckRequest{
+		SubjectID: "sub_agent",
+		Action:    "job.cancel",
+		Resource:  "job_1",
+		Context: map[string]any{
+			"job_id":           "job_1",
+			"owner_subject_id": "sub_agent",
+			"requester_id":     "sub_agent",
+			"job_state":        "queued",
+		},
+	})
+	if err != nil {
+		t.Fatalf("check queued cancel: %v", err)
+	}
+	if !allowed.Allowed {
+		t.Fatalf("queued cancel denied: %#v", allowed)
+	}
+
+	running, err := store.CheckPolicy(contracts.PolicyCheckRequest{
+		SubjectID: "sub_agent",
+		Action:    "job.cancel",
+		Resource:  "job_1",
+		Context: map[string]any{
+			"owner_subject_id": "sub_agent",
+			"requester_id":     "sub_agent",
+			"job_state":        "running",
+		},
+	})
+	if err != nil {
+		t.Fatalf("check running cancel: %v", err)
+	}
+	if running.Allowed || running.Reason != "policy_denied" {
+		t.Fatalf("running cancel decision = %#v", running)
+	}
+
+	missing, err := store.CheckPolicy(contracts.PolicyCheckRequest{
+		SubjectID: "sub_agent",
+		Action:    "artifact.read",
+		Resource:  "art_1",
+		Context:   map[string]any{"producer_ref": "job_1"},
+	})
+	if err != nil {
+		t.Fatalf("check artifact missing context: %v", err)
+	}
+	if missing.Allowed || missing.Reason != "missing_context" {
+		t.Fatalf("missing context decision = %#v", missing)
+	}
+}
+
+func TestStorePolicyScopesAndExplicitRules(t *testing.T) {
+	store := NewStore()
+	_, err := store.CreateAPIKey(contracts.CreateAPIKeyRequest{SubjectID: "sub_runner", Scopes: []string{"worker"}, Token: "token_runner"})
+	if err != nil {
+		t.Fatalf("create runner key: %v", err)
+	}
+	worker, err := store.CheckPolicy(contracts.PolicyCheckRequest{
+		SubjectID: "sub_runner",
+		Action:    "lease.request",
+		Resource:  "gpu",
+		Context:   map[string]any{"holder_id": "job_1", "resource_selector": "gpu"},
+	})
+	if err != nil {
+		t.Fatalf("worker policy: %v", err)
+	}
+	if !worker.Allowed {
+		t.Fatalf("worker denied: %#v", worker)
+	}
+
+	_, err = store.CreateRule(contracts.CreatePolicyRuleRequest{
+		SubjectID: "sub_runner",
+		Action:    "lease.request",
+		Resource:  "gpu",
+		Effect:    "deny",
+		Reason:    "maintenance_window",
+	})
+	if err != nil {
+		t.Fatalf("create rule: %v", err)
+	}
+	denied, err := store.CheckPolicy(contracts.PolicyCheckRequest{
+		SubjectID: "sub_runner",
+		Action:    "lease.request",
+		Resource:  "gpu",
+	})
+	if err != nil {
+		t.Fatalf("worker policy after rule: %v", err)
+	}
+	if denied.Allowed || denied.Reason != "maintenance_window" {
+		t.Fatalf("explicit rule decision = %#v", denied)
+	}
+}
+
+func TestStoreSecretsAndRedaction(t *testing.T) {
+	store := NewStore()
+	_, err := store.CreateAPIKey(contracts.CreateAPIKeyRequest{SubjectID: "sub_component", Scopes: []string{"component"}, Token: "token_component"})
+	if err != nil {
+		t.Fatalf("create component key: %v", err)
+	}
+	_, err = store.CreateAPIKey(contracts.CreateAPIKeyRequest{SubjectID: "sub_agent", Scopes: []string{"agent"}, Token: "token_agent"})
+	if err != nil {
+		t.Fatalf("create agent key: %v", err)
+	}
+	secret, err := store.CreateSecret(contracts.CreateSecretRequest{Name: "provider_token", Value: "super-secret"})
+	if err != nil {
+		t.Fatalf("create secret: %v", err)
+	}
+	resolved, err := store.ResolveSecret(contracts.ResolveSecretRequest{SecretRef: secret.SecretRef, SubjectID: "sub_component"})
+	if err != nil {
+		t.Fatalf("resolve secret: %v", err)
+	}
+	if resolved.Value != "super-secret" {
+		t.Fatalf("resolved = %#v", resolved)
+	}
+	_, err = store.ResolveSecret(contracts.ResolveSecretRequest{SecretRef: secret.SecretRef, SubjectID: "sub_agent"})
+	if !errors.Is(err, ErrForbidden) {
+		t.Fatalf("expected forbidden secret resolution, got %v", err)
+	}
+	redacted := store.Redact(contracts.RedactRequest{Text: "token is super-secret"})
+	if redacted.Text != "token is [REDACTED]" {
+		t.Fatalf("redacted = %#v", redacted)
+	}
+}
