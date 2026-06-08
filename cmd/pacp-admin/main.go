@@ -1402,6 +1402,22 @@ func buildJobDiagnostics(job contracts.Job, logs []contracts.JobLogEntry) jobDia
 		}
 		data.Findings = append(data.Findings, diagnosticFinding{Severity: "error", Code: "job_failed", Message: message})
 		addSuggestedAction(&data.SuggestedActions, "inspect recent logs and fix the reported dependency before retrying")
+		if job.TerminalError != nil && job.TerminalError.Code == "artifact_upload_failed" {
+			stage := artifactFailureStage(logs)
+			artifactMessage := "artifact materialization failed"
+			if stage != "" {
+				artifactMessage = "artifact upload stage " + stage + " failed"
+			}
+			if job.TerminalError.Message != "" {
+				artifactMessage += ": " + job.TerminalError.Message
+			}
+			data.Findings = append(data.Findings, diagnosticFinding{Severity: "error", Code: "artifact_materialization_failed", Message: artifactMessage})
+			addSuggestedAction(&data.SuggestedActions, "inspect artifact service health and permissions")
+			if stage != "" {
+				addSuggestedAction(&data.SuggestedActions, "inspect runner logs for artifact upload stage "+stage)
+			}
+			addSuggestedAction(&data.SuggestedActions, "retry after artifact store is healthy")
+		}
 	case contracts.JobCanceled:
 		data.Findings = append(data.Findings, diagnosticFinding{Severity: "info", Code: "job_canceled", Message: "job was canceled"})
 	case contracts.JobExpired:
@@ -1644,6 +1660,25 @@ func claimFinding(job contracts.Job) diagnosticFinding {
 		return diagnosticFinding{Severity: "warning", Code: "claim_expired", Message: "claim by " + job.Claim.WorkerID + " expired at " + job.Claim.ExpiresAt}
 	}
 	return diagnosticFinding{Severity: "info", Code: "claim_active", Message: "job is claimed by " + job.Claim.WorkerID + " until " + job.Claim.ExpiresAt}
+}
+
+func artifactFailureStage(logs []contracts.JobLogEntry) string {
+	for i := len(logs) - 1; i >= 0; i-- {
+		fields := logs[i].Fields
+		if fields == nil {
+			continue
+		}
+		code, _ := fields["code"].(string)
+		if code != "artifact_upload_failed" {
+			continue
+		}
+		stage, _ := fields["stage"].(string)
+		stage = strings.TrimSpace(stage)
+		if stage != "" {
+			return stage
+		}
+	}
+	return ""
 }
 
 func executionPlanMap(metadata map[string]any) map[string]any {

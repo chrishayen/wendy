@@ -985,6 +985,78 @@ func TestDiagnoseJobFetchesJobAndLogsWithComponentToken(t *testing.T) {
 	}
 }
 
+func TestDiagnoseJobExplainsArtifactUploadFailure(t *testing.T) {
+	now := time.Now().UTC()
+	seen := map[string]bool{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seen[r.URL.Path] = true
+		if r.Header.Get("Authorization") != "Bearer component-token" {
+			t.Fatalf("%s Authorization = %q", r.URL.Path, r.Header.Get("Authorization"))
+		}
+		switch r.URL.Path {
+		case "/v1/jobs/job_artifact_failed":
+			writeEnvelope(t, w, http.StatusOK, map[string]any{
+				"job_id":     "job_artifact_failed",
+				"state":      "failed",
+				"created_at": now.Add(-time.Minute).Format(time.RFC3339),
+				"updated_at": now.Format(time.RFC3339),
+				"terminal_error": map[string]any{
+					"code":      "artifact_upload_failed",
+					"message":   "artifact upload content failed: artifact content backend unavailable",
+					"retryable": true,
+				},
+				"artifact_refs": []any{},
+				"links":         map[string]any{},
+			})
+		case "/v1/jobs/job_artifact_failed/logs":
+			if r.URL.Query().Get("limit") != "20" {
+				t.Fatalf("logs query = %s", r.URL.RawQuery)
+			}
+			writeEnvelope(t, w, http.StatusOK, map[string]any{
+				"items": []map[string]any{{
+					"timestamp": now.Format(time.RFC3339),
+					"level":     "error",
+					"message":   "artifact materialization failed",
+					"fields": map[string]any{
+						"code":  "artifact_upload_failed",
+						"stage": "content",
+					},
+				}},
+				"next_cursor": nil,
+			})
+		default:
+			t.Fatalf("request = %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	var stdout, stderr bytes.Buffer
+	code := run([]string{
+		"-jobs-url", server.URL,
+		"-component-token", "component-token",
+		"diagnose", "job", "job_artifact_failed",
+	}, &stdout, &stderr, server.Client())
+	if code != 0 {
+		t.Fatalf("code=%d stderr=%s stdout=%s", code, stderr.String(), stdout.String())
+	}
+	if !seen["/v1/jobs/job_artifact_failed"] || !seen["/v1/jobs/job_artifact_failed/logs"] {
+		t.Fatalf("seen requests = %#v", seen)
+	}
+	output := stdout.String()
+	for _, expected := range []string{
+		`"code": "job_failed"`,
+		`"code": "artifact_materialization_failed"`,
+		`artifact upload stage content failed`,
+		`inspect artifact service health and permissions`,
+		`inspect runner logs for artifact upload stage content`,
+		`retry after artifact store is healthy`,
+	} {
+		if !strings.Contains(output, expected) {
+			t.Fatalf("stdout missing %q:\n%s", expected, output)
+		}
+	}
+}
+
 func TestDiagnoseResourceFetchesInspectionAndRelatedJobs(t *testing.T) {
 	now := time.Now().UTC()
 	seen := map[string]bool{}
