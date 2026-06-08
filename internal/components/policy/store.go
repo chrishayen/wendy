@@ -181,25 +181,40 @@ func (s *Store) RevokeAPIKey(keyID string) (contracts.APIKeyRecord, error) {
 }
 
 func (s *Store) CreateRule(req contracts.CreatePolicyRuleRequest) (contracts.PolicyRule, error) {
-	if req.SubjectID == "" && req.Scope == "" {
-		return contracts.PolicyRule{}, fmt.Errorf("%w: subject_id or scope is required", ErrValidation)
-	}
-	if req.Action == "" {
-		return contracts.PolicyRule{}, fmt.Errorf("%w: action is required", ErrValidation)
-	}
-	if req.Resource == "" {
-		return contracts.PolicyRule{}, fmt.Errorf("%w: resource is required", ErrValidation)
-	}
-	if req.Effect != "allow" && req.Effect != "deny" {
-		return contracts.PolicyRule{}, fmt.Errorf("%w: effect must be allow or deny", ErrValidation)
-	}
-	reason := req.Reason
-	if reason == "" {
-		reason = "rule_" + req.Effect
+	normalized, err := normalizePolicyRuleRequest(req)
+	if err != nil {
+		return contracts.PolicyRule{}, err
 	}
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	rule := s.createRuleLocked(normalized)
+	if err := s.saveLocked(); err != nil {
+		return contracts.PolicyRule{}, err
+	}
+	return cloneRule(rule), nil
+}
+
+func normalizePolicyRuleRequest(req contracts.CreatePolicyRuleRequest) (contracts.CreatePolicyRuleRequest, error) {
+	if req.SubjectID == "" && req.Scope == "" {
+		return contracts.CreatePolicyRuleRequest{}, fmt.Errorf("%w: subject_id or scope is required", ErrValidation)
+	}
+	if req.Action == "" {
+		return contracts.CreatePolicyRuleRequest{}, fmt.Errorf("%w: action is required", ErrValidation)
+	}
+	if req.Resource == "" {
+		return contracts.CreatePolicyRuleRequest{}, fmt.Errorf("%w: resource is required", ErrValidation)
+	}
+	if req.Effect != "allow" && req.Effect != "deny" {
+		return contracts.CreatePolicyRuleRequest{}, fmt.Errorf("%w: effect must be allow or deny", ErrValidation)
+	}
+	if req.Reason == "" {
+		req.Reason = "rule_" + req.Effect
+	}
+	return req, nil
+}
+
+func (s *Store) createRuleLocked(req contracts.CreatePolicyRuleRequest) contracts.PolicyRule {
 	ruleID := fmt.Sprintf("rule_%06d", s.nextRuleID)
 	s.nextRuleID++
 	rule := contracts.PolicyRule{
@@ -209,14 +224,11 @@ func (s *Store) CreateRule(req contracts.CreatePolicyRuleRequest) (contracts.Pol
 		Action:    req.Action,
 		Resource:  req.Resource,
 		Effect:    req.Effect,
-		Reason:    reason,
+		Reason:    req.Reason,
 		CreatedAt: s.formatNow(),
 	}
 	s.rules[ruleID] = rule
-	if err := s.saveLocked(); err != nil {
-		return contracts.PolicyRule{}, err
-	}
-	return cloneRule(rule), nil
+	return rule
 }
 
 func (s *Store) CheckPolicy(req contracts.PolicyCheckRequest) (contracts.PolicyDecision, error) {
@@ -256,14 +268,30 @@ func (s *Store) CheckPolicy(req contracts.PolicyCheckRequest) (contracts.PolicyD
 }
 
 func (s *Store) CreateSecret(req contracts.CreateSecretRequest) (contracts.SecretRecord, error) {
-	if req.Name == "" {
-		return contracts.SecretRecord{}, fmt.Errorf("%w: name is required", ErrValidation)
-	}
-	if req.Value == "" {
-		return contracts.SecretRecord{}, fmt.Errorf("%w: value is required", ErrValidation)
+	normalized, err := normalizeSecretRequest(req)
+	if err != nil {
+		return contracts.SecretRecord{}, err
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	record := s.createSecretLocked(normalized)
+	if err := s.saveLocked(); err != nil {
+		return contracts.SecretRecord{}, err
+	}
+	return record, nil
+}
+
+func normalizeSecretRequest(req contracts.CreateSecretRequest) (contracts.CreateSecretRequest, error) {
+	if req.Name == "" {
+		return contracts.CreateSecretRequest{}, fmt.Errorf("%w: name is required", ErrValidation)
+	}
+	if req.Value == "" {
+		return contracts.CreateSecretRequest{}, fmt.Errorf("%w: value is required", ErrValidation)
+	}
+	return req, nil
+}
+
+func (s *Store) createSecretLocked(req contracts.CreateSecretRequest) contracts.SecretRecord {
 	secretRef := fmt.Sprintf("secret_%06d", s.nextSecretID)
 	s.nextSecretID++
 	record := contracts.SecretRecord{
@@ -272,10 +300,7 @@ func (s *Store) CreateSecret(req contracts.CreateSecretRequest) (contracts.Secre
 		CreatedAt: s.formatNow(),
 	}
 	s.secrets[secretRef] = &secretRecord{record: record, value: req.Value}
-	if err := s.saveLocked(); err != nil {
-		return contracts.SecretRecord{}, err
-	}
-	return record, nil
+	return record
 }
 
 func (s *Store) ResolveSecret(req contracts.ResolveSecretRequest) (contracts.ResolvedSecret, error) {

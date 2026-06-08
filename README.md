@@ -27,7 +27,8 @@ Contract simulation data is kept as test input, not as product behavior.
   metadata snapshots, policy context, guarded local registration, and retrieval
   service with health and a local filesystem root.
 - `internal/components/policy`: API key verification, policy decision, secret
-  reference, redaction, health, and durable sensitive state snapshots.
+  reference, redaction, startup policy seeding, health, and durable sensitive
+  state snapshots.
 - `internal/components/node`: runtime node agent with local auth, resource
   advertisement, fake, process, and Docker service lifecycle adapters, health,
   lease resource export, and service status APIs.
@@ -79,7 +80,7 @@ go run ./cmd/pacp-catalog -addr localhost:18081 -manifest testdata/manifests/s00
 go run ./cmd/pacp-jobs -addr localhost:18082 -state-file /tmp/pacp-jobs-state.json
 go run ./cmd/pacp-leases -addr localhost:18083 -state-file /tmp/pacp-leases-state.json -resources testdata/leases/linux-gpu-resources.json
 go run ./cmd/pacp-artifacts -addr localhost:18084 -root /tmp/pacp-artifacts -state-file /tmp/pacp-artifacts-state.json
-go run ./cmd/pacp-policy -addr localhost:18085 -state-file /tmp/pacp-policy-state.json
+go run ./cmd/pacp-policy -addr localhost:18085 -state-file /tmp/pacp-policy-state.json -seed testdata/policy/local-seed.json
 go run ./cmd/pacp-gateway -addr localhost:18086 -catalog-url http://localhost:18081 -jobs-url http://localhost:18082 -artifacts-url http://localhost:18084 -policy-url http://localhost:18085 -idempotency-state-file /tmp/pacp-gateway-idempotency-state.json
 go run ./cmd/pacp-node -addr localhost:18087 -config testdata/node/linux-gpu-fake.json
 go run ./cmd/pacp-runner -once -worker-id runner_local -jobs-url http://localhost:18082 -leases-url http://localhost:18083 -artifacts-url http://localhost:18084 -node-urls node_linux_gpu=http://localhost:18087 -node-start-timeout 30s
@@ -95,7 +96,9 @@ For distributed deployments, set `PACP_COMPONENT_TOKEN` or `-component-token`
 on catalog, jobs, leases, artifacts, and policy services. Then pass the same
 credential to `pacp-gateway -gateway-credential` and `pacp-runner -credential`.
 Leaving the token unset keeps local service endpoints open for quick isolated
-testing.
+testing. The example policy seed creates logical policy credentials for the
+gateway, runner, and local agent; component endpoint authentication is a
+separate transport guard.
 
 Use `pacp-runner -node-urls` or `PACP_NODE_URLS` for distributed nodes. The
 format is comma-separated `node_id=URL` entries, for example
@@ -108,8 +111,10 @@ JSON config.
 The fixture server can also serve individual contract-simulation fixture
 owners when a test needs a fixed fake dependency.
 
-The policy state file stores API tokens and secret values. Keep it private and
-outside shared artifact directories.
+The policy seed and state files store API tokens and secret values. Keep them
+private and outside shared artifact directories. Reapplying the same policy
+seed is idempotent, but startup fails if an existing token or secret name has
+drifted from the seed.
 
 The catalog and gateway can then be queried:
 
@@ -121,7 +126,7 @@ curl http://localhost:18082/v1/jobs/health
 curl http://localhost:18083/v1/leases/health
 curl http://localhost:18084/v1/artifacts/health
 curl http://localhost:18085/v1/policy/health
-curl -X POST http://localhost:18085/v1/auth/api-keys -H 'Content-Type: application/json' -d '{"subject_id":"sub_agent_local","scopes":["agent"],"token":"token_agent"}'
+curl -X POST http://localhost:18085/v1/api-keys -H 'Content-Type: application/json' -d '{"subject_id":"sub_agent_local","scopes":["agent"],"token":"token_agent"}'
 go run ./cmd/pacp-control -gateway-url http://localhost:18086 -token token_agent tools
 ```
 

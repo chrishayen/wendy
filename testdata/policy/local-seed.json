@@ -1,0 +1,19 @@
+{
+  "api_keys": [
+    {
+      "subject_id": "sub_agent_local",
+      "scopes": ["agent"],
+      "token": "token_agent"
+    },
+    {
+      "subject_id": "sub_gateway_local",
+      "scopes": ["component"],
+      "token": "token_component"
+    },
+    {
+      "subject_id": "sub_runner_local",
+      "scopes": ["worker"],
+      "token": "token_worker"
+    }
+  ]
+}
