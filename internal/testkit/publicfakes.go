@@ -982,7 +982,7 @@ func (h *fakeJobsHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		metrics.CollectedAt = h.cfg.Now().UTC().Format(time.RFC3339)
 		writeFakeSuccess(w, r, http.StatusOK, metrics)
 	case r.Method == http.MethodGet && path == "/v1/jobs":
-		payload, ok := fakeListEnvelope(w, r, "jobs", h.listJobs(contracts.JobState(r.URL.Query().Get("state"))))
+		payload, ok := fakeListEnvelope(w, r, "jobs", h.listJobs(contracts.JobState(r.URL.Query().Get("state")), r.URL.Query().Get("capability_id")))
 		if !ok {
 			return
 		}
@@ -1081,6 +1081,7 @@ func (h *fakeJobsHandler) createJob(w http.ResponseWriter, r *http.Request) {
 	h.nextID++
 	job := contracts.Job{
 		JobID:        jobID,
+		CapabilityID: fakeCreateCapabilityID(req),
 		State:        contracts.JobQueued,
 		CreatedAt:    now,
 		UpdatedAt:    now,
@@ -1332,7 +1333,7 @@ func (h *fakeJobsHandler) appendLogs(w http.ResponseWriter, r *http.Request, job
 	writeFakeSuccess(w, r, http.StatusOK, map[string]any{"items": entries, "next_cursor": nil})
 }
 
-func (h *fakeJobsHandler) listJobs(state contracts.JobState) []contracts.Job {
+func (h *fakeJobsHandler) listJobs(state contracts.JobState, capabilityID string) []contracts.Job {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	jobs := make([]contracts.Job, 0, len(h.jobOrder))
@@ -1342,6 +1343,9 @@ func (h *fakeJobsHandler) listJobs(state contracts.JobState) []contracts.Job {
 			continue
 		}
 		if state != "" && job.State != state {
+			continue
+		}
+		if capabilityID != "" && fakeJobCapabilityID(job) != capabilityID {
 			continue
 		}
 		jobs = append(jobs, cloneFakeJob(job))
@@ -3054,6 +3058,7 @@ func fakeJobs() []contracts.Job {
 func fakeJob(jobID string, state contracts.JobState, now string, claim *contracts.JobClaim, terminalError *contracts.ErrorObject) contracts.Job {
 	job := contracts.Job{
 		JobID:         jobID,
+		CapabilityID:  "cap_fake",
 		State:         state,
 		CreatedAt:     now,
 		UpdatedAt:     now,
@@ -3073,6 +3078,29 @@ func fakeJob(jobID string, state contracts.JobState, now string, claim *contract
 		job.StatusMessage = "fake claim expired"
 	}
 	return job
+}
+
+func fakeCreateCapabilityID(req contracts.CreateJobRequest) string {
+	if req.CapabilityID != "" {
+		return req.CapabilityID
+	}
+	return fakeCapabilityIDFromMetadata(req.Metadata)
+}
+
+func fakeJobCapabilityID(job contracts.Job) string {
+	if job.CapabilityID != "" {
+		return job.CapabilityID
+	}
+	return fakeCapabilityIDFromMetadata(job.Metadata)
+}
+
+func fakeCapabilityIDFromMetadata(metadata map[string]any) string {
+	if plan, ok := metadata["execution_plan"].(map[string]any); ok {
+		if id, ok := plan["capability_id"].(string); ok {
+			return id
+		}
+	}
+	return ""
 }
 
 func fakeJobLinks(jobID string) map[string]any {

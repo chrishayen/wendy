@@ -505,8 +505,26 @@ func TestFakeJobsHandlerCreatesAndCancelsWithIdempotency(t *testing.T) {
 	}, http.StatusCreated)
 	var job contracts.Job
 	decodeEnvelopeData(t, created, &job)
-	if job.State != contracts.JobQueued || job.JobID == "" {
+	if job.State != contracts.JobQueued || job.JobID == "" || job.CapabilityID != "cap_test" {
 		t.Fatalf("created job = %#v", job)
+	}
+
+	listed := doFakeJobsEnvelope(t, server, http.MethodGet, "/v1/jobs?capability_id=cap_test", nil, nil, http.StatusOK)
+	var listedJobs struct {
+		Items []contracts.Job `json:"items"`
+	}
+	decodeEnvelopeData(t, listed, &listedJobs)
+	if len(listedJobs.Items) != 1 || listedJobs.Items[0].JobID != job.JobID || listedJobs.Items[0].CapabilityID != "cap_test" {
+		t.Fatalf("listed jobs = %#v", listedJobs.Items)
+	}
+
+	missingList := doFakeJobsEnvelope(t, server, http.MethodGet, "/v1/jobs?capability_id=cap_other", nil, nil, http.StatusOK)
+	var missingJobs struct {
+		Items []contracts.Job `json:"items"`
+	}
+	decodeEnvelopeData(t, missingList, &missingJobs)
+	if len(missingJobs.Items) != 0 {
+		t.Fatalf("missing jobs = %#v", missingJobs.Items)
 	}
 
 	replayed := doFakeJobsEnvelope(t, server, http.MethodPost, "/v1/jobs", map[string]string{"Idempotency-Key": "create-1"}, contracts.CreateJobRequest{
