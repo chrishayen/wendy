@@ -20,7 +20,7 @@ func TestRegisterManifestRejectsDuplicates(t *testing.T) {
 func TestListCapabilitiesFilters(t *testing.T) {
 	store := sampleStore(t)
 
-	records, err := store.ListCapabilities(CapabilityFilter{
+	records, _, err := store.ListCapabilities(CapabilityFilter{
 		CapabilityID:         "cap_image_generate_gpu",
 		VisibleCapabilityIDs: []string{"cap_other", "cap_image_generate_gpu"},
 		ResourceSelector:     "gpu",
@@ -35,7 +35,7 @@ func TestListCapabilitiesFilters(t *testing.T) {
 		t.Fatalf("provider endpoint = %q", records[0].Route.ProviderEndpoint)
 	}
 
-	records, err = store.ListCapabilities(CapabilityFilter{
+	records, _, err = store.ListCapabilities(CapabilityFilter{
 		CapabilityID:         "cap_image_generate_gpu",
 		VisibleCapabilityIDs: []string{"cap_other"},
 	})
@@ -49,7 +49,43 @@ func TestListCapabilitiesFilters(t *testing.T) {
 
 func TestInvalidCursor(t *testing.T) {
 	store := sampleStore(t)
-	_, err := store.ListCapabilities(CapabilityFilter{Cursor: "cursor_s003_invalid"})
+	_, _, err := store.ListCapabilities(CapabilityFilter{Cursor: "cursor_s003_invalid"})
+	if !errors.Is(err, ErrInvalidCursor) {
+		t.Fatalf("error = %v, want ErrInvalidCursor", err)
+	}
+}
+
+func TestListCapabilitiesPaginatesWithOpaqueCursor(t *testing.T) {
+	store := sampleStore(t)
+	manifest := sampleManifest(t)
+	manifest.Service.ID = "svc_catalog_second"
+	manifest.Service.Name = "Second Catalog Provider"
+	manifest.Provider.Endpoint = "http://second-provider.local:18088"
+	manifest.Capabilities[0].ID = "cap_catalog_second"
+	manifest.Capabilities[0].Name = "Second catalog capability"
+	if _, err := store.RegisterManifest(manifest); err != nil {
+		t.Fatalf("register second manifest: %v", err)
+	}
+
+	first, next, err := store.ListCapabilities(CapabilityFilter{Limit: 1})
+	if err != nil {
+		t.Fatalf("list first page: %v", err)
+	}
+	if len(first) != 1 || first[0].Capability.ID != "cap_catalog_second" || next == nil {
+		t.Fatalf("first page records=%#v next=%v", first, next)
+	}
+	second, next, err := store.ListCapabilities(CapabilityFilter{Limit: 1, Cursor: *next})
+	if err != nil {
+		t.Fatalf("list second page: %v", err)
+	}
+	if len(second) != 1 || second[0].Capability.ID != "cap_image_generate_gpu" || next != nil {
+		t.Fatalf("second page records=%#v next=%v", second, next)
+	}
+}
+
+func TestListCapabilitiesRejectsPastEndCursor(t *testing.T) {
+	store := sampleStore(t)
+	_, _, err := store.ListCapabilities(CapabilityFilter{Cursor: capabilityListCursor(2)})
 	if !errors.Is(err, ErrInvalidCursor) {
 		t.Fatalf("error = %v, want ErrInvalidCursor", err)
 	}

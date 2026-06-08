@@ -154,9 +154,14 @@ func (s *Store) GetService(id string) (contracts.Service, bool) {
 	return service, ok
 }
 
-func (s *Store) ListCapabilities(filter CapabilityFilter) ([]contracts.CatalogCapabilityRecord, error) {
+func (s *Store) ListCapabilities(filter CapabilityFilter) ([]contracts.CatalogCapabilityRecord, *string, error) {
+	start := 0
 	if filter.Cursor != "" {
-		return nil, ErrInvalidCursor
+		parsed, err := parseCapabilityListCursor(filter.Cursor)
+		if err != nil {
+			return nil, nil, ErrInvalidCursor
+		}
+		start = parsed
 	}
 
 	s.mu.RLock()
@@ -202,10 +207,17 @@ func (s *Store) ListCapabilities(filter CapabilityFilter) ([]contracts.CatalogCa
 			Service:    s.services[capability.ServiceID],
 		})
 	}
-	if filter.Limit > 0 && len(records) > filter.Limit {
-		records = records[:filter.Limit]
+	if start > len(records) {
+		return nil, nil, ErrInvalidCursor
 	}
-	return records, nil
+	end := len(records)
+	var next *string
+	if filter.Limit > 0 && start+filter.Limit < end {
+		end = start + filter.Limit
+		cursor := capabilityListCursor(end)
+		next = &cursor
+	}
+	return records[start:end], next, nil
 }
 
 func (s *Store) GetCapability(id string) (contracts.CatalogCapabilityRecord, bool) {
@@ -326,6 +338,21 @@ func hasResourceSelector(hints []contracts.ResourceHint, selector string) bool {
 		}
 	}
 	return false
+}
+
+func capabilityListCursor(index int) string {
+	return fmt.Sprintf("cursor_catalog_capabilities_%06d", index)
+}
+
+func parseCapabilityListCursor(cursor string) (int, error) {
+	var index int
+	if _, err := fmt.Sscanf(cursor, "cursor_catalog_capabilities_%06d", &index); err != nil {
+		return 0, err
+	}
+	if index < 0 {
+		return 0, ErrInvalidCursor
+	}
+	return index, nil
 }
 
 func (s *Store) loadSnapshot(path string) error {

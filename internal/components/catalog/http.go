@@ -108,7 +108,7 @@ func (h Handler) listCapabilities(w http.ResponseWriter, r *http.Request) {
 		limit = parsed
 	}
 
-	records, err := h.store.ListCapabilities(CapabilityFilter{
+	records, nextCursor, err := h.store.ListCapabilities(CapabilityFilter{
 		CapabilityID:         query.Get("capability_id"),
 		ServiceID:            query.Get("service_id"),
 		Tag:                  query.Get("tag"),
@@ -128,7 +128,7 @@ func (h Handler) listCapabilities(w http.ResponseWriter, r *http.Request) {
 	}
 	writeSuccess(w, r, http.StatusOK, map[string]any{
 		"items":       records,
-		"next_cursor": nil,
+		"next_cursor": nextCursor,
 	})
 }
 
