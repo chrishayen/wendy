@@ -316,6 +316,12 @@ the capability output schema. This remains a blocking provider invoke from the
 runner's perspective and does not create PACP jobs or provider status/cancel
 routes.
 
+Provider authors can use `provider.NewManifestBuilder` to declare a service,
+provider endpoint, capabilities, and handlers together. The builder defaults
+the provider health path to `/v1/provider/health`, validates the manifest with
+C01 rules, verifies that every capability has a handler, and can return either
+the manifest plus handler map or a ready `provider.Server`.
+
 The fixture server can also serve individual contract-simulation fixture
 owners when a test needs a fixed fake dependency. It matches method, path,
 declared query values, declared headers, and declared request bodies. If the
