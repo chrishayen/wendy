@@ -125,6 +125,9 @@ func invokeCommand(client gatewayClient, args []string, stdout, stderr io.Writer
 	if *idempotencyKey == "" {
 		return 2, errors.New("idempotency-key is required for invoke")
 	}
+	if *preferredMode != "" && *preferredMode != "sync" && *preferredMode != "async" {
+		return 2, errors.New("mode must be sync or async")
+	}
 	if *wait {
 		if *waitInterval <= 0 {
 			return 2, errors.New("wait-interval must be greater than zero")

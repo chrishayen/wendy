@@ -139,6 +139,24 @@ func TestInvokeRequiresIdempotencyKey(t *testing.T) {
 	}
 }
 
+func TestInvokeRejectsInvalidPreferredMode(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := run([]string{
+		"-gateway-url", "http://gateway.invalid",
+		"-token", "token_agent",
+		"invoke", "cap_echo",
+		"-idempotency-key", "invoke-1",
+		"-mode", "streaming",
+		"-input", `{"message":"hello"}`,
+	}, &stdout, &stderr, http.DefaultClient)
+	if code != 2 {
+		t.Fatalf("code=%d stderr=%s stdout=%s", code, stderr.String(), stdout.String())
+	}
+	if !strings.Contains(stderr.String(), "mode must be sync or async") {
+		t.Fatalf("stderr = %s", stderr.String())
+	}
+}
+
 func TestInvokeWaitsForAsyncJob(t *testing.T) {
 	invokeRequests := 0
 	jobRequests := 0
