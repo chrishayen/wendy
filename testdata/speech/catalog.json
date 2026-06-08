@@ -1,0 +1,23 @@
+{
+  "voices": [
+    {
+      "id": "narrator",
+      "name": "Narrator",
+      "language": "en"
+    }
+  ],
+  "formats": [
+    {
+      "id": "wav",
+      "media_type": "audio/wav",
+      "sample_rate": 16000
+    }
+  ],
+  "models": [
+    {
+      "id": "default",
+      "name": "Default",
+      "language": "en"
+    }
+  ]
+}

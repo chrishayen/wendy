@@ -47,6 +47,9 @@ Contract simulation data is kept as test input, not as product behavior.
   file-backed search and guarded page extraction.
 - `cmd/pacp-comfyui-provider`: purpose-specific ComfyUI image generation
   provider with workflow templates, LoRA validation, and dry-run mode.
+- `cmd/pacp-speech-provider`: purpose-specific text-to-speech and
+  speech-to-text provider with voice/format validation and command-backed
+  engine adapters.
 - `cmd/pacp-catalog`: runnable catalog server that loads provider manifests.
 - `cmd/pacp-gateway`: runnable agent tool gateway.
 - `cmd/pacp-jobs`: runnable async job service.
@@ -84,6 +87,7 @@ PACP_HTTP_ECHO_TOKEN='Bearer dev-token' go run ./cmd/pacp-http-provider -addr lo
 go run ./cmd/pacp-command-provider -addr localhost:18088 -manifest provider-manifest.json -routes command-routes.json -endpoint http://localhost:18088
 go run ./cmd/pacp-browser-search-provider -addr localhost:18089 -search-index testdata/browser-search/index.json -allowed-hosts localhost,127.0.0.1
 go run ./cmd/pacp-comfyui-provider -addr localhost:18090 -dry-run -workflow testdata/comfyui/workflow-template.json -lora-catalog testdata/comfyui/loras.json
+go run ./cmd/pacp-speech-provider -addr localhost:18091 -dry-run -voice-catalog testdata/speech/catalog.json
 go run ./cmd/pacp-admin health
 go run ./cmd/pacp-admin catalog capabilities
 go run ./cmd/pacp-admin catalog import /tmp/pacp-bundle/catalog
