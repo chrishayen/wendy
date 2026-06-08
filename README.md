@@ -206,6 +206,14 @@ HTTP provider bridge route files can set literal `headers` for non-secret
 values and `headers_from_env` for backend credentials that must not be stored in
 JSON config.
 
+`pacp-jobs` can use C08-backed route-aware auth instead of the coarse component
+transport token by setting `-policy-url`. In that mode callers present their
+own policy bearer credentials to C05, and the jobs process verifies them through
+C08 `/v1/auth/verify`: gateway/component credentials can create, cancel, and
+read component projections; worker credentials can claim, heartbeat, log,
+complete, fail, and read worker job state. Use `-policy-credential` when the
+policy service itself is protected by a component transport token.
+
 Command provider bridge route files map each capability id to a command array.
 The command receives `ProviderInvokeRequest` JSON on stdin and must write
 `ProviderInvokeResponse` JSON on stdout. Route files can set literal

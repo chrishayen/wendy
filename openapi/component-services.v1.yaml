@@ -181,6 +181,8 @@ paths:
     get:
       tags: [jobs]
       operationId: listJobs
+      x-operation-audience: [component, worker]
+      x-policy-action: [job.read, job.execute]
       parameters:
         - name: state
           in: query
@@ -200,6 +202,8 @@ paths:
     post:
       tags: [jobs]
       operationId: createJob
+      x-operation-audience: component
+      x-policy-action: job.create
       parameters:
         - $ref: "#/components/parameters/IdempotencyKeyRequired"
       requestBody:
@@ -219,6 +223,8 @@ paths:
     get:
       tags: [jobs]
       operationId: getJob
+      x-operation-audience: [component, worker]
+      x-policy-action: [job.read, job.execute]
       parameters:
         - $ref: "#/components/parameters/JobID"
       responses:
@@ -230,6 +236,8 @@ paths:
     get:
       tags: [jobs]
       operationId: getJobPolicyContext
+      x-operation-audience: component
+      x-policy-action: job.read
       parameters:
         - $ref: "#/components/parameters/JobID"
       responses:
@@ -241,6 +249,8 @@ paths:
     get:
       tags: [jobs]
       operationId: getJobAgentProjection
+      x-operation-audience: component
+      x-policy-action: job.read
       parameters:
         - $ref: "#/components/parameters/JobID"
       responses:
@@ -252,6 +262,8 @@ paths:
     post:
       tags: [jobs]
       operationId: claimJob
+      x-operation-audience: worker
+      x-policy-action: job.execute
       parameters:
         - $ref: "#/components/parameters/JobID"
       requestBody:
@@ -269,6 +281,8 @@ paths:
     post:
       tags: [jobs]
       operationId: heartbeatJob
+      x-operation-audience: worker
+      x-policy-action: job.execute
       parameters:
         - $ref: "#/components/parameters/JobID"
       requestBody:
@@ -286,6 +300,8 @@ paths:
     post:
       tags: [jobs]
       operationId: completeJob
+      x-operation-audience: worker
+      x-policy-action: job.execute
       parameters:
         - $ref: "#/components/parameters/JobID"
       requestBody:
@@ -303,6 +319,8 @@ paths:
     post:
       tags: [jobs]
       operationId: failJob
+      x-operation-audience: worker
+      x-policy-action: job.execute
       parameters:
         - $ref: "#/components/parameters/JobID"
       requestBody:
@@ -320,6 +338,8 @@ paths:
     post:
       tags: [jobs]
       operationId: cancelJob
+      x-operation-audience: component
+      x-policy-action: job.cancel
       parameters:
         - $ref: "#/components/parameters/JobID"
         - $ref: "#/components/parameters/IdempotencyKeyRequired"
@@ -338,6 +358,8 @@ paths:
     get:
       tags: [jobs]
       operationId: getJobLogs
+      x-operation-audience: [component, worker]
+      x-policy-action: [job.read, job.execute]
       parameters:
         - $ref: "#/components/parameters/JobID"
         - $ref: "#/components/parameters/Cursor"
@@ -350,6 +372,8 @@ paths:
     post:
       tags: [jobs]
       operationId: appendJobLogs
+      x-operation-audience: worker
+      x-policy-action: job.execute
       parameters:
         - $ref: "#/components/parameters/JobID"
       requestBody:

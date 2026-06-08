@@ -31,8 +31,12 @@ func authorizationHeader(token string) string {
 }
 
 func writeUnauthorized(w http.ResponseWriter, r *http.Request) {
+	writeAuthError(w, r, http.StatusUnauthorized, "unauthorized", "component bearer token is required", false)
+}
+
+func writeAuthError(w http.ResponseWriter, r *http.Request, status int, code, message string, retryable bool) {
 	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusUnauthorized)
+	w.WriteHeader(status)
 	requestID := r.Header.Get("X-Request-ID")
 	if requestID == "" {
 		requestID = "req_component"
@@ -40,9 +44,9 @@ func writeUnauthorized(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(contracts.ErrorEnvelope{
 		OK: false,
 		Error: contracts.ErrorObject{
-			Code:      "unauthorized",
-			Message:   "component bearer token is required",
-			Retryable: false,
+			Code:      code,
+			Message:   message,
+			Retryable: retryable,
 		},
 		Links: map[string]any{},
 		Meta:  map[string]string{"request_id": requestID, "schema_version": "v1"},
