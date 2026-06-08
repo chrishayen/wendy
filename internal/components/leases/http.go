@@ -243,6 +243,8 @@ func writeStoreError(w http.ResponseWriter, r *http.Request, err error) {
 		writeError(w, r, http.StatusConflict, "lease_expired", "lease has expired", false)
 	case errors.Is(err, ErrInvalidTransition):
 		writeError(w, r, http.StatusConflict, "invalid_transition", "lease request cannot transition from its current state", false)
+	case errors.Is(err, ErrMissingIdempotency):
+		writeError(w, r, http.StatusBadRequest, "missing_idempotency_key", "Idempotency-Key header is required for lease release", false)
 	case errors.Is(err, ErrIdempotencyConflict):
 		writeError(w, r, http.StatusConflict, "idempotency_conflict", "idempotency key was reused with different request content", false)
 	default:

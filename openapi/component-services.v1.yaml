@@ -508,7 +508,7 @@ paths:
       operationId: releaseLease
       parameters:
         - $ref: "#/components/parameters/LeaseID"
-        - $ref: "#/components/parameters/IdempotencyKeyOptional"
+        - $ref: "#/components/parameters/IdempotencyKeyRequired"
         - $ref: "#/components/parameters/ActorSubjectID"
       requestBody:
         required: true

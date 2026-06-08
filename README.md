@@ -173,6 +173,8 @@ go run ./cmd/pacp-node -config testdata/node/linux-gpu-fake.json -export-lease-r
 Node service start and stop are side-effecting operations and require an
 `Idempotency-Key`; `pacp-admin node start` and `pacp-admin node stop` expose an
 `-idempotency-key` flag, and runner start operations set this header for you.
+Lease release also requires an `Idempotency-Key`; `pacp-admin leases release`
+and runner release operations set this header.
 
 For distributed deployments, set `PACP_COMPONENT_TOKEN` or `-component-token`
 on catalog, jobs, leases, artifacts, and policy services. `pacp-gateway` and

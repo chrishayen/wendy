@@ -22,6 +22,7 @@ var (
 	ErrHolderMismatch      = errors.New("holder mismatch")
 	ErrLeaseExpired        = errors.New("lease expired")
 	ErrInvalidTransition   = errors.New("invalid lease transition")
+	ErrMissingIdempotency  = errors.New("missing idempotency key")
 	ErrIdempotencyConflict = errors.New("idempotency conflict")
 )
 
@@ -483,6 +484,9 @@ func (s *Store) Heartbeat(leaseID string, req contracts.LeaseHeartbeatRequest) (
 }
 
 func (s *Store) Release(leaseID string, req contracts.LeaseReleaseRequest, idempotencyKey, actorSubjectID string) (contracts.Lease, error) {
+	if idempotencyKey == "" {
+		return contracts.Lease{}, ErrMissingIdempotency
+	}
 	if req.HolderID == "" {
 		return contracts.Lease{}, fmt.Errorf("%w: holder_id is required", ErrValidation)
 	}
@@ -494,13 +498,11 @@ func (s *Store) Release(leaseID string, req contracts.LeaseReleaseRequest, idemp
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if idempotencyKey != "" {
-		if existing, ok := s.releaseIdempotency[idempotencyKey]; ok {
-			if existing.fingerprint != fingerprint {
-				return contracts.Lease{}, ErrIdempotencyConflict
-			}
-			return cloneLease(existing.response), nil
+	if existing, ok := s.releaseIdempotency[idempotencyKey]; ok {
+		if existing.fingerprint != fingerprint {
+			return contracts.Lease{}, ErrIdempotencyConflict
 		}
+		return cloneLease(existing.response), nil
 	}
 
 	s.expireLeasesLocked()
@@ -515,11 +517,9 @@ func (s *Store) Release(leaseID string, req contracts.LeaseReleaseRequest, idemp
 		return contracts.Lease{}, ErrLeaseExpired
 	}
 	if rec.state == leaseReleased {
-		if idempotencyKey != "" {
-			s.releaseIdempotency[idempotencyKey] = idempotentRelease{fingerprint: fingerprint, leaseID: leaseID, response: cloneLease(rec.lease)}
-			if err := s.saveLocked(); err != nil {
-				return contracts.Lease{}, err
-			}
+		s.releaseIdempotency[idempotencyKey] = idempotentRelease{fingerprint: fingerprint, leaseID: leaseID, response: cloneLease(rec.lease)}
+		if err := s.saveLocked(); err != nil {
+			return contracts.Lease{}, err
 		}
 		return cloneLease(rec.lease), nil
 	}
@@ -542,9 +542,7 @@ func (s *Store) Release(leaseID string, req contracts.LeaseReleaseRequest, idemp
 		ActorSubjectID: actorSubjectID,
 		OccurredAt:     now,
 	})
-	if idempotencyKey != "" {
-		s.releaseIdempotency[idempotencyKey] = idempotentRelease{fingerprint: fingerprint, leaseID: leaseID, response: cloneLease(rec.lease)}
-	}
+	s.releaseIdempotency[idempotencyKey] = idempotentRelease{fingerprint: fingerprint, leaseID: leaseID, response: cloneLease(rec.lease)}
 
 	selector := s.requestSelectorForLeaseLocked(rec)
 	s.allocatePendingLocked(selector)

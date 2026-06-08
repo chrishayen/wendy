@@ -47,6 +47,14 @@ func TestHandlerLeaseLifecycle(t *testing.T) {
 		t.Fatalf("heartbeat = %#v", heartbeat)
 	}
 
+	missingID := doJSONStatus(t, handler, http.MethodPost, "/v1/leases/"+leaseID+"/release", map[string]any{
+		"holder_id": "job_1",
+		"reason":    "job completed",
+	}, nil, http.StatusBadRequest)
+	if missingID["error"].(map[string]any)["code"] != "missing_idempotency_key" {
+		t.Fatalf("missing idempotency error = %#v", missingID)
+	}
+
 	released := doJSON(t, handler, http.MethodPost, "/v1/leases/"+leaseID+"/release", map[string]any{
 		"holder_id": "job_1",
 		"reason":    "job completed",

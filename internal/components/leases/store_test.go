@@ -52,6 +52,14 @@ func TestStoreGrantsHeartbeatsAndReleasesLease(t *testing.T) {
 		t.Fatalf("expires_at = %q", heartbeat.ExpiresAt)
 	}
 
+	_, err = store.Release(request.Lease.LeaseID, contracts.LeaseReleaseRequest{
+		HolderID: "job_1",
+		Reason:   "job completed",
+	}, "", "sub_runner")
+	if !errors.Is(err, ErrMissingIdempotency) {
+		t.Fatalf("expected missing idempotency, got %v", err)
+	}
+
 	released, err := store.Release(request.Lease.LeaseID, contracts.LeaseReleaseRequest{
 		HolderID: "job_1",
 		Reason:   "job completed",
