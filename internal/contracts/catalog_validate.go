@@ -54,9 +54,13 @@ func ValidateProviderManifest(manifest ProviderManifest) []string {
 		}
 		if cap.InputSchema == nil {
 			errs = append(errs, prefix+".input_schema is required")
+		} else {
+			errs = append(errs, validateCapabilityObjectSchema(prefix+".input_schema", cap.InputSchema)...)
 		}
 		if cap.OutputSchema == nil {
 			errs = append(errs, prefix+".output_schema is required")
+		} else {
+			errs = append(errs, validateCapabilityObjectSchema(prefix+".output_schema", cap.OutputSchema)...)
 		}
 		if cap.Examples == nil {
 			errs = append(errs, prefix+".examples is required")
@@ -92,6 +96,14 @@ func validExecutionMode(value string) bool {
 	default:
 		return false
 	}
+}
+
+func validateCapabilityObjectSchema(prefix string, schema map[string]any) []string {
+	schemaType, _ := schema["type"].(string)
+	if schemaType == "" || schemaType == "object" {
+		return nil
+	}
+	return []string{prefix + ".type must be object when present"}
 }
 
 func validSideEffects(value string) bool {

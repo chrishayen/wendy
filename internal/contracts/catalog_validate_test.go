@@ -57,6 +57,22 @@ func TestValidateProviderManifestValidatesExamplesAgainstInputSchema(t *testing.
 	}
 }
 
+func TestValidateProviderManifestRejectsUnsupportedTopLevelSchemaTypes(t *testing.T) {
+	manifest := validTestManifest()
+	manifest.Capabilities[0].InputSchema = map[string]any{"type": "array"}
+	manifest.Capabilities[0].OutputSchema = map[string]any{"type": "string"}
+
+	errs := ValidateProviderManifest(manifest)
+	for _, want := range []string{
+		"capabilities[0].input_schema.type must be object when present",
+		"capabilities[0].output_schema.type must be object when present",
+	} {
+		if !containsValidationError(errs, want) {
+			t.Fatalf("errors missing %q: %#v", want, errs)
+		}
+	}
+}
+
 func validTestManifest() ProviderManifest {
 	return ProviderManifest{
 		SchemaVersion: "v1",
