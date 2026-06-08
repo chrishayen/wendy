@@ -237,6 +237,8 @@ Component metrics include component-specific state samples plus HTTP request
 count, error count, and average latency by method and normalized route group.
 Job metrics include active and expired claim counts so missed worker heartbeats
 can be surfaced without direct store access.
+Artifact metrics include content retrieval counts in addition to upload states
+and expiration counts.
 Provider metrics additionally expose invocation count, error count, and average
 duration by service id, capability id, status, and error code.
 Runner metrics expose active job count, run loop results, successful heartbeat

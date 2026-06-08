@@ -42,6 +42,7 @@ type Store struct {
 	blobsDir       string
 	nextUploadID   int
 	nextArtifactID int
+	contentReads   int
 	uploads        map[string]*uploadRecord
 	artifacts      map[string]*artifactRecord
 	idempotency    map[string]idempotentRecord
@@ -181,13 +182,14 @@ func (s *Store) HealthDetails() map[string]any {
 		uploadsByState[string(upload.session.State)]++
 	}
 	return map[string]any{
-		"store_backend":     backendLabel(s.snapshotPath),
-		"content_backend":   "local_fs",
-		"artifact_count":    len(s.artifacts),
-		"upload_count":      len(s.uploads),
-		"uploads_by_state":  uploadsByState,
-		"idempotency_count": len(s.idempotency),
-		"schema_version":    "v1",
+		"store_backend":      backendLabel(s.snapshotPath),
+		"content_backend":    "local_fs",
+		"artifact_count":     len(s.artifacts),
+		"upload_count":       len(s.uploads),
+		"content_read_count": s.contentReads,
+		"uploads_by_state":   uploadsByState,
+		"idempotency_count":  len(s.idempotency),
+		"schema_version":     "v1",
 	}
 }
 
@@ -198,6 +200,7 @@ func (s *Store) Metrics() contracts.ComponentMetrics {
 		contracts.CountMetric("artifacts_total", len(s.artifacts), nil),
 		contracts.CountMetric("artifact_uploads_total", len(s.uploads), nil),
 		contracts.CountMetric("artifact_idempotency_records_total", len(s.idempotency), nil),
+		contracts.CountMetric("artifact_content_retrievals_total", s.contentReads, nil),
 	}
 	totalBytes := int64(0)
 	for _, rec := range s.artifacts {
@@ -592,6 +595,9 @@ func (s *Store) ReadContent(artifactID string) (ArtifactContent, error) {
 	if err != nil {
 		return ArtifactContent{}, err
 	}
+	s.mu.Lock()
+	s.contentReads++
+	s.mu.Unlock()
 	return ArtifactContent{
 		Body:        body,
 		ContentType: rec.artifact.MediaType,

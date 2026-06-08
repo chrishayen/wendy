@@ -74,6 +74,7 @@ func TestHandlerUploadLifecycleAndContentRead(t *testing.T) {
 		t.Fatalf("metrics = %#v", metrics)
 	}
 	assertMetric(t, metrics, "artifacts_total", nil, 1)
+	assertMetric(t, metrics, "artifact_content_retrievals_total", nil, 1)
 	assertMetric(t, metrics, "artifact_uploads_by_state", map[string]string{"state": "completed"}, 1)
 	assertMetric(t, metrics, "http_requests_total", map[string]string{"method": "GET", "route_group": "/v1/artifacts/{artifact_id}/content", "status_class": "2xx"}, 1)
 }
