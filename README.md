@@ -48,6 +48,9 @@ Contract simulation data is kept as test input, not as product behavior.
 - `cmd/pacp-policy`: runnable access policy and secrets service.
 - `cmd/pacp-node`: runnable runtime node agent for one configured service node.
 - `cmd/pacp-runner`: runnable composition runner.
+- `cmd/pacp-primary`: primary-host process for C03, C04, C05, C06, C07, C08,
+  and an optional runner using arbitrary manifests, resources, and policy
+  seed files.
 - `cmd/pacp-bundle`: renders one deployment bundle into catalog manifests,
   node config, lease resource seed, and optional policy seed files.
 - `cmd/pacp-admin`: JSON-first operator CLI for component, gateway, and node
@@ -78,6 +81,7 @@ go run ./cmd/pacp-admin -gateway-token token_agent jobs cancel job_000001 -idemp
 go run ./cmd/pacp-admin leases resources
 go run ./cmd/pacp-admin artifacts list
 go run ./cmd/pacp-bundle -bundle testdata/deploy/generic-gpu-bundle.json -out-dir /tmp/pacp-bundle
+go run ./cmd/pacp-primary -manifest /tmp/pacp-bundle/catalog -resources /tmp/pacp-bundle/leases/resources.json -policy-seed /tmp/pacp-bundle/policy/policy-seed.json -state-dir /tmp/pacp-primary-state -artifact-root /tmp/pacp-primary-artifacts -disable-runner
 go run ./cmd/pacp-control -gateway-url http://localhost:18086 health
 go run ./cmd/pacp-control -gateway-url http://localhost:18086 -token token_agent tools
 go run ./cmd/pacp-control -gateway-url http://localhost:18086 -token token_agent invoke cap_dev_echo -idempotency-key echo-1 -input '{"message":"hello"}'
@@ -111,6 +115,13 @@ go run ./cmd/pacp-catalog -manifest /tmp/pacp-bundle/catalog/svc_generic_gpu_ima
 go run ./cmd/pacp-node -config /tmp/pacp-bundle/node/node.json
 go run ./cmd/pacp-leases -resources /tmp/pacp-bundle/leases/resources.json
 go run ./cmd/pacp-policy -seed /tmp/pacp-bundle/policy/policy-seed.json
+```
+
+For a single primary host, `pacp-primary` hosts the control-plane components in
+one process while preserving HTTP component boundaries:
+
+```sh
+go run ./cmd/pacp-primary -manifest /tmp/pacp-bundle/catalog -resources /tmp/pacp-bundle/leases/resources.json -policy-seed /tmp/pacp-bundle/policy/policy-seed.json -state-dir /tmp/pacp-primary-state -artifact-root /tmp/pacp-primary-artifacts -node-urls node_linux_gpu=http://linux-box:18087
 ```
 
 Node resource declarations can be converted into lease resource seed files:
