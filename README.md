@@ -30,7 +30,7 @@ Contract simulation data is kept as test input, not as product behavior.
   reference, redaction, health, and durable sensitive state snapshots.
 - `internal/components/node`: runtime node agent with local auth, resource
   advertisement, fake, process, and Docker service lifecycle adapters, health,
-  and service status APIs.
+  lease resource export, and service status APIs.
 - `internal/testkit`: contract-simulation fixture loader and fixture-backed
   HTTP fake server.
 - `cmd/pacp-contract-smoke`: CLI smoke check for a contract simulation package.
@@ -83,6 +83,12 @@ go run ./cmd/pacp-policy -addr localhost:18085 -state-file /tmp/pacp-policy-stat
 go run ./cmd/pacp-gateway -addr localhost:18086 -catalog-url http://localhost:18081 -jobs-url http://localhost:18082 -artifacts-url http://localhost:18084 -policy-url http://localhost:18085 -idempotency-state-file /tmp/pacp-gateway-idempotency-state.json
 go run ./cmd/pacp-node -addr localhost:18087 -config testdata/node/linux-gpu-fake.json
 go run ./cmd/pacp-runner -once -worker-id runner_local -jobs-url http://localhost:18082 -leases-url http://localhost:18083 -artifacts-url http://localhost:18084 -node-urls node_linux_gpu=http://localhost:18087 -node-start-timeout 30s
+```
+
+Node resource declarations can be converted into lease resource seed files:
+
+```sh
+go run ./cmd/pacp-node -config testdata/node/linux-gpu-fake.json -export-lease-resources
 ```
 
 For distributed deployments, set `PACP_COMPONENT_TOKEN` or `-component-token`

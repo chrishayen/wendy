@@ -1,14 +1,14 @@
 {
   "resources": [
     {
-      "resource_id": "res_linux_gpu",
+      "resource_id": "res_gpu_0",
       "selector": "gpu",
       "display_name": "Linux GPU",
       "status": "available",
       "node_id": "node_linux_gpu",
-      "tags": ["gpu", "linux"],
+      "tags": ["gpu", "gpu:0"],
       "metadata": {
-        "profile": "distributed-smoke"
+        "kind": "gpu"
       }
     }
   ]
