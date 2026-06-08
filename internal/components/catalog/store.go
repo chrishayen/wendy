@@ -230,6 +230,43 @@ func (s *Store) GetRoute(capabilityID string) (contracts.CapabilityRoute, bool) 
 	return route, ok
 }
 
+func (s *Store) Export() contracts.CatalogExport {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	serviceIDs := make([]string, 0, len(s.services))
+	for id := range s.services {
+		serviceIDs = append(serviceIDs, id)
+	}
+	sort.Strings(serviceIDs)
+
+	manifests := make([]contracts.ProviderManifest, 0, len(serviceIDs))
+	for _, serviceID := range serviceIDs {
+		capabilityIDs := make([]string, 0)
+		for capabilityID, capability := range s.capabilities {
+			if capability.ServiceID == serviceID {
+				capabilityIDs = append(capabilityIDs, capabilityID)
+			}
+		}
+		sort.Strings(capabilityIDs)
+		capabilities := make([]contracts.Capability, 0, len(capabilityIDs))
+		for _, capabilityID := range capabilityIDs {
+			capabilities = append(capabilities, cloneCapability(s.capabilities[capabilityID]))
+		}
+		provider := s.providers[serviceID]
+		if provider.HealthPath == "" {
+			provider.HealthPath = "/v1/provider/health"
+		}
+		manifests = append(manifests, contracts.ProviderManifest{
+			SchemaVersion: "v1",
+			Service:       cloneService(s.services[serviceID]),
+			Provider:      provider,
+			Capabilities:  capabilities,
+		})
+	}
+	return contracts.CatalogExport{SchemaVersion: "v1", Manifests: manifests}
+}
+
 func (s *Store) Tags() []string {
 	s.mu.RLock()
 	defer s.mu.RUnlock()

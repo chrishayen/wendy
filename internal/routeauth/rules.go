@@ -11,6 +11,7 @@ func CatalogScopeRules() []transportauth.ScopeRule {
 	forbiddenMessage := "caller is not authorized for this catalog operation"
 	return []transportauth.ScopeRule{
 		{Method: http.MethodPost, Path: "/v1/catalog/manifests", Scopes: []string{"component"}, UnauthorizedMessage: componentMessage, ForbiddenMessage: forbiddenMessage},
+		{Method: http.MethodGet, Path: "/v1/catalog/export", Scopes: []string{"component"}, UnauthorizedMessage: componentMessage, ForbiddenMessage: forbiddenMessage},
 		{Method: http.MethodGet, Path: "/v1/catalog/services", Scopes: []string{"component"}, UnauthorizedMessage: componentMessage, ForbiddenMessage: forbiddenMessage},
 		{Method: http.MethodGet, Path: "/v1/catalog/services/{service_id}", Scopes: []string{"component"}, UnauthorizedMessage: componentMessage, ForbiddenMessage: forbiddenMessage},
 		{Method: http.MethodGet, Path: "/v1/catalog/capabilities", Scopes: []string{"component"}, UnauthorizedMessage: componentMessage, ForbiddenMessage: forbiddenMessage},

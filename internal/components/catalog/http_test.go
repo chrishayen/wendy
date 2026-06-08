@@ -108,6 +108,22 @@ func TestMetricsHTTP(t *testing.T) {
 	assertMetric(t, data, "http_requests_total", map[string]string{"method": "GET", "route_group": "/v1/catalog/health", "status_class": "2xx"}, 1)
 }
 
+func TestExportHTTP(t *testing.T) {
+	handler := NewHandler(sampleStore(t))
+	req := httptest.NewRequest(http.MethodGet, "/v1/catalog/export", nil)
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+	data := decodeData(t, rec.Body)
+	manifests := data["manifests"].([]any)
+	if data["schema_version"] != "v1" || len(manifests) != 1 {
+		t.Fatalf("export = %#v", data)
+	}
+}
+
 func TestLoadManifestsFromDirectory(t *testing.T) {
 	manifests, err := LoadManifests(filepath.Join("..", "..", "..", "testdata", "manifests"))
 	if err != nil {

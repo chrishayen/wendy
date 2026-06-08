@@ -240,6 +240,13 @@ func TestFakeCatalogHandlerSupportsCapabilityOutcomes(t *testing.T) {
 		t.Fatalf("tags = %#v", tags.Items)
 	}
 
+	exportEnvelope := doFakeCatalogEnvelope(t, server, http.MethodGet, "/v1/catalog/export", nil, http.StatusOK)
+	var export contracts.CatalogExport
+	decodeEnvelopeData(t, exportEnvelope, &export)
+	if len(export.Manifests) != 1 || len(export.Manifests[0].Capabilities) == 0 {
+		t.Fatalf("export = %#v", export)
+	}
+
 	denied := doFakeCatalogEnvelope(t, server, http.MethodGet, "/v1/catalog/capabilities/cap_fake_denied", nil, http.StatusForbidden)
 	if denied.OK || denied.Error.Code != "forbidden" {
 		t.Fatalf("denied = %#v", denied)

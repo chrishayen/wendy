@@ -7,6 +7,11 @@ type ProviderManifest struct {
 	Capabilities  []Capability `json:"capabilities"`
 }
 
+type CatalogExport struct {
+	SchemaVersion string             `json:"schema_version"`
+	Manifests     []ProviderManifest `json:"manifests"`
+}
+
 type Service struct {
 	ID           string   `json:"id"`
 	Name         string   `json:"name"`

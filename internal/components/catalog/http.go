@@ -35,6 +35,8 @@ func (h Handler) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		writeSuccess(w, r, http.StatusOK, metrics)
 	case r.Method == http.MethodPost && path == "/v1/catalog/manifests":
 		h.registerManifest(w, r)
+	case r.Method == http.MethodGet && path == "/v1/catalog/export":
+		writeSuccess(w, r, http.StatusOK, h.store.Export())
 	case r.Method == http.MethodGet && path == "/v1/catalog/services":
 		h.listServices(w, r)
 	case r.Method == http.MethodGet && strings.HasPrefix(path, "/v1/catalog/services/"):

@@ -85,3 +85,23 @@ func TestPersistentStoreReloadsCatalogRecordsAndRoutes(t *testing.T) {
 		t.Fatalf("services = %#v", services)
 	}
 }
+
+func TestExportReturnsImportableManifests(t *testing.T) {
+	store := sampleStore(t)
+	export := store.Export()
+	if export.SchemaVersion != "v1" || len(export.Manifests) != 1 {
+		t.Fatalf("export = %#v", export)
+	}
+	manifest := export.Manifests[0]
+	if manifest.Service.ID != "svc_comfyui_gpu" || len(manifest.Capabilities) != 1 {
+		t.Fatalf("manifest = %#v", manifest)
+	}
+
+	reimported := NewStore()
+	if _, err := reimported.RegisterManifest(manifest); err != nil {
+		t.Fatalf("reimport exported manifest: %v", err)
+	}
+	if _, ok := reimported.GetCapability("cap_image_generate_gpu"); !ok {
+		t.Fatalf("reimported capability missing")
+	}
+}

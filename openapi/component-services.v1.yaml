@@ -75,6 +75,26 @@ paths:
                 $ref: "#/components/schemas/SuccessEnvelope"
         default:
           $ref: "#/components/responses/Error"
+  /v1/catalog/export:
+    get:
+      tags: [catalog]
+      operationId: exportCatalog
+      x-operation-audience: component
+      x-policy-action: catalog.read
+      responses:
+        "200":
+          description: Catalog export envelope.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/CatalogExport"
+        default:
+          $ref: "#/components/responses/Error"
   /v1/catalog/services:
     get:
       tags: [catalog]
@@ -1447,6 +1467,16 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/Capability"
+    CatalogExport:
+      type: object
+      required: [schema_version, manifests]
+      properties:
+        schema_version:
+          type: string
+        manifests:
+          type: array
+          items:
+            $ref: "#/components/schemas/ProviderManifest"
     ProviderInvokeRequest:
       type: object
       required: [input]

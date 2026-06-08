@@ -11,6 +11,7 @@ import (
 func TestCatalogScopeRulesRequireComponentRoutes(t *testing.T) {
 	rules := routeauth.CatalogScopeRules()
 	assertRuleScopes(t, rules, http.MethodPost, "/v1/catalog/manifests", []string{"component"})
+	assertRuleScopes(t, rules, http.MethodGet, "/v1/catalog/export", []string{"component"})
 	assertRuleScopes(t, rules, http.MethodGet, "/v1/catalog/capabilities", []string{"component"})
 	assertRuleScopes(t, rules, http.MethodGet, "/v1/catalog/capabilities/{capability_id}", []string{"component"})
 	assertRuleScopes(t, rules, http.MethodGet, "/v1/catalog/capabilities/{capability_id}/route", []string{"component"})

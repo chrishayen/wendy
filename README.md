@@ -16,7 +16,7 @@ Contract simulation data is kept as test input, not as product behavior.
   starts node-managed providers by node ID, invokes providers, uploads
   artifacts, and completes or fails jobs through public APIs.
 - `internal/components/catalog`: service catalog with in-memory or file-backed
-  provider registration storage, health, and HTTP handlers.
+  provider registration storage, export snapshots, health, and HTTP handlers.
 - `internal/components/gateway`: agent-facing tool discovery, invocation, job,
   log, artifact, content, and health gateway that composes public component
   APIs.

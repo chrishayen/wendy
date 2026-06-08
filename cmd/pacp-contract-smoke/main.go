@@ -479,6 +479,7 @@ func appendFakeCatalogChecks(ctx context.Context, checks *[]fakePublicAPICheck) 
 	defer server.Close()
 	*checks = append(*checks,
 		checkFakeCatalogValidCapability(ctx, server.Client(), server.URL),
+		checkFakeCatalogExport(ctx, server.Client(), server.URL),
 		requestFakeCatalogExpectedError(ctx, server.Client(), server.URL, http.MethodPost, "/v1/catalog/manifests", "fake.catalog.manifest.invalid", http.StatusBadRequest, "validation_failed", contracts.ProviderManifest{}),
 		requestFakeCatalogExpectedError(ctx, server.Client(), server.URL, http.MethodGet, "/v1/catalog/capabilities/cap_fake_denied", "fake.catalog.capability.denied", http.StatusForbidden, "forbidden", nil),
 		requestFakeCatalogExpectedError(ctx, server.Client(), server.URL, http.MethodGet, "/v1/catalog/capabilities/cap_fake_unavailable", "fake.catalog.capability.unavailable", http.StatusServiceUnavailable, "provider_unavailable", nil),
@@ -493,6 +494,19 @@ func appendFakeCatalogChecks(ctx context.Context, checks *[]fakePublicAPICheck) 
 	unavailableServer := httptest.NewServer(unavailable)
 	defer unavailableServer.Close()
 	*checks = append(*checks, requestFakeCatalogExpectedError(ctx, unavailableServer.Client(), unavailableServer.URL, http.MethodGet, "/v1/catalog/health", "fake.catalog.unavailable.component_unavailable", http.StatusServiceUnavailable, "component_unavailable", nil))
+}
+
+func checkFakeCatalogExport(ctx context.Context, client *http.Client, baseURL string) fakePublicAPICheck {
+	var export contracts.CatalogExport
+	check := requestFakeCatalogJSON(ctx, client, baseURL, http.MethodGet, "/v1/catalog/export", "fake.catalog.export", nil, &export)
+	if !check.OK {
+		return check
+	}
+	if export.SchemaVersion != "v1" || len(export.Manifests) == 0 {
+		check.OK = false
+		check.Error = fmt.Sprintf("export = %#v", export)
+	}
+	return check
 }
 
 func checkFakeCatalogValidCapability(ctx context.Context, client *http.Client, baseURL string) fakePublicAPICheck {

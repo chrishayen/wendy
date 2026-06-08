@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -2271,6 +2272,8 @@ func (h *fakeCatalogHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		writeFakeSuccess(w, r, http.StatusOK, metrics)
 	case r.Method == http.MethodPost && path == "/v1/catalog/manifests":
 		h.registerManifest(w, r)
+	case r.Method == http.MethodGet && path == "/v1/catalog/export":
+		h.exportCatalog(w, r)
 	case r.Method == http.MethodGet && path == "/v1/catalog/services":
 		h.listServices(w, r)
 	case r.Method == http.MethodGet && strings.HasPrefix(path, "/v1/catalog/services/"):
@@ -2399,6 +2402,45 @@ func (h *fakeCatalogHandler) listTags(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	writeFakeSuccess(w, r, http.StatusOK, map[string]any{"items": items, "next_cursor": nil})
+}
+
+func (h *fakeCatalogHandler) exportCatalog(w http.ResponseWriter, r *http.Request) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	serviceIDs := make([]string, 0, len(h.services))
+	for serviceID := range h.services {
+		serviceIDs = append(serviceIDs, serviceID)
+	}
+	sort.Strings(serviceIDs)
+
+	manifests := make([]contracts.ProviderManifest, 0, len(serviceIDs))
+	for _, serviceID := range serviceIDs {
+		capabilities := []contracts.Capability{}
+		provider := contracts.Provider{Endpoint: "http://provider.fake", HealthPath: "/v1/provider/health"}
+		for _, capabilityID := range h.order {
+			record, ok := h.records[capabilityID]
+			if !ok || record.Capability.ServiceID != serviceID {
+				continue
+			}
+			capabilities = append(capabilities, record.Capability)
+			if record.Route.ProviderEndpoint != "" {
+				provider.Endpoint = record.Route.ProviderEndpoint
+			}
+			if record.Route.ProviderHealthPath != "" {
+				provider.HealthPath = record.Route.ProviderHealthPath
+			}
+			if record.Route.NodeID != nil {
+				provider.NodeID = *record.Route.NodeID
+			}
+		}
+		manifests = append(manifests, contracts.ProviderManifest{
+			SchemaVersion: "v1",
+			Service:       h.services[serviceID],
+			Provider:      provider,
+			Capabilities:  capabilities,
+		})
+	}
+	writeFakeSuccess(w, r, http.StatusOK, contracts.CatalogExport{SchemaVersion: "v1", Manifests: manifests})
 }
 
 func (h *fakeCatalogHandler) listCapabilities(query url.Values) []contracts.CatalogCapabilityRecord {
