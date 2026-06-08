@@ -40,6 +40,8 @@ func TestComponentServiceAudienceMetadataForRouteAwareAuth(t *testing.T) {
 	path := filepath.Join("..", "..", "openapi", "component-services.v1.yaml")
 	doc := loadOpenAPIDoc(t, path)
 
+	assertOperationAudience(t, doc, "/v1/catalog/manifests", "post", []string{"component"})
+	assertOperationAudience(t, doc, "/v1/catalog/capabilities/{capability_id}/route", "get", []string{"component"})
 	assertOperationAudience(t, doc, "/v1/jobs", "get", []string{"component", "worker"})
 	assertOperationAudience(t, doc, "/v1/jobs/{job_id}", "get", []string{"component", "worker"})
 	assertOperationAudience(t, doc, "/v1/resources", "post", []string{"component"})
@@ -47,6 +49,8 @@ func TestComponentServiceAudienceMetadataForRouteAwareAuth(t *testing.T) {
 	assertOperationAudience(t, doc, "/v1/leases/{lease_id}/release", "post", []string{"worker"})
 	assertOperationAudience(t, doc, "/v1/artifacts/register-local", "post", []string{"worker"})
 	assertOperationAudience(t, doc, "/v1/artifacts/{artifact_id}/content", "get", []string{"component"})
+	assertOperationPolicyAction(t, doc, "/v1/catalog/manifests", "post", "catalog.register")
+	assertOperationPolicyAction(t, doc, "/v1/catalog/capabilities/{capability_id}/route", "get", "catalog.route.read")
 	assertOperationPolicyAction(t, doc, "/v1/resources", "post", "lease.resource.register")
 	assertOperationPolicyAction(t, doc, "/v1/lease-requests", "post", "lease.request")
 	assertOperationPolicyAction(t, doc, "/v1/leases/{lease_id}/release", "post", "lease.release")

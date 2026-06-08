@@ -225,6 +225,9 @@ transport token.
 request leases, heartbeat active leases, and release leases; component
 credentials can register resources and inspect resource or lease state.
 
+`pacp-catalog` supports C08-backed route-aware auth for component credentials
+that register manifests, list catalog records, and read provider routes.
+
 Command provider bridge route files map each capability id to a command array.
 The command receives `ProviderInvokeRequest` JSON on stdin and must write
 `ProviderInvokeResponse` JSON on stdout. Route files can set literal

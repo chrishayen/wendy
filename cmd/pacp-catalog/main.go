@@ -6,6 +6,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strings"
 
 	"pacp/internal/components/catalog"
 	"pacp/internal/transportauth"
@@ -16,6 +17,8 @@ func main() {
 	manifestPath := flag.String("manifest", "", "provider manifest file or directory to load at startup")
 	stateFile := flag.String("state-file", "", "optional JSON state file for durable catalog registrations")
 	componentToken := flag.String("component-token", os.Getenv("PACP_COMPONENT_TOKEN"), "optional bearer token required for component API calls")
+	policyURL := flag.String("policy-url", os.Getenv("PACP_POLICY_URL"), "optional policy service base URL for route-aware catalog API auth")
+	policyCredential := flag.String("policy-credential", componentCredentialDefault("PACP_CATALOG_POLICY_CREDENTIAL"), "optional credential used when calling policy auth verify; defaults to PACP_CATALOG_POLICY_CREDENTIAL or PACP_COMPONENT_TOKEN")
 	flag.Parse()
 
 	store := catalog.NewStore()
@@ -44,6 +47,50 @@ func main() {
 		}
 	}
 
-	log.Printf("serving catalog addr=%s manifests_loaded=%d state_file=%s", *addr, loaded, *stateFile)
-	log.Fatal(http.ListenAndServe(*addr, transportauth.RequireBearer(catalog.NewHandler(store), *componentToken)))
+	handler := catalog.NewHandler(store)
+	authMode := "open"
+	if strings.TrimSpace(*policyURL) != "" {
+		handler = transportauth.RequireVerifiedScopes(handler, transportauth.ScopeConfig{
+			PolicyURL:        *policyURL,
+			PolicyCredential: authorizationHeader(*policyCredential),
+			Rules:            catalogScopeRules(),
+		})
+		authMode = "policy"
+	} else if *componentToken != "" {
+		handler = transportauth.RequireBearer(handler, *componentToken)
+		authMode = "component-token"
+	}
+	log.Printf("serving catalog addr=%s manifests_loaded=%d state_file=%s auth_mode=%s", *addr, loaded, *stateFile, authMode)
+	log.Fatal(http.ListenAndServe(*addr, handler))
+}
+
+func catalogScopeRules() []transportauth.ScopeRule {
+	componentMessage := "catalog operation requires a valid component credential"
+	forbiddenMessage := "caller is not authorized for this catalog operation"
+	return []transportauth.ScopeRule{
+		{Method: http.MethodPost, Path: "/v1/catalog/manifests", Scopes: []string{"component"}, UnauthorizedMessage: componentMessage, ForbiddenMessage: forbiddenMessage},
+		{Method: http.MethodGet, Path: "/v1/catalog/services", Scopes: []string{"component"}, UnauthorizedMessage: componentMessage, ForbiddenMessage: forbiddenMessage},
+		{Method: http.MethodGet, Path: "/v1/catalog/services/{service_id}", Scopes: []string{"component"}, UnauthorizedMessage: componentMessage, ForbiddenMessage: forbiddenMessage},
+		{Method: http.MethodGet, Path: "/v1/catalog/capabilities", Scopes: []string{"component"}, UnauthorizedMessage: componentMessage, ForbiddenMessage: forbiddenMessage},
+		{Method: http.MethodGet, Path: "/v1/catalog/capabilities/{capability_id}", Scopes: []string{"component"}, UnauthorizedMessage: componentMessage, ForbiddenMessage: forbiddenMessage},
+		{Method: http.MethodGet, Path: "/v1/catalog/capabilities/{capability_id}/route", Scopes: []string{"component"}, UnauthorizedMessage: componentMessage, ForbiddenMessage: forbiddenMessage},
+		{Method: http.MethodGet, Path: "/v1/catalog/tags", Scopes: []string{"component"}, UnauthorizedMessage: componentMessage, ForbiddenMessage: forbiddenMessage},
+	}
+}
+
+func componentCredentialDefault(primaryEnv string) string {
+	if value := os.Getenv(primaryEnv); value != "" {
+		return value
+	}
+	return os.Getenv("PACP_COMPONENT_TOKEN")
+}
+
+func authorizationHeader(token string) string {
+	if token == "" {
+		return ""
+	}
+	if strings.HasPrefix(token, "Bearer ") {
+		return token
+	}
+	return "Bearer " + token
 }
