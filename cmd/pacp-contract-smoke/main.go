@@ -154,21 +154,36 @@ func runFakePublicAPISmoke(timeout time.Duration, stdout, stderr io.Writer) int 
 		checks = append(checks, fakePublicAPICheck{Name: "fake.provider.create", Error: err.Error()})
 	} else {
 		server := httptest.NewServer(handler)
-		report := testkit.CheckProvider(ctx, server.Client(), testkit.ProviderCheckOptions{
+		echoReport := testkit.CheckProvider(ctx, server.Client(), testkit.ProviderCheckOptions{
 			BaseURL:      server.URL,
 			CapabilityID: "cap_echo",
 			Input:        map[string]any{"message": "hello"},
 			RequestID:    "req_contract_fake_provider",
 		})
+		appendFakeProviderChecks(&checks, "fake.provider.echo.", echoReport)
+		artifactReport := testkit.CheckProvider(ctx, server.Client(), testkit.ProviderCheckOptions{
+			BaseURL:      server.URL,
+			CapabilityID: "cap_artifact",
+			Input:        map[string]any{"prompt": "hello"},
+			RequestID:    "req_contract_fake_provider_artifact",
+		})
+		appendFakeProviderChecks(&checks, "fake.provider.artifact.", artifactReport)
+		asyncReport := testkit.CheckProvider(ctx, server.Client(), testkit.ProviderCheckOptions{
+			BaseURL:      server.URL,
+			CapabilityID: "cap_async_accept",
+			Input:        map[string]any{},
+			RequestID:    "req_contract_fake_provider_async",
+		})
+		appendFakeProviderChecks(&checks, "fake.provider.async.", asyncReport)
+		errorReport := testkit.CheckProviderExpectedError(ctx, server.Client(), testkit.ProviderExpectedErrorOptions{
+			BaseURL:        server.URL,
+			CapabilityID:   "cap_fail",
+			WantHTTPStatus: http.StatusServiceUnavailable,
+			WantCode:       "provider_unavailable",
+			RequestID:      "req_contract_fake_provider_failure",
+		})
+		appendFakeProviderChecks(&checks, "fake.provider.failure.", errorReport)
 		server.Close()
-		for _, check := range report.Checks {
-			checks = append(checks, fakePublicAPICheck{
-				Name:       "fake.provider." + check.Name,
-				OK:         check.OK,
-				HTTPStatus: check.HTTPStatus,
-				Error:      check.Error,
-			})
-		}
 	}
 
 	passed := true
@@ -196,6 +211,17 @@ func runFakePublicAPISmoke(timeout time.Duration, stdout, stderr io.Writer) int 
 		}
 	}
 	return 1
+}
+
+func appendFakeProviderChecks(checks *[]fakePublicAPICheck, prefix string, report testkit.ProviderCheckReport) {
+	for _, check := range report.Checks {
+		*checks = append(*checks, fakePublicAPICheck{
+			Name:       prefix + check.Name,
+			OK:         check.OK,
+			HTTPStatus: check.HTTPStatus,
+			Error:      check.Error,
+		})
+	}
 }
 
 func runOpenAPICheck(pathsRaw string, stdout, stderr io.Writer) int {

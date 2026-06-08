@@ -89,6 +89,76 @@ func TestFakeProviderHandlerPassesProviderCheck(t *testing.T) {
 	}
 }
 
+func TestFakeProviderHandlerPassesArtifactProviderCheck(t *testing.T) {
+	handler, err := NewFakeProviderHandler(FakeProviderConfig{
+		Endpoint: "http://provider.fake",
+		Now:      fixedFakeClock,
+	})
+	if err != nil {
+		t.Fatalf("new fake provider: %v", err)
+	}
+	server := httptest.NewServer(handler)
+	defer server.Close()
+
+	report := CheckProvider(context.Background(), server.Client(), ProviderCheckOptions{
+		BaseURL:      server.URL,
+		CapabilityID: "cap_artifact",
+		Input:        map[string]any{"prompt": "hello"},
+		RequestID:    "req_fake_provider",
+	})
+	if !report.Passed() {
+		t.Fatalf("report = %#v", report)
+	}
+	if !hasProviderCheck(report, "provider.artifact_metadata") {
+		t.Fatalf("artifact metadata check missing: %#v", report.Checks)
+	}
+}
+
+func TestFakeProviderHandlerPassesAsyncProviderCheck(t *testing.T) {
+	handler, err := NewFakeProviderHandler(FakeProviderConfig{
+		Endpoint: "http://provider.fake",
+		Now:      fixedFakeClock,
+	})
+	if err != nil {
+		t.Fatalf("new fake provider: %v", err)
+	}
+	server := httptest.NewServer(handler)
+	defer server.Close()
+
+	report := CheckProvider(context.Background(), server.Client(), ProviderCheckOptions{
+		BaseURL:      server.URL,
+		CapabilityID: "cap_async_accept",
+		Input:        map[string]any{},
+		RequestID:    "req_fake_provider",
+	})
+	if !report.Passed() {
+		t.Fatalf("report = %#v", report)
+	}
+}
+
+func TestFakeProviderHandlerPassesExpectedFailureCheck(t *testing.T) {
+	handler, err := NewFakeProviderHandler(FakeProviderConfig{
+		Endpoint: "http://provider.fake",
+		Now:      fixedFakeClock,
+	})
+	if err != nil {
+		t.Fatalf("new fake provider: %v", err)
+	}
+	server := httptest.NewServer(handler)
+	defer server.Close()
+
+	report := CheckProviderExpectedError(context.Background(), server.Client(), ProviderExpectedErrorOptions{
+		BaseURL:        server.URL,
+		CapabilityID:   "cap_fail",
+		WantHTTPStatus: 503,
+		WantCode:       "provider_unavailable",
+		RequestID:      "req_fake_provider_failure",
+	})
+	if !report.Passed() {
+		t.Fatalf("report = %#v", report)
+	}
+}
+
 func TestFakeProviderHandlerRequiresCredential(t *testing.T) {
 	handler, err := NewFakeProviderHandler(FakeProviderConfig{
 		Endpoint:   "http://provider.fake",
@@ -112,4 +182,13 @@ func TestFakeProviderHandlerRequiresCredential(t *testing.T) {
 
 func fixedFakeClock() time.Time {
 	return time.Date(2026, 6, 8, 0, 0, 0, 0, time.UTC)
+}
+
+func hasProviderCheck(report ProviderCheckReport, name string) bool {
+	for _, check := range report.Checks {
+		if check.Name == name && check.OK {
+			return true
+		}
+	}
+	return false
 }

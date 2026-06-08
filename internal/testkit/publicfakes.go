@@ -2,7 +2,10 @@ package testkit
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/base64"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/url"
 	"strings"
@@ -56,6 +59,37 @@ func NewFakeProviderHandler(cfg FakeProviderConfig) (http.Handler, error) {
 		"cap_echo": func(ctx context.Context, req contracts.ProviderInvokeRequest) (contracts.ProviderInvokeResponse, error) {
 			message, _ := req.Input["message"].(string)
 			return contracts.ProviderInvokeResponse{Output: map[string]any{"reply": message}}, nil
+		},
+		"cap_artifact": func(ctx context.Context, req contracts.ProviderInvokeRequest) (contracts.ProviderInvokeResponse, error) {
+			prompt, _ := req.Input["prompt"].(string)
+			body := []byte("fake artifact: " + prompt)
+			return contracts.ProviderInvokeResponse{
+				Output: map[string]any{
+					"result": "artifact_created",
+					"name":   "fake-artifact.txt",
+				},
+				Artifacts: []contracts.ProviderArtifact{{
+					Name:          "fake-artifact.txt",
+					MediaType:     "text/plain",
+					ContentBase64: base64.StdEncoding.EncodeToString(body),
+					Checksum:      checksumString(body),
+				}},
+			}, nil
+		},
+		"cap_async_accept": func(ctx context.Context, req contracts.ProviderInvokeRequest) (contracts.ProviderInvokeResponse, error) {
+			return contracts.ProviderInvokeResponse{
+				Output: map[string]any{"result": "accepted"},
+			}, nil
+		},
+		"cap_fail": func(ctx context.Context, req contracts.ProviderInvokeRequest) (contracts.ProviderInvokeResponse, error) {
+			return contracts.ProviderInvokeResponse{}, provider.InvokeError{
+				ErrorObject: contracts.ErrorObject{
+					Code:      "provider_unavailable",
+					Message:   "fake provider failure",
+					Retryable: true,
+				},
+				StatusCode: http.StatusServiceUnavailable,
+			}
 		},
 	})
 	if err != nil {
@@ -206,8 +240,72 @@ func fakeProviderManifest(endpoint string) contracts.ProviderManifest {
 			Examples:    []map[string]any{},
 			SideEffects: "none",
 			TimeoutHint: "30s",
+		}, {
+			ID:            "cap_artifact",
+			Name:          "Artifact",
+			Description:   "Returns a provider artifact with public metadata.",
+			ExecutionMode: "sync",
+			InputSchema: map[string]any{
+				"type":     "object",
+				"required": []any{"prompt"},
+				"properties": map[string]any{
+					"prompt": map[string]any{"type": "string"},
+				},
+			},
+			OutputSchema: map[string]any{
+				"type":     "object",
+				"required": []any{"result", "name"},
+				"properties": map[string]any{
+					"result": map[string]any{"type": "string"},
+					"name":   map[string]any{"type": "string"},
+				},
+			},
+			Examples:      []map[string]any{},
+			SideEffects:   "writes artifact output",
+			ArtifactHints: []contracts.ArtifactHint{{MediaType: "text/plain", Count: "one"}},
+			TimeoutHint:   "30s",
+		}, {
+			ID:            "cap_async_accept",
+			Name:          "Async Accept",
+			Description:   "Represents an async provider acceptance path for contract tests.",
+			ExecutionMode: "async",
+			InputSchema: map[string]any{
+				"type":       "object",
+				"properties": map[string]any{},
+			},
+			OutputSchema: map[string]any{
+				"type":     "object",
+				"required": []any{"result"},
+				"properties": map[string]any{
+					"result": map[string]any{"type": "string"},
+				},
+			},
+			Examples:    []map[string]any{},
+			SideEffects: "none",
+			TimeoutHint: "30s",
+		}, {
+			ID:            "cap_fail",
+			Name:          "Failure",
+			Description:   "Returns a normalized provider failure envelope.",
+			ExecutionMode: "sync",
+			InputSchema: map[string]any{
+				"type":       "object",
+				"properties": map[string]any{},
+			},
+			OutputSchema: map[string]any{
+				"type":       "object",
+				"properties": map[string]any{},
+			},
+			Examples:    []map[string]any{},
+			SideEffects: "none",
+			TimeoutHint: "30s",
 		}},
 	}
+}
+
+func checksumString(body []byte) string {
+	sum := sha256.Sum256(body)
+	return fmt.Sprintf("sha256:%x", sum)
 }
 
 func requireFakeCredential(credential string, next http.Handler) http.Handler {

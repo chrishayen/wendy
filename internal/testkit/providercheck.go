@@ -22,6 +22,16 @@ type ProviderCheckOptions struct {
 	RequestID    string
 }
 
+type ProviderExpectedErrorOptions struct {
+	BaseURL        string
+	CapabilityID   string
+	Input          map[string]any
+	Credential     string
+	RequestID      string
+	WantHTTPStatus int
+	WantCode       string
+}
+
 type ProviderCheckReport struct {
 	OK     bool                  `json:"ok"`
 	Checks []ProviderCheckResult `json:"checks"`
@@ -61,8 +71,11 @@ func CheckProvider(ctx context.Context, httpClient *http.Client, opts ProviderCh
 	checkProviderHealth(ctx, httpClient, baseURL, credential, manifest, &report)
 	invoked := false
 	if strings.TrimSpace(opts.CapabilityID) != "" {
-		invoked = checkProviderInvoke(ctx, httpClient, baseURL, manifest, opts, &report)
+		var response contracts.ProviderInvokeResponse
+		var capability contracts.Capability
+		response, capability, invoked = checkProviderInvoke(ctx, httpClient, baseURL, manifest, opts, &report)
 		if invoked {
+			checkProviderArtifactMetadata(capability, response, &report)
 			checkProviderInvalidInput(ctx, httpClient, baseURL, credential, manifest, strings.TrimSpace(opts.CapabilityID), &report)
 		}
 	}
@@ -160,14 +173,86 @@ func checkProviderHealth(ctx context.Context, httpClient *http.Client, baseURL, 
 	report.add(result)
 }
 
-func checkProviderInvoke(ctx context.Context, httpClient *http.Client, baseURL string, manifest contracts.ProviderManifest, opts ProviderCheckOptions, report *ProviderCheckReport) bool {
+func CheckProviderExpectedError(ctx context.Context, httpClient *http.Client, opts ProviderExpectedErrorOptions) ProviderCheckReport {
+	report := ProviderCheckReport{OK: true}
+	if httpClient == nil {
+		httpClient = http.DefaultClient
+	}
+	if requestID := strings.TrimSpace(opts.RequestID); requestID != "" {
+		ctx = observability.WithRequestID(ctx, requestID)
+	}
+	baseURL := strings.TrimRight(strings.TrimSpace(opts.BaseURL), "/")
+	if baseURL == "" {
+		report.add(ProviderCheckResult{Name: "provider.base_url", Error: "provider URL is required"})
+		return report
+	}
+	capabilityID := strings.TrimSpace(opts.CapabilityID)
+	if capabilityID == "" {
+		report.add(ProviderCheckResult{Name: "provider.expected_error", Error: "capability id is required"})
+		return report
+	}
+	input := opts.Input
+	if input == nil {
+		input = map[string]any{}
+	}
+	request := contracts.ProviderInvokeRequest{
+		Input: input,
+		Context: contracts.ProviderInvokeContext{
+			RequestID: observability.RequestIDFromContext(ctx),
+		},
+	}
+	var envelope rawErrorEnvelope
+	path := "/v1/provider/capabilities/" + url.PathEscape(capabilityID) + "/invoke"
+	status, err := postEnvelope(ctx, httpClient, joinURLPath(baseURL, path), opts.Credential, request, &envelope)
+	result := ProviderCheckResult{Name: "provider.expected_error", HTTPStatus: status}
+	if err != nil {
+		result.Error = err.Error()
+		report.add(result)
+		return report
+	}
+	wantStatus := opts.WantHTTPStatus
+	if wantStatus == 0 {
+		wantStatus = http.StatusInternalServerError
+	}
+	if status != wantStatus {
+		result.Error = fmt.Sprintf("HTTP %d, want %d", status, wantStatus)
+		report.add(result)
+		return report
+	}
+	if envelope.OK {
+		result.Error = "expected error response was ok"
+		report.add(result)
+		return report
+	}
+	if err := validateEnvelopeMeta(envelope.Meta, observability.RequestIDFromContext(ctx)); err != nil {
+		result.Error = "expected error envelope " + err.Error()
+		report.add(result)
+		return report
+	}
+	wantCode := strings.TrimSpace(opts.WantCode)
+	if wantCode != "" && envelope.Error.Code != wantCode {
+		result.Error = fmt.Sprintf("error code = %q, want %q", envelope.Error.Code, wantCode)
+		report.add(result)
+		return report
+	}
+	if envelope.Error.Message == "" {
+		result.Error = "error message is required"
+		report.add(result)
+		return report
+	}
+	result.OK = true
+	report.add(result)
+	return report
+}
+
+func checkProviderInvoke(ctx context.Context, httpClient *http.Client, baseURL string, manifest contracts.ProviderManifest, opts ProviderCheckOptions, report *ProviderCheckReport) (contracts.ProviderInvokeResponse, contracts.Capability, bool) {
 	capabilityID := strings.TrimSpace(opts.CapabilityID)
 	capability, ok := findCapability(manifest, capabilityID)
 	result := ProviderCheckResult{Name: "provider.invoke"}
 	if !ok {
 		result.Error = "capability not found in manifest: " + capabilityID
 		report.add(result)
-		return false
+		return contracts.ProviderInvokeResponse{}, contracts.Capability{}, false
 	}
 	input := opts.Input
 	if input == nil {
@@ -176,7 +261,7 @@ func checkProviderInvoke(ctx context.Context, httpClient *http.Client, baseURL s
 	if err := provider.ValidateObject(input, capability.InputSchema); err != nil {
 		result.Error = "input does not match manifest schema: " + err.Error()
 		report.add(result)
-		return false
+		return contracts.ProviderInvokeResponse{}, capability, false
 	}
 	request := contracts.ProviderInvokeRequest{
 		Input: input,
@@ -191,37 +276,138 @@ func checkProviderInvoke(ctx context.Context, httpClient *http.Client, baseURL s
 	if err != nil {
 		result.Error = err.Error()
 		report.add(result)
-		return false
+		return contracts.ProviderInvokeResponse{}, capability, false
 	}
 	if status < 200 || status >= 300 {
 		result.Error = fmt.Sprintf("HTTP %d", status)
 		report.add(result)
-		return false
+		return contracts.ProviderInvokeResponse{}, capability, false
 	}
 	if !envelope.OK {
 		result.Error = "invoke response was not ok"
 		report.add(result)
-		return false
+		return contracts.ProviderInvokeResponse{}, capability, false
 	}
 	if err := validateEnvelopeMeta(envelope.Meta, observability.RequestIDFromContext(ctx)); err != nil {
 		result.Error = "invoke envelope " + err.Error()
 		report.add(result)
-		return false
+		return contracts.ProviderInvokeResponse{}, capability, false
 	}
 	var response contracts.ProviderInvokeResponse
 	if err := json.Unmarshal(envelope.Data, &response); err != nil {
 		result.Error = "decode invoke response: " + err.Error()
 		report.add(result)
-		return false
+		return contracts.ProviderInvokeResponse{}, capability, false
 	}
 	if err := provider.ValidateObject(response.Output, capability.OutputSchema); err != nil {
 		result.Error = "output does not match manifest schema: " + err.Error()
 		report.add(result)
-		return false
+		return contracts.ProviderInvokeResponse{}, capability, false
 	}
 	result.OK = true
 	report.add(result)
-	return true
+	return response, capability, true
+}
+
+func checkProviderArtifactMetadata(capability contracts.Capability, response contracts.ProviderInvokeResponse, report *ProviderCheckReport) {
+	requiresArtifacts := capabilityRequiresArtifacts(capability)
+	hasArtifacts := len(response.Artifacts) > 0 || len(response.ContentRefs) > 0
+	if !requiresArtifacts && !hasArtifacts {
+		return
+	}
+	result := ProviderCheckResult{Name: "provider.artifact_metadata"}
+	if requiresArtifacts && !hasArtifacts {
+		result.Error = "capability advertises artifact output but response contained no artifacts or content refs"
+		report.add(result)
+		return
+	}
+	allowedMediaTypes := artifactHintMediaTypes(capability)
+	for i, artifact := range response.Artifacts {
+		if artifact.Name == "" {
+			result.Error = fmt.Sprintf("artifacts[%d].name is required", i)
+			report.add(result)
+			return
+		}
+		if artifact.MediaType == "" {
+			result.Error = fmt.Sprintf("artifacts[%d].media_type is required", i)
+			report.add(result)
+			return
+		}
+		if !mediaTypeAllowed(artifact.MediaType, allowedMediaTypes) {
+			result.Error = fmt.Sprintf("artifacts[%d].media_type = %q is not advertised by artifact_hints", i, artifact.MediaType)
+			report.add(result)
+			return
+		}
+		if artifact.ContentBase64 == "" && artifact.Checksum == "" {
+			result.Error = fmt.Sprintf("artifacts[%d] must include content_base64 or checksum", i)
+			report.add(result)
+			return
+		}
+	}
+	for i, ref := range response.ContentRefs {
+		if ref.ContentRef == "" {
+			result.Error = fmt.Sprintf("content_refs[%d].content_ref is required", i)
+			report.add(result)
+			return
+		}
+		if ref.Name == "" {
+			result.Error = fmt.Sprintf("content_refs[%d].name is required", i)
+			report.add(result)
+			return
+		}
+		if ref.MediaType == "" {
+			result.Error = fmt.Sprintf("content_refs[%d].media_type is required", i)
+			report.add(result)
+			return
+		}
+		if !mediaTypeAllowed(ref.MediaType, allowedMediaTypes) {
+			result.Error = fmt.Sprintf("content_refs[%d].media_type = %q is not advertised by artifact_hints", i, ref.MediaType)
+			report.add(result)
+			return
+		}
+		if ref.Size <= 0 {
+			result.Error = fmt.Sprintf("content_refs[%d].size must be positive", i)
+			report.add(result)
+			return
+		}
+		if ref.Checksum == "" {
+			result.Error = fmt.Sprintf("content_refs[%d].checksum is required", i)
+			report.add(result)
+			return
+		}
+		if ref.ExpiresAt == "" {
+			result.Error = fmt.Sprintf("content_refs[%d].expires_at is required", i)
+			report.add(result)
+			return
+		}
+	}
+	result.OK = true
+	report.add(result)
+}
+
+func capabilityRequiresArtifacts(capability contracts.Capability) bool {
+	for _, hint := range capability.ArtifactHints {
+		count := strings.ToLower(strings.TrimSpace(hint.Count))
+		if count == "" || !strings.HasPrefix(count, "zero") {
+			return true
+		}
+	}
+	return false
+}
+
+func artifactHintMediaTypes(capability contracts.Capability) map[string]bool {
+	types := map[string]bool{}
+	for _, hint := range capability.ArtifactHints {
+		mediaType := strings.TrimSpace(hint.MediaType)
+		if mediaType != "" {
+			types[mediaType] = true
+		}
+	}
+	return types
+}
+
+func mediaTypeAllowed(mediaType string, allowed map[string]bool) bool {
+	return len(allowed) == 0 || allowed[mediaType]
 }
 
 func checkProviderInvalidInput(ctx context.Context, httpClient *http.Client, baseURL, credential string, manifest contracts.ProviderManifest, capabilityID string, report *ProviderCheckReport) {

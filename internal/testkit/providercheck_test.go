@@ -166,6 +166,77 @@ func TestCheckProviderReportsInvalidInvokeInput(t *testing.T) {
 	}
 }
 
+func TestCheckProviderValidatesArtifactMetadata(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/provider/manifest":
+			manifest := testProviderManifest(serverURL(r))
+			manifest.Capabilities[0].ArtifactHints = []contracts.ArtifactHint{{MediaType: "text/plain", Count: "one"}}
+			writeTestEnvelope(t, w, http.StatusOK, manifest)
+		case "/v1/provider/health":
+			writeTestEnvelope(t, w, http.StatusOK, map[string]any{"status": "healthy"})
+		case "/v1/provider/capabilities/cap_echo/invoke":
+			var req contracts.ProviderInvokeRequest
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				t.Fatalf("decode invoke: %v", err)
+			}
+			if _, exists := req.Input["message"]; !exists {
+				writeTestErrorEnvelope(t, w, http.StatusBadRequest, "validation_failed", "message is required")
+				return
+			}
+			writeTestEnvelope(t, w, http.StatusOK, contracts.ProviderInvokeResponse{
+				Output:    map[string]any{"reply": "hello"},
+				Artifacts: []contracts.ProviderArtifact{{Name: "missing-media-type.txt"}},
+			})
+		case "/v1/provider/metrics":
+			writeTestEnvelope(t, w, http.StatusOK, testProviderMetrics([]contracts.MetricSample{
+				contracts.CountMetric("provider_invocations_total", 1, map[string]string{
+					"capability_id": "cap_echo",
+					"service_id":    "svc_test_provider",
+					"status":        "success",
+				}),
+			}))
+		default:
+			t.Fatalf("unexpected request = %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	report := CheckProvider(context.Background(), server.Client(), ProviderCheckOptions{
+		BaseURL:      server.URL,
+		CapabilityID: "cap_echo",
+		Input:        map[string]any{"message": "hello"},
+		RequestID:    "req_test",
+	})
+	if report.Passed() {
+		t.Fatalf("report passed unexpectedly: %#v", report)
+	}
+	if !providerCheckFailed(report, "provider.artifact_metadata") {
+		t.Fatalf("artifact metadata failure missing: %#v", report.Checks)
+	}
+}
+
+func TestCheckProviderExpectedError(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/provider/capabilities/cap_fail/invoke" {
+			t.Fatalf("unexpected request = %s %s", r.Method, r.URL.Path)
+		}
+		writeTestErrorEnvelope(t, w, http.StatusServiceUnavailable, "provider_unavailable", "backend is down")
+	}))
+	defer server.Close()
+
+	report := CheckProviderExpectedError(context.Background(), server.Client(), ProviderExpectedErrorOptions{
+		BaseURL:        server.URL,
+		CapabilityID:   "cap_fail",
+		WantHTTPStatus: http.StatusServiceUnavailable,
+		WantCode:       "provider_unavailable",
+		RequestID:      "req_test",
+	})
+	if !report.Passed() {
+		t.Fatalf("report = %#v", report)
+	}
+}
+
 func testProviderMetrics(samples []contracts.MetricSample) contracts.ComponentMetrics {
 	metrics := contracts.NewComponentMetrics("provider", samples)
 	metrics.CollectedAt = "2026-06-08T00:00:00Z"
@@ -242,4 +313,13 @@ func writeTestErrorEnvelope(t *testing.T, w http.ResponseWriter, status int, cod
 
 func serverURL(r *http.Request) string {
 	return "http://" + r.Host
+}
+
+func providerCheckFailed(report ProviderCheckReport, name string) bool {
+	for _, check := range report.Checks {
+		if check.Name == name && !check.OK {
+			return true
+		}
+	}
+	return false
 }

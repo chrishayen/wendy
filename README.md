@@ -35,7 +35,9 @@ Contract simulation data is kept as test input, not as product behavior.
   lease resource export, and service status APIs.
 - `internal/testkit`: contract-simulation fixture loader, fixture-backed HTTP
   fake server, reusable public component/provider fakes, and fixture replay
-  helpers for live handler contract tests.
+  helpers for live handler contract tests. The reusable provider fake includes
+  sync, async-acceptance, artifact-producing, validation-failure, and execution
+  failure branches.
 - `cmd/pacp-contract-smoke`: CLI smoke check for contract simulation packages,
   OpenAPI contracts, live component contracts, distributed component wiring,
   and live provider compliance.

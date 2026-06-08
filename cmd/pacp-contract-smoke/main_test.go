@@ -232,8 +232,11 @@ func TestRunFakePublicAPISmokePasses(t *testing.T) {
 		"check=fake.component.catalog.component.surface.catalog.capabilities status=pass",
 		"check=fake.component.jobs.component.surface.jobs.list status=pass",
 		"check=fake.component.node.component.surface.node.resources status=pass",
-		"check=fake.provider.provider.invoke status=pass",
-		"check=fake.provider.provider.invalid_input status=pass",
+		"check=fake.provider.echo.provider.invoke status=pass",
+		"check=fake.provider.echo.provider.invalid_input status=pass",
+		"check=fake.provider.artifact.provider.artifact_metadata status=pass",
+		"check=fake.provider.async.provider.invoke status=pass",
+		"check=fake.provider.failure.provider.expected_error status=pass",
 		"fake-public-apis=pass",
 	} {
 		if !strings.Contains(stdout.String(), expected) {
