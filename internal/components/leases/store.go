@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"sort"
 	"sync"
 	"time"
@@ -36,6 +38,7 @@ type Store struct {
 	queues             map[string][]string
 	releaseIdempotency map[string]idempotentRelease
 	audit              []contracts.LeaseAuditEvent
+	snapshotPath       string
 }
 
 type resourceRecord struct {
@@ -70,6 +73,54 @@ type idempotentRelease struct {
 	fingerprint string
 	leaseID     string
 	response    contracts.Lease
+}
+
+type snapshotFile struct {
+	Version            int                                  `json:"version"`
+	NextResourceID     int                                  `json:"next_resource_id"`
+	NextRequestID      int                                  `json:"next_request_id"`
+	NextLeaseID        int                                  `json:"next_lease_id"`
+	NextSequence       int                                  `json:"next_sequence"`
+	Resources          map[string]contracts.ResourceRecord  `json:"resources"`
+	Requests           map[string]leaseRequestSnapshot      `json:"requests"`
+	Leases             map[string]leaseSnapshot             `json:"leases"`
+	Queues             map[string][]string                  `json:"queues"`
+	ReleaseIdempotency map[string]idempotentReleaseSnapshot `json:"release_idempotency"`
+	Audit              []contracts.LeaseAuditEvent          `json:"audit,omitempty"`
+}
+
+type leaseRequestSnapshot struct {
+	Request                 contracts.LeaseRequest `json:"request"`
+	RequesterID             string                 `json:"requester_id"`
+	Priority                int                    `json:"priority"`
+	Sequence                int                    `json:"sequence"`
+	HeartbeatTimeoutSeconds int64                  `json:"heartbeat_timeout_seconds"`
+	LeaseID                 string                 `json:"lease_id,omitempty"`
+}
+
+type leaseSnapshot struct {
+	Lease          contracts.Lease `json:"lease"`
+	RequestID      string          `json:"request_id"`
+	TimeoutSeconds int64           `json:"timeout_seconds"`
+	State          leaseState      `json:"state"`
+}
+
+type idempotentReleaseSnapshot struct {
+	Fingerprint string          `json:"fingerprint"`
+	LeaseID     string          `json:"lease_id"`
+	Response    contracts.Lease `json:"response"`
+}
+
+func NewPersistentStore(path string) (*Store, error) {
+	store := NewStore()
+	store.snapshotPath = path
+	if path == "" {
+		return store, nil
+	}
+	if err := store.loadSnapshot(path); err != nil {
+		return nil, err
+	}
+	return store, nil
 }
 
 func NewStore() *Store {
@@ -131,6 +182,9 @@ func (s *Store) RegisterResource(req contracts.RegisterResourceRequest) (contrac
 	for _, tag := range req.Tags {
 		s.allocatePendingLocked(tag)
 	}
+	if err := s.saveLocked(); err != nil {
+		return contracts.ResourceRecord{}, err
+	}
 	return cloneResource(record), nil
 }
 
@@ -138,6 +192,7 @@ func (s *Store) ListResources(selector string) []contracts.ResourceRecord {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.expireLeasesLocked()
+	defer func() { _ = s.saveLocked() }()
 
 	ids := make([]string, 0, len(s.resources))
 	for id := range s.resources {
@@ -170,6 +225,7 @@ func (s *Store) InspectResource(resourceID string) (contracts.ResourceInspection
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.expireLeasesLocked()
+	defer func() { _ = s.saveLocked() }()
 
 	rec, ok := s.resources[resourceID]
 	if !ok {
@@ -237,10 +293,16 @@ func (s *Store) CreateLeaseRequest(req contracts.CreateLeaseRequest) (contracts.
 
 	if resource := s.freeResourceLocked(req.ResourceSelector); resource != nil && len(s.queues[req.ResourceSelector]) == 0 {
 		s.grantLocked(rec, resource)
+		if err := s.saveLocked(); err != nil {
+			return contracts.LeaseRequest{}, err
+		}
 		return cloneLeaseRequest(rec.request), nil
 	}
 
 	s.enqueueLocked(req.ResourceSelector, requestID)
+	if err := s.saveLocked(); err != nil {
+		return contracts.LeaseRequest{}, err
+	}
 	return cloneLeaseRequest(rec.request), nil
 }
 
@@ -248,6 +310,7 @@ func (s *Store) GetLeaseRequest(requestID string) (contracts.LeaseRequest, error
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.expireLeasesLocked()
+	defer func() { _ = s.saveLocked() }()
 
 	rec, ok := s.requests[requestID]
 	if !ok {
@@ -273,6 +336,9 @@ func (s *Store) CancelLeaseRequest(requestID string, req contracts.CancelRequest
 		rec.request.Links = map[string]any{}
 		rec.request.UpdatedAt = s.formatNow()
 		s.updateQueuePositionsLocked(rec.request.ResourceSelector)
+		if err := s.saveLocked(); err != nil {
+			return contracts.LeaseRequest{}, err
+		}
 		return cloneLeaseRequest(rec.request), nil
 	case contracts.LeaseRequestCanceled, contracts.LeaseRequestExpired:
 		return cloneLeaseRequest(rec.request), nil
@@ -285,6 +351,7 @@ func (s *Store) GetLease(leaseID string) (contracts.Lease, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.expireLeasesLocked()
+	defer func() { _ = s.saveLocked() }()
 
 	rec, ok := s.leases[leaseID]
 	if !ok {
@@ -320,6 +387,9 @@ func (s *Store) Heartbeat(leaseID string, req contracts.LeaseHeartbeatRequest) (
 	if reqRec, ok := s.requests[rec.requestID]; ok {
 		reqRec.request.Lease = leasePtr(rec.lease)
 		reqRec.request.UpdatedAt = s.formatNow()
+	}
+	if err := s.saveLocked(); err != nil {
+		return contracts.Lease{}, err
 	}
 	return cloneLease(rec.lease), nil
 }
@@ -359,6 +429,9 @@ func (s *Store) Release(leaseID string, req contracts.LeaseReleaseRequest, idemp
 	if rec.state == leaseReleased {
 		if idempotencyKey != "" {
 			s.releaseIdempotency[idempotencyKey] = idempotentRelease{fingerprint: fingerprint, leaseID: leaseID, response: cloneLease(rec.lease)}
+			if err := s.saveLocked(); err != nil {
+				return contracts.Lease{}, err
+			}
 		}
 		return cloneLease(rec.lease), nil
 	}
@@ -387,6 +460,9 @@ func (s *Store) Release(leaseID string, req contracts.LeaseReleaseRequest, idemp
 
 	selector := s.requestSelectorForLeaseLocked(rec)
 	s.allocatePendingLocked(selector)
+	if err := s.saveLocked(); err != nil {
+		return contracts.Lease{}, err
+	}
 	return cloneLease(rec.lease), nil
 }
 
@@ -679,4 +755,171 @@ func fingerprint(value any) (string, error) {
 		return "", err
 	}
 	return string(raw), nil
+}
+
+func (s *Store) loadSnapshot(path string) error {
+	raw, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	var snapshot snapshotFile
+	if err := json.Unmarshal(raw, &snapshot); err != nil {
+		return fmt.Errorf("%w: invalid lease snapshot: %v", ErrValidation, err)
+	}
+	s.nextResourceID = positiveOrDefault(snapshot.NextResourceID, 1)
+	s.nextRequestID = positiveOrDefault(snapshot.NextRequestID, 1)
+	s.nextLeaseID = positiveOrDefault(snapshot.NextLeaseID, 1)
+	s.nextSequence = positiveOrDefault(snapshot.NextSequence, 1)
+	s.resources = map[string]*resourceRecord{}
+	for resourceID, resource := range snapshot.Resources {
+		if resource.ResourceID == "" {
+			resource.ResourceID = resourceID
+		}
+		resource.Links = resourceLinks(resource.ResourceID)
+		s.resources[resource.ResourceID] = &resourceRecord{resource: cloneResource(resource)}
+	}
+	s.requests = map[string]*leaseRequestRecord{}
+	for requestID, rec := range snapshot.Requests {
+		request := cloneLeaseRequest(rec.Request)
+		if request.RequestID == "" {
+			request.RequestID = requestID
+		}
+		request.Links = leaseRequestLinks(request)
+		timeout := time.Duration(rec.HeartbeatTimeoutSeconds) * time.Second
+		if timeout <= 0 {
+			timeout = time.Minute
+		}
+		s.requests[request.RequestID] = &leaseRequestRecord{
+			request:          request,
+			requesterID:      rec.RequesterID,
+			priority:         rec.Priority,
+			sequence:         rec.Sequence,
+			heartbeatTimeout: timeout,
+			leaseID:          rec.LeaseID,
+		}
+	}
+	s.leases = map[string]*leaseRecord{}
+	for leaseID, rec := range snapshot.Leases {
+		lease := cloneLease(rec.Lease)
+		if lease.LeaseID == "" {
+			lease.LeaseID = leaseID
+		}
+		state := rec.State
+		if state == "" {
+			state = leaseActive
+		}
+		lease.Links = leaseLinksForState(lease.LeaseID, state)
+		timeout := time.Duration(rec.TimeoutSeconds) * time.Second
+		if timeout <= 0 {
+			timeout = time.Minute
+		}
+		s.leases[lease.LeaseID] = &leaseRecord{lease: lease, requestID: rec.RequestID, timeout: timeout, state: state}
+	}
+	s.queues = map[string][]string{}
+	for selector, queue := range snapshot.Queues {
+		s.queues[selector] = append([]string(nil), queue...)
+	}
+	s.releaseIdempotency = map[string]idempotentRelease{}
+	for key, rec := range snapshot.ReleaseIdempotency {
+		s.releaseIdempotency[key] = idempotentRelease{
+			fingerprint: rec.Fingerprint,
+			leaseID:     rec.LeaseID,
+			response:    cloneLease(rec.Response),
+		}
+	}
+	s.audit = append([]contracts.LeaseAuditEvent(nil), snapshot.Audit...)
+	for selector := range s.queues {
+		s.updateQueuePositionsLocked(selector)
+	}
+	return nil
+}
+
+func (s *Store) saveLocked() error {
+	if s.snapshotPath == "" {
+		return nil
+	}
+	snapshot := snapshotFile{
+		Version:            1,
+		NextResourceID:     s.nextResourceID,
+		NextRequestID:      s.nextRequestID,
+		NextLeaseID:        s.nextLeaseID,
+		NextSequence:       s.nextSequence,
+		Resources:          map[string]contracts.ResourceRecord{},
+		Requests:           map[string]leaseRequestSnapshot{},
+		Leases:             map[string]leaseSnapshot{},
+		Queues:             map[string][]string{},
+		ReleaseIdempotency: map[string]idempotentReleaseSnapshot{},
+		Audit:              append([]contracts.LeaseAuditEvent(nil), s.audit...),
+	}
+	for resourceID, rec := range s.resources {
+		snapshot.Resources[resourceID] = cloneResource(rec.resource)
+	}
+	for requestID, rec := range s.requests {
+		snapshot.Requests[requestID] = leaseRequestSnapshot{
+			Request:                 cloneLeaseRequest(rec.request),
+			RequesterID:             rec.requesterID,
+			Priority:                rec.priority,
+			Sequence:                rec.sequence,
+			HeartbeatTimeoutSeconds: int64(rec.heartbeatTimeout / time.Second),
+			LeaseID:                 rec.leaseID,
+		}
+	}
+	for leaseID, rec := range s.leases {
+		snapshot.Leases[leaseID] = leaseSnapshot{
+			Lease:          cloneLease(rec.lease),
+			RequestID:      rec.requestID,
+			TimeoutSeconds: int64(rec.timeout / time.Second),
+			State:          rec.state,
+		}
+	}
+	for selector, queue := range s.queues {
+		snapshot.Queues[selector] = append([]string(nil), queue...)
+	}
+	for key, rec := range s.releaseIdempotency {
+		snapshot.ReleaseIdempotency[key] = idempotentReleaseSnapshot{
+			Fingerprint: rec.fingerprint,
+			LeaseID:     rec.leaseID,
+			Response:    cloneLease(rec.response),
+		}
+	}
+	raw, err := json.MarshalIndent(snapshot, "", "  ")
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(s.snapshotPath), 0o755); err != nil {
+		return err
+	}
+	tmpPath := s.snapshotPath + ".tmp"
+	if err := os.WriteFile(tmpPath, raw, 0o600); err != nil {
+		return err
+	}
+	return os.Rename(tmpPath, s.snapshotPath)
+}
+
+func leaseRequestLinks(request contracts.LeaseRequest) map[string]any {
+	switch request.State {
+	case contracts.LeaseRequestPending:
+		return pendingRequestLinks(request.RequestID)
+	case contracts.LeaseRequestGranted:
+		return grantedRequestLinks(request.RequestID)
+	default:
+		return map[string]any{}
+	}
+}
+
+func leaseLinksForState(leaseID string, state leaseState) map[string]any {
+	if state == leaseActive {
+		return leaseLinks(leaseID)
+	}
+	return map[string]any{}
+}
+
+func positiveOrDefault(value, fallback int) int {
+	if value <= 0 {
+		return fallback
+	}
+	return value
 }

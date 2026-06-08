@@ -2,6 +2,7 @@ package leases
 
 import (
 	"errors"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -245,5 +246,72 @@ func TestStoreRejectsHolderMismatch(t *testing.T) {
 	_, err = store.Heartbeat(request.Lease.LeaseID, contracts.LeaseHeartbeatRequest{HolderID: "job_other"})
 	if !errors.Is(err, ErrHolderMismatch) {
 		t.Fatalf("expected holder mismatch, got %v", err)
+	}
+}
+
+func TestPersistentStoreReloadsLeaseState(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "leases.json")
+	store, err := NewPersistentStore(path)
+	if err != nil {
+		t.Fatalf("new persistent store: %v", err)
+	}
+	now := time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC)
+	store.SetClock(func() time.Time { return now })
+	if _, err := store.RegisterResource(contracts.RegisterResourceRequest{ResourceID: "res_gpu_0", Selector: "gpu", Status: contracts.ResourceAvailable}); err != nil {
+		t.Fatalf("register persistent resource: %v", err)
+	}
+	first, err := store.CreateLeaseRequest(contracts.CreateLeaseRequest{RequesterID: "job_1", ResourceSelector: "gpu", HeartbeatTimeoutSeconds: 60})
+	if err != nil {
+		t.Fatalf("first persistent request: %v", err)
+	}
+	second, err := store.CreateLeaseRequest(contracts.CreateLeaseRequest{RequesterID: "job_2", ResourceSelector: "gpu", HeartbeatTimeoutSeconds: 60})
+	if err != nil {
+		t.Fatalf("second persistent request: %v", err)
+	}
+	if second.State != contracts.LeaseRequestPending {
+		t.Fatalf("second initial state = %#v", second)
+	}
+
+	reloaded, err := NewPersistentStore(path)
+	if err != nil {
+		t.Fatalf("reload persistent store: %v", err)
+	}
+	now = now.Add(10 * time.Second)
+	reloaded.SetClock(func() time.Time { return now })
+	pending, err := reloaded.GetLeaseRequest(second.RequestID)
+	if err != nil {
+		t.Fatalf("get pending after reload: %v", err)
+	}
+	if pending.State != contracts.LeaseRequestPending || pending.QueuePosition == nil || *pending.QueuePosition != 1 {
+		t.Fatalf("pending after reload = %#v", pending)
+	}
+	if _, err := reloaded.Heartbeat(first.Lease.LeaseID, contracts.LeaseHeartbeatRequest{HolderID: "job_1"}); err != nil {
+		t.Fatalf("heartbeat after reload: %v", err)
+	}
+	released, err := reloaded.Release(first.Lease.LeaseID, contracts.LeaseReleaseRequest{HolderID: "job_1", Reason: "done"}, "release-persist", "sub_runner")
+	if err != nil {
+		t.Fatalf("release after reload: %v", err)
+	}
+
+	reloadedAgain, err := NewPersistentStore(path)
+	if err != nil {
+		t.Fatalf("reload released persistent store: %v", err)
+	}
+	granted, err := reloadedAgain.GetLeaseRequest(second.RequestID)
+	if err != nil {
+		t.Fatalf("get promoted request after reload: %v", err)
+	}
+	if granted.State != contracts.LeaseRequestGranted || granted.Lease == nil || granted.Lease.HolderID != "job_2" {
+		t.Fatalf("promoted request = %#v", granted)
+	}
+	replay, err := reloadedAgain.Release(first.Lease.LeaseID, contracts.LeaseReleaseRequest{HolderID: "job_1", Reason: "done"}, "release-persist", "sub_runner")
+	if err != nil {
+		t.Fatalf("release replay after reload: %v", err)
+	}
+	if replay.ReleasedAt != released.ReleasedAt {
+		t.Fatalf("release replay = %#v want released_at %s", replay, released.ReleasedAt)
+	}
+	if events := reloadedAgain.AuditEvents(); len(events) != 1 {
+		t.Fatalf("audit events = %#v", events)
 	}
 }

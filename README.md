@@ -21,8 +21,8 @@ Contract simulation data is kept as test input, not as product behavior.
 - `internal/components/jobs`: async job lifecycle service with in-memory or
   file-backed durable storage and HTTP handlers.
 - `internal/components/leases`: resource registry, FIFO lease queue, heartbeat,
-  release, expiration, and inspection service with in-memory storage and HTTP
-  handlers.
+  release, expiration, and inspection service with in-memory or file-backed
+  durable storage and HTTP handlers.
 - `internal/components/artifacts`: upload-session, blob storage, metadata,
   policy context, guarded local registration, and retrieval service with a
   local filesystem root.
@@ -69,7 +69,7 @@ The services can also be run separately for distributed testing:
 go run ./cmd/pacp-fake-provider -addr localhost:18088
 go run ./cmd/pacp-catalog -addr localhost:18081 -manifest testdata/manifests/s003-comfyui-gpu.json
 go run ./cmd/pacp-jobs -addr localhost:18082 -state-file /tmp/pacp-jobs-state.json
-go run ./cmd/pacp-leases -addr localhost:18083
+go run ./cmd/pacp-leases -addr localhost:18083 -state-file /tmp/pacp-leases-state.json
 go run ./cmd/pacp-artifacts -addr localhost:18084 -root /tmp/pacp-artifacts
 go run ./cmd/pacp-policy -addr localhost:18085
 go run ./cmd/pacp-gateway -addr localhost:18086 -catalog-url http://localhost:18081 -jobs-url http://localhost:18082 -artifacts-url http://localhost:18084 -policy-url http://localhost:18085
