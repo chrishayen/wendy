@@ -250,6 +250,10 @@ ComfyUI provider accepts `-runner-tokens`, `-component-tokens`, and
 content, while configured agent tokens are authenticated but forbidden. The
 flags default from `PACP_PROVIDER_RUNNER_TOKENS`, `PACP_RUNNER_CREDENTIAL`,
 `PACP_PROVIDER_COMPONENT_TOKENS`, and `PACP_COMPONENT_TOKEN`.
+Provider binaries accept `-endpoint` or `PACP_PROVIDER_ENDPOINT` for the
+provider URL advertised in manifests. Set it to the URL reachable by the
+runner, especially when the listen address is bound to `:port` or a node-local
+interface.
 When `pacp-runner` is given `-policy-url`, or when the primary embedded runner
 uses the co-hosted policy service, the runner credential should identify a
 subject with `worker` scope so `provider.invoke` is allowed intentionally.

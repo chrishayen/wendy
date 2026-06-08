@@ -17,6 +17,13 @@ func TestDefaultEndpoint(t *testing.T) {
 	}
 }
 
+func TestProviderEndpointDefault(t *testing.T) {
+	t.Setenv("PACP_PROVIDER_ENDPOINT", "http://provider.example")
+	if got := providerEndpointDefault(); got != "http://provider.example" {
+		t.Fatalf("endpoint default = %q", got)
+	}
+}
+
 func TestLoadRouteConfigFile(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "routes.json")
 	if err := os.WriteFile(path, []byte(`{"routes":{"cap_bridge_echo":{"command":["/bin/echo"],"timeout_seconds":5}}}`), 0o600); err != nil {

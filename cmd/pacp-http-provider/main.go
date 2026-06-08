@@ -20,7 +20,7 @@ func main() {
 	addr := flag.String("addr", "localhost:18088", "listen address")
 	manifestPath := flag.String("manifest", "", "provider manifest JSON path")
 	routesPath := flag.String("routes", "", "HTTP route config JSON path")
-	endpoint := flag.String("endpoint", "", "provider endpoint advertised in the manifest")
+	endpoint := flag.String("endpoint", providerEndpointDefault(), "provider endpoint advertised in the manifest")
 	policyURL := flag.String("policy-url", os.Getenv("PACP_PROVIDER_POLICY_URL"), "optional policy service base URL used to resolve route secret refs")
 	policyCredential := flag.String("policy-credential", envFirst("PACP_PROVIDER_POLICY_CREDENTIAL", "PACP_COMPONENT_TOKEN"), "optional policy service bearer credential used to resolve route secret refs")
 	secretSubjectID := flag.String("secret-subject-id", os.Getenv("PACP_PROVIDER_SECRET_SUBJECT_ID"), "optional policy subject id used to resolve route secret refs")
@@ -68,6 +68,10 @@ func loadJSONFile(path string, out any) error {
 		return err
 	}
 	return json.Unmarshal(body, out)
+}
+
+func providerEndpointDefault() string {
+	return os.Getenv("PACP_PROVIDER_ENDPOINT")
 }
 
 func defaultEndpoint(addr string) string {
