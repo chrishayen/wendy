@@ -95,6 +95,11 @@ func runCommand(client gatewayClient, args []string, stdout, stderr io.Writer) (
 		return cancelCommand(client, args[1:], stdout, stderr)
 	case "logs":
 		return logsCommand(client, args[1:], stdout, stderr)
+	case "queue":
+		if len(args) != 2 {
+			return 2, errors.New("usage: pacp-control queue <resource-selector>")
+		}
+		return runJSONCommand(client, http.MethodGet, "/v1/agent/resources/queues/"+url.PathEscape(args[1]), nil, "", stdout, nil)
 	case "artifacts":
 		return artifactsCommand(client, args[1:], stdout, stderr)
 	case "artifact-content":
@@ -685,5 +690,5 @@ func commandRequiresToken(command string) bool {
 
 func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "usage: pacp-control -gateway-url URL [-token TOKEN] <command> [args]")
-	fmt.Fprintln(w, "commands: health, tools, tool, invoke, job, wait, cancel, logs, artifacts, artifact-content")
+	fmt.Fprintln(w, "commands: health, tools, tool, invoke, job, wait, cancel, logs, queue, artifacts, artifact-content")
 }

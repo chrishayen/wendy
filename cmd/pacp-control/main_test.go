@@ -408,6 +408,58 @@ func TestWaitPollsUntilTerminalJob(t *testing.T) {
 	}
 }
 
+func TestQueueReadsAgentResourceQueue(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/v1/agent/resources/queues/gpu:0" {
+			t.Fatalf("request = %s %s", r.Method, r.URL.Path)
+		}
+		if got := r.Header.Get("Authorization"); got != "Bearer token_agent" {
+			t.Fatalf("Authorization = %q", got)
+		}
+		if got := r.Header.Get("X-Request-ID"); got != "req_queue_trace" {
+			t.Fatalf("X-Request-ID = %q", got)
+		}
+		writeTestJSON(t, w, http.StatusOK, map[string]any{
+			"ok": true,
+			"data": map[string]any{
+				"resource_selector":      "gpu:0",
+				"resource_count":         1,
+				"waiting_count":          1,
+				"active_lease_count":     1,
+				"current_holder_visible": false,
+				"items": []map[string]any{{
+					"request_id":      "lease_req_1",
+					"position":        1,
+					"requester_label": "waiting job",
+				}},
+				"links": map[string]any{"self": map[string]any{"href": "/v1/agent/resources/queues/gpu%3A0"}},
+			},
+		})
+	}))
+	defer server.Close()
+
+	var stdout, stderr bytes.Buffer
+	code := run([]string{
+		"-gateway-url", server.URL,
+		"-token", "token_agent",
+		"-request-id", "req_queue_trace",
+		"queue", "gpu:0",
+	}, &stdout, &stderr, server.Client())
+	if code != 0 {
+		t.Fatalf("code=%d stderr=%s", code, stderr.String())
+	}
+	output := stdout.String()
+	for _, expected := range []string{
+		`"resource_selector": "gpu:0"`,
+		`"waiting_count": 1`,
+		`"request_id": "lease_req_1"`,
+	} {
+		if !strings.Contains(output, expected) {
+			t.Fatalf("stdout missing %q:\n%s", expected, output)
+		}
+	}
+}
+
 func writeTestJSON(t *testing.T, w http.ResponseWriter, status int, body any) {
 	t.Helper()
 	w.Header().Set("Content-Type", "application/json")

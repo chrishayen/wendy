@@ -167,6 +167,7 @@ go run ./cmd/pacp-control -gateway-url http://localhost:18086 -token token_agent
 go run ./cmd/pacp-control -gateway-url http://localhost:18086 -token token_agent invoke cap_dev_echo -idempotency-key echo-1 -input '{"message":"hello"}'
 go run ./cmd/pacp-control -gateway-url http://localhost:18086 -token token_agent invoke cap_dev_artifact -idempotency-key artifact-1 -input '{"prompt":"red mug"}' -wait
 go run ./cmd/pacp-control -gateway-url http://localhost:18086 -token token_agent wait job_000001
+go run ./cmd/pacp-control -gateway-url http://localhost:18086 -token token_agent queue gpu
 go run ./cmd/pacp-control -gateway-url http://localhost:18086 -token token_agent artifacts job_000001 -out-dir /tmp/pacp-job-output
 go run ./cmd/pacp-control -gateway-url http://localhost:18086 -token token_agent artifact-content art_000001 -out /tmp/pacp-output.png
 ```
@@ -423,6 +424,7 @@ go run ./cmd/pacp-admin -node-url http://localhost:18087 -node-token token_runne
 go run ./cmd/pacp-admin -node-url http://localhost:18087 -node-token token_runner_smoke node touch svc_comfyui_gpu
 go run ./cmd/pacp-admin -node-url http://localhost:18087 -node-token token_runner_smoke node stop svc_comfyui_gpu -idempotency-key stop-comfy-1
 go run ./cmd/pacp-control -gateway-url http://localhost:18086 -token token_agent tools
+go run ./cmd/pacp-control -gateway-url http://localhost:18086 -token token_agent queue gpu
 ```
 
 Component metrics include component-specific state samples plus HTTP request
