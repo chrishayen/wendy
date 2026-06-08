@@ -135,6 +135,17 @@ func TestHandlerNodeLifecycle(t *testing.T) {
 	assertMetric(t, metrics, "http_requests_total", map[string]string{"method": "POST", "route_group": "/v1/node/services/{service_id}/touch", "status_class": "2xx"}, 1)
 }
 
+func TestHandlerNodeEventsStartsAsEmptyArray(t *testing.T) {
+	handler := NewHandler(newTestStore(t))
+	events := doJSON(t, handler, http.MethodGet, "/v1/node/events", map[string]string{
+		"Authorization": "Bearer token_runner",
+	}, http.StatusOK)
+	items, ok := events["items"].([]any)
+	if !ok || len(items) != 0 {
+		t.Fatalf("events = %#v", events)
+	}
+}
+
 func TestHandlerRejectsUnauthorizedLifecycle(t *testing.T) {
 	handler := NewHandler(newTestStore(t))
 	envelope := doJSONEnvelope(t, handler, http.MethodPost, "/v1/node/services/svc_comfyui_gpu/start", map[string]string{

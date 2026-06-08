@@ -197,6 +197,9 @@ func (s *Store) ListServices() []contracts.NodeService {
 func (s *Store) LifecycleEvents() []contracts.NodeLifecycleEvent {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
+	if len(s.events) == 0 {
+		return []contracts.NodeLifecycleEvent{}
+	}
 	return append([]contracts.NodeLifecycleEvent(nil), s.events...)
 }
 

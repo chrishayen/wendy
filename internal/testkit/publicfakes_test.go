@@ -747,6 +747,13 @@ func TestFakeArtifactsHandlerUploadLifecycleAndRegisterLocal(t *testing.T) {
 	if bytes.Contains(raw, []byte("secret-provider-path")) {
 		t.Fatalf("local artifact leaked path: %s", string(raw))
 	}
+
+	sweep := doFakeArtifactsEnvelope(t, server, http.MethodPost, "/v1/artifacts/retention/sweep", nil, nil, http.StatusOK)
+	var result contracts.ArtifactRetentionSweepResult
+	decodeEnvelopeData(t, sweep, &result)
+	if result.CheckedAt == "" || result.ExpiredUploads != 1 || result.DeletedArtifactFiles != 1 {
+		t.Fatalf("retention sweep = %#v", result)
+	}
 }
 
 func TestFakeArtifactsHandlerSupportsUnavailableBehavior(t *testing.T) {
@@ -978,6 +985,24 @@ func TestFakeNodeHandlerStartsAndStopsService(t *testing.T) {
 	decodeEnvelopeData(t, stopped, &service)
 	if service.Status != "stopped" {
 		t.Fatalf("stop service = %#v", service)
+	}
+
+	eventsEnvelope := doFakeNodeEnvelope(t, server, http.MethodGet, "/v1/node/events", nil, http.StatusOK)
+	var events struct {
+		Items []contracts.NodeLifecycleEvent `json:"items"`
+	}
+	decodeEnvelopeData(t, eventsEnvelope, &events)
+	actions := map[string]bool{}
+	for _, event := range events.Items {
+		if event.EventID == "" || event.ServiceID == "" || event.OccurredAt == "" {
+			t.Fatalf("event = %#v", event)
+		}
+		actions[event.Action] = true
+	}
+	for _, want := range []string{"start", "touch", "stop"} {
+		if !actions[want] {
+			t.Fatalf("action %q missing from %#v", want, events.Items)
+		}
 	}
 }
 

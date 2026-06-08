@@ -43,16 +43,16 @@ Contract simulation data is kept as test input, not as product behavior.
   unavailable modes and can expose caller-supplied public list records. The
   reusable policy fake covers auth allow/failure, policy allow/deny, secret
   resolution, and redaction. The reusable node fake covers resources,
-  running/stopped/starting/failed services, lifecycle idempotency, and
-  unavailable-node behavior. The reusable jobs fake covers queued, claimed,
+  running/stopped/starting/failed services, lifecycle events, lifecycle
+  idempotency, and unavailable-node behavior. The reusable jobs fake covers queued, claimed,
   running, succeeded, failed, canceled, and expired jobs plus create, claim,
   heartbeat, completion, cancellation, logs, and unavailable behavior. The
   reusable leases fake covers available/unavailable resources, pending,
   granted, expired, and canceled lease requests, denied resource requests,
   heartbeat, release promotion, and unavailable behavior. The reusable
   artifacts fake covers available, expired, denied, and missing artifacts,
-  upload lifecycle, raw content reads, local registration, and unavailable
-  behavior. The reusable catalog fake covers valid, invalid, denied, missing,
+  upload lifecycle, raw content reads, local registration, retention sweep, and
+  unavailable behavior. The reusable catalog fake covers valid, invalid, denied, missing,
   and unavailable capability outcomes plus manifest registration.
 - `cmd/pacp-contract-smoke`: CLI smoke check for contract simulation packages,
   OpenAPI contracts, live component contracts, distributed component wiring,

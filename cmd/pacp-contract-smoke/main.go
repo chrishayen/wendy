@@ -264,6 +264,7 @@ func appendFakeArtifactsChecks(ctx context.Context, checks *[]fakePublicAPICheck
 		requestFakeArtifactsExpectedError(ctx, server.Client(), server.URL, http.MethodGet, "/v1/artifacts/art_fake_expired", "fake.artifacts.expired", http.StatusGone, "artifact_expired", nil, nil),
 		requestFakeArtifactsExpectedError(ctx, server.Client(), server.URL, http.MethodGet, "/v1/artifacts/art_missing", "fake.artifacts.missing.not_found", http.StatusNotFound, "not_found", nil, nil),
 		checkFakeArtifactUploadLifecycle(ctx, server.Client(), server.URL),
+		checkFakeArtifactsRetentionSweep(ctx, server.Client(), server.URL),
 	)
 
 	unavailable, err := testkit.NewFakeArtifactsHandler(testkit.FakeArtifactsConfig{Behavior: testkit.FakeComponentUnavailable})
@@ -361,6 +362,19 @@ func checkFakeArtifactUploadLifecycle(ctx context.Context, client *http.Client, 
 	if artifact.ProducerRef != "job_smoke" || artifact.OwnerSubjectID != "sub_smoke" {
 		check.OK = false
 		check.Error = fmt.Sprintf("artifact = %#v", artifact)
+	}
+	return check
+}
+
+func checkFakeArtifactsRetentionSweep(ctx context.Context, client *http.Client, baseURL string) fakePublicAPICheck {
+	var result contracts.ArtifactRetentionSweepResult
+	check := requestFakeArtifactsJSON(ctx, client, baseURL, http.MethodPost, "/v1/artifacts/retention/sweep", "fake.artifacts.retention.sweep", nil, nil, &result)
+	if !check.OK {
+		return check
+	}
+	if result.CheckedAt == "" || result.ExpiredUploads < 1 || result.ExpiredArtifacts < 1 {
+		check.OK = false
+		check.Error = fmt.Sprintf("retention sweep = %#v", result)
 	}
 	return check
 }
@@ -1022,6 +1036,7 @@ func appendFakeNodeChecks(ctx context.Context, checks *[]fakePublicAPICheck) {
 	*checks = append(*checks,
 		checkFakeNodeServiceStates(ctx, server.Client(), server.URL),
 		checkFakeNodeServiceDetail(ctx, server.Client(), server.URL),
+		checkFakeNodeLifecycleEvents(ctx, server.Client(), server.URL),
 		checkFakeNodeMissingIdempotency(ctx, server.Client(), server.URL),
 		checkFakeNodeLifecycle(ctx, server.Client(), server.URL, "start"),
 		checkFakeNodeTouch(ctx, server.Client(), server.URL),
@@ -1069,6 +1084,27 @@ func checkFakeNodeServiceDetail(ctx context.Context, client *http.Client, baseUR
 	if service.ServiceID != "svc_fake_failed" || service.Status != "failed" {
 		check.OK = false
 		check.Error = fmt.Sprintf("service = %#v", service)
+	}
+	return check
+}
+
+func checkFakeNodeLifecycleEvents(ctx context.Context, client *http.Client, baseURL string) fakePublicAPICheck {
+	var list struct {
+		Items []contracts.NodeLifecycleEvent `json:"items"`
+	}
+	check := requestFakeNodeJSON(ctx, client, baseURL, http.MethodGet, "/v1/node/events", "fake.node.lifecycle.events", nil, &list)
+	if !check.OK {
+		return check
+	}
+	if len(list.Items) == 0 {
+		check.OK = false
+		check.Error = "expected at least one lifecycle event"
+		return check
+	}
+	event := list.Items[0]
+	if event.EventID == "" || event.ServiceID == "" || event.Action == "" || event.OccurredAt == "" {
+		check.OK = false
+		check.Error = fmt.Sprintf("event = %#v", event)
 	}
 	return check
 }

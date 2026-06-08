@@ -110,7 +110,10 @@ func componentContractFor(kind string) (componentContract, bool) {
 			Kind:        "node",
 			HealthPath:  "/v1/node/health",
 			MetricsPath: "/v1/node/metrics",
-			ListChecks:  []componentListCheck{{Name: "component.surface.node.resources", Path: "/v1/node/resources", ValidateItem: validateNodeResourceListItem}},
+			ListChecks: []componentListCheck{
+				{Name: "component.surface.node.resources", Path: "/v1/node/resources", ValidateItem: validateNodeResourceListItem},
+				{Name: "component.surface.node.events", Path: "/v1/node/events", ValidateItem: validateNodeLifecycleEventListItem},
+			},
 		}, true
 	case "policy":
 		return componentContract{Kind: "policy", HealthPath: "/v1/policy/health", MetricsPath: "/v1/policy/metrics"}, true
@@ -400,6 +403,29 @@ func validateNodeResourceListItem(raw json.RawMessage) error {
 	}
 	if resource.ResourceID == "" {
 		return fmt.Errorf("resource_id is required")
+	}
+	return nil
+}
+
+func validateNodeLifecycleEventListItem(raw json.RawMessage) error {
+	var event contracts.NodeLifecycleEvent
+	if err := json.Unmarshal(raw, &event); err != nil {
+		return fmt.Errorf("decode node lifecycle event: %w", err)
+	}
+	if event.EventID == "" {
+		return fmt.Errorf("event_id is required")
+	}
+	if event.ServiceID == "" {
+		return fmt.Errorf("service_id is required")
+	}
+	if event.Action == "" {
+		return fmt.Errorf("action is required")
+	}
+	if event.Status == "" {
+		return fmt.Errorf("status is required")
+	}
+	if event.OccurredAt == "" {
+		return fmt.Errorf("occurred_at is required")
 	}
 	return nil
 }

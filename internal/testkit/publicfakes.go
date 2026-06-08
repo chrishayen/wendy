@@ -61,6 +61,7 @@ type FakeNodeConfig struct {
 	HealthStatus string
 	Resources    []contracts.NodeResource
 	Services     []contracts.NodeService
+	Events       []contracts.NodeLifecycleEvent
 	Now          func() time.Time
 	Samples      []contracts.MetricSample
 }
@@ -401,7 +402,9 @@ type fakeNodeHandler struct {
 	resources    []contracts.NodeResource
 	services     map[string]contracts.NodeService
 	serviceOrder []string
+	events       []contracts.NodeLifecycleEvent
 	idempotency  map[string]fakeNodeLifecycle
+	nextEvent    int
 }
 
 type fakeNodeLifecycle struct {
@@ -487,12 +490,18 @@ func newFakeNodeHandler(cfg FakeNodeConfig, resources []contracts.NodeResource, 
 		serviceMap[service.ServiceID] = service
 		serviceOrder = append(serviceOrder, service.ServiceID)
 	}
+	events := cloneFakeNodeLifecycleEvents(cfg.Events)
+	if events == nil {
+		events = fakeNodeLifecycleEvents()
+	}
 	return &fakeNodeHandler{
 		cfg:          cfg,
 		resources:    cloneFakeNodeResources(resources),
 		services:     serviceMap,
 		serviceOrder: serviceOrder,
+		events:       events,
 		idempotency:  map[string]fakeNodeLifecycle{},
+		nextEvent:    len(events) + 1,
 	}
 }
 
@@ -654,7 +663,7 @@ func (h *fakeComponentHandler) ServeHTTP(w http.ResponseWriter, r *http.Request)
 				if h.writeBlocked(w, r) {
 					return
 				}
-				writeFakeSuccess(w, r, http.StatusOK, fakeListPayload(h.contract.Kind, h.cfg.ListItems))
+				writeFakeSuccess(w, r, http.StatusOK, fakeListPayload(h.contract.Kind, check.Name, h.cfg.ListItems))
 				return
 			}
 		}
@@ -764,6 +773,8 @@ func (h *fakeNodeHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		resources := cloneFakeNodeResources(h.resources)
 		h.mu.Unlock()
 		writeFakeSuccess(w, r, http.StatusOK, map[string]any{"items": resources, "next_cursor": nil})
+	case r.Method == http.MethodGet && path == "/v1/node/events":
+		writeFakeSuccess(w, r, http.StatusOK, map[string]any{"items": h.listEvents(), "next_cursor": nil})
 	case r.Method == http.MethodGet && path == "/v1/node/services":
 		writeFakeSuccess(w, r, http.StatusOK, map[string]any{"items": h.listServices(), "next_cursor": nil})
 	case strings.HasPrefix(path, "/v1/node/services/"):
@@ -821,6 +832,7 @@ func (h *fakeNodeHandler) touch(w http.ResponseWriter, r *http.Request, serviceI
 		writeFakeError(w, r, http.StatusServiceUnavailable, "provider_unavailable", "fake node service is not running", true)
 		return
 	}
+	h.recordEventLocked(serviceID, "touch", service.Status, "")
 	writeFakeSuccess(w, r, http.StatusOK, cloneFakeNodeService(service))
 }
 
@@ -858,6 +870,7 @@ func (h *fakeNodeHandler) lifecycle(w http.ResponseWriter, r *http.Request, serv
 	}
 	h.services[serviceID] = service
 	h.idempotency[idempotencyKey] = fakeNodeLifecycle{operation: operation, serviceID: serviceID}
+	h.recordEventLocked(serviceID, operation, service.Status, idempotencyKey)
 	writeFakeSuccess(w, r, status, cloneFakeNodeService(service))
 }
 
@@ -883,6 +896,25 @@ func (h *fakeNodeHandler) getService(serviceID string) (contracts.NodeService, b
 	return cloneFakeNodeService(service), true
 }
 
+func (h *fakeNodeHandler) listEvents() []contracts.NodeLifecycleEvent {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return cloneFakeNodeLifecycleEvents(h.events)
+}
+
+func (h *fakeNodeHandler) recordEventLocked(serviceID, action, status, idempotencyKey string) {
+	event := contracts.NodeLifecycleEvent{
+		EventID:        fmt.Sprintf("node_evt_fake_%06d", h.nextEvent),
+		ServiceID:      serviceID,
+		Action:         action,
+		Status:         status,
+		OccurredAt:     h.cfg.Now().UTC().Format(time.RFC3339),
+		IdempotencyKey: idempotencyKey,
+	}
+	h.nextEvent++
+	h.events = append(h.events, event)
+}
+
 func (h *fakeNodeHandler) metricsSamples() []contracts.MetricSample {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -892,6 +924,7 @@ func (h *fakeNodeHandler) metricsSamples() []contracts.MetricSample {
 	}
 	samples := []contracts.MetricSample{
 		contracts.CountMetric("node_services_total", len(h.services), map[string]string{"node_id": h.cfg.NodeID}),
+		contracts.CountMetric("node_lifecycle_events_total", len(h.events), map[string]string{"node_id": h.cfg.NodeID}),
 	}
 	for status, count := range counts {
 		samples = append(samples, contracts.CountMetric("node_services_by_status", count, map[string]string{"node_id": h.cfg.NodeID, "status": status}))
@@ -1869,6 +1902,14 @@ func (h *fakeArtifactsHandler) ServeHTTP(w http.ResponseWriter, r *http.Request)
 		writeFakeSuccess(w, r, http.StatusOK, map[string]any{"items": h.listArtifacts(r.URL.Query().Get("producer_ref"), r.URL.Query().Get("owner_subject_id")), "next_cursor": nil})
 	case r.Method == http.MethodPost && path == "/v1/artifacts/register-local":
 		h.registerLocalArtifact(w, r)
+	case r.Method == http.MethodPost && path == "/v1/artifacts/retention/sweep":
+		writeFakeSuccess(w, r, http.StatusOK, contracts.ArtifactRetentionSweepResult{
+			CheckedAt:            h.cfg.Now().UTC().Format(time.RFC3339),
+			ExpiredUploads:       1,
+			ExpiredArtifacts:     1,
+			DeletedUploadFiles:   1,
+			DeletedArtifactFiles: 1,
+		})
 	case strings.HasPrefix(path, "/v1/artifacts/"):
 		h.artifactRoute(w, r, strings.TrimPrefix(path, "/v1/artifacts/"))
 	default:
@@ -2538,6 +2579,17 @@ func fakeNodeServices() []contracts.NodeService {
 	}
 }
 
+func fakeNodeLifecycleEvents() []contracts.NodeLifecycleEvent {
+	return []contracts.NodeLifecycleEvent{{
+		EventID:    "node_evt_fake_000001",
+		ServiceID:  "svc_fake_running",
+		Action:     "start",
+		Status:     "running",
+		Message:    "fake service already running",
+		OccurredAt: "2026-06-08T00:00:00Z",
+	}}
+}
+
 func fakeNodeService(serviceID, status string) contracts.NodeService {
 	return contracts.NodeService{
 		ServiceID:        serviceID,
@@ -2832,6 +2884,13 @@ func cloneFakeNodeService(service contracts.NodeService) contracts.NodeService {
 	return service
 }
 
+func cloneFakeNodeLifecycleEvents(events []contracts.NodeLifecycleEvent) []contracts.NodeLifecycleEvent {
+	if events == nil {
+		return nil
+	}
+	return append([]contracts.NodeLifecycleEvent(nil), events...)
+}
+
 func cloneFakeCatalogRecord(record contracts.CatalogCapabilityRecord) contracts.CatalogCapabilityRecord {
 	raw, err := json.Marshal(record)
 	if err != nil {
@@ -3063,10 +3122,10 @@ func decodeFakeBody(w http.ResponseWriter, r *http.Request, out any) bool {
 	return true
 }
 
-func fakeListPayload(kind string, override []any) map[string]any {
+func fakeListPayload(kind, listName string, override []any) map[string]any {
 	items := override
 	if items == nil {
-		items = fakeListItems(kind)
+		items = fakeListItems(kind, listName)
 	}
 	return map[string]any{
 		"items":       items,
@@ -3074,7 +3133,7 @@ func fakeListPayload(kind string, override []any) map[string]any {
 	}
 }
 
-func fakeListItems(kind string) []any {
+func fakeListItems(kind, listName string) []any {
 	switch kind {
 	case "artifacts":
 		artifacts := fakeArtifacts()
@@ -3105,6 +3164,14 @@ func fakeListItems(kind string) []any {
 		}
 		return items
 	case "node":
+		if strings.Contains(listName, "events") {
+			events := fakeNodeLifecycleEvents()
+			items := make([]any, 0, len(events))
+			for _, event := range events {
+				items = append(items, event)
+			}
+			return items
+		}
 		return []any{contracts.NodeResource{
 			ResourceID: "res_fake_gpu",
 			Tags:       []string{"gpu"},
