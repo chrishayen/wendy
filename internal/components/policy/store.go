@@ -632,6 +632,11 @@ func builtinDecision(req contracts.PolicyCheckRequest, scopes []string) contract
 			return ownerScoped(req.SubjectID, req.Context, false)
 		}
 	case "lease.read", "lease.cancel":
+		if req.Action == "lease.read" && hasScope(scopes, "agent") {
+			if surface, ok := contextString(req.Context, "surface"); ok && surface == "agent_resource_queue" {
+				return allow("allowed_by_agent_resource_queue_context")
+			}
+		}
 		if hasScope(scopes, "component") {
 			return allow("allowed_by_component_scope")
 		}

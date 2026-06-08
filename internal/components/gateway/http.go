@@ -138,6 +138,9 @@ func (h *Handler) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		h.toolRoute(w, r, strings.TrimPrefix(path, "/v1/tools/"))
 	case strings.HasPrefix(path, "/v1/agent/jobs/"):
 		h.agentJobRoute(w, r, strings.TrimPrefix(path, "/v1/agent/jobs/"))
+	case strings.HasPrefix(path, "/v1/agent/resources/queues/") && r.Method == http.MethodGet:
+		resourceSelector := strings.TrimPrefix(path, "/v1/agent/resources/queues/")
+		h.getAgentResourceQueue(w, r, resourceSelector)
 	case strings.HasPrefix(path, "/v1/artifacts/") && strings.HasSuffix(path, "/content") && r.Method == http.MethodGet:
 		artifactID := strings.TrimSuffix(strings.TrimPrefix(path, "/v1/artifacts/"), "/content")
 		h.readArtifactContent(w, r, artifactID)
@@ -561,6 +564,26 @@ func (h *Handler) listAgentArtifacts(w http.ResponseWriter, r *http.Request, job
 	writeSuccess(w, r, http.StatusOK, map[string]any{"items": items, "next_cursor": data.NextCursor})
 }
 
+func (h *Handler) getAgentResourceQueue(w http.ResponseWriter, r *http.Request, resourceSelector string) {
+	sub, ok := h.authenticate(w, r)
+	if !ok {
+		return
+	}
+	policyContext := map[string]any{
+		"resource_selector": resourceSelector,
+		"surface":           "agent_resource_queue",
+	}
+	if !h.requirePolicy(w, r, sub.ID, "lease.read", resourceSelector, policyContext, "resource queue access denied") {
+		return
+	}
+	queue, err := h.agentResourceQueue(r.Context(), resourceSelector)
+	if err != nil {
+		h.writeGatewayError(w, r, err)
+		return
+	}
+	writeSuccess(w, r, http.StatusOK, queue)
+}
+
 func (h *Handler) readArtifactContent(w http.ResponseWriter, r *http.Request, artifactID string) {
 	sub, ok := h.authenticate(w, r)
 	if !ok {
@@ -895,6 +918,83 @@ func (h *Handler) attachQueueStatus(ctx context.Context, job *contracts.AgentJob
 	}
 	job.Queue = queue
 	return nil
+}
+
+func (h *Handler) agentResourceQueue(ctx context.Context, resourceSelector string) (contracts.AgentResourceQueue, error) {
+	if h.cfg.LeasesURL == "" {
+		return contracts.AgentResourceQueue{}, downstreamError{status: http.StatusServiceUnavailable, code: "downstream_unavailable", message: "lease service URL is not configured"}
+	}
+	resources, err := h.listLeaseResources(ctx, resourceSelector)
+	if err != nil {
+		return contracts.AgentResourceQueue{}, err
+	}
+	if len(resources) == 0 {
+		return contracts.AgentResourceQueue{}, downstreamError{status: http.StatusNotFound, code: "not_found", message: "resource queue not found"}
+	}
+	queue := contracts.AgentResourceQueue{
+		ResourceSelector:     resourceSelector,
+		ResourceCount:        len(resources),
+		CurrentHolderVisible: false,
+		Items:                []contracts.AgentResourceQueueItem{},
+		Links: map[string]any{
+			"self": map[string]any{"method": "GET", "href": "/v1/agent/resources/queues/" + url.PathEscape(resourceSelector), "description": "Read resource queue.", "idempotency": "none", "side_effects": "read"},
+		},
+	}
+	seenRequests := map[string]bool{}
+	for _, resource := range resources {
+		inspection, err := h.inspectLeaseResource(ctx, resource.ResourceID)
+		if err != nil {
+			return contracts.AgentResourceQueue{}, err
+		}
+		if inspection.ActiveLease != nil {
+			queue.ActiveLeaseCount++
+		}
+		for _, item := range inspection.Queue {
+			if seenRequests[item.RequestID] {
+				continue
+			}
+			seenRequests[item.RequestID] = true
+			queue.Items = append(queue.Items, contracts.AgentResourceQueueItem{
+				RequestID: item.RequestID,
+				Position:  item.QueuePosition,
+			})
+		}
+	}
+	sort.SliceStable(queue.Items, func(i, j int) bool {
+		if queue.Items[i].Position != queue.Items[j].Position {
+			return queue.Items[i].Position < queue.Items[j].Position
+		}
+		return queue.Items[i].RequestID < queue.Items[j].RequestID
+	})
+	queue.WaitingCount = len(queue.Items)
+	return queue, nil
+}
+
+func (h *Handler) listLeaseResources(ctx context.Context, resourceSelector string) ([]contracts.ResourceRecord, error) {
+	query := url.Values{}
+	query.Set("selector", resourceSelector)
+	query.Set("limit", "100")
+	resources := []contracts.ResourceRecord{}
+	for {
+		var data struct {
+			Items      []contracts.ResourceRecord `json:"items"`
+			NextCursor *string                    `json:"next_cursor"`
+		}
+		if err := h.getJSON(ctx, h.cfg.LeasesURL+"/v1/resources?"+query.Encode(), &data); err != nil {
+			return nil, err
+		}
+		resources = append(resources, data.Items...)
+		if data.NextCursor == nil || *data.NextCursor == "" {
+			return resources, nil
+		}
+		query.Set("cursor", *data.NextCursor)
+	}
+}
+
+func (h *Handler) inspectLeaseResource(ctx context.Context, resourceID string) (contracts.ResourceInspection, error) {
+	var inspection contracts.ResourceInspection
+	err := h.getJSON(ctx, h.cfg.LeasesURL+"/v1/resources/"+url.PathEscape(resourceID)+"/inspection", &inspection)
+	return inspection, err
 }
 
 func (h *Handler) invokeSyncProvider(w http.ResponseWriter, r *http.Request, sub subject, route contracts.CapabilityRoute, req contracts.InvokeToolRequest, idempotencyKey, fingerprint string) {

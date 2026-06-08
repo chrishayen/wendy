@@ -2,7 +2,7 @@ openapi: 3.1.0
 info:
   title: PACP Agent Gateway API
   version: v1
-  description: Agent-facing public API for tool discovery, invocation, job status, logs, artifacts, and artifact content.
+  description: Agent-facing public API for tool discovery, invocation, job status, logs, resource queues, artifacts, and artifact content.
 servers:
   - url: "{gateway_url}"
     description: Configured PACP gateway base URL.
@@ -222,6 +222,23 @@ paths:
                 $ref: "#/components/schemas/AgentArtifactListEnvelope"
         default:
           $ref: "#/components/responses/Error"
+  /v1/agent/resources/queues/{resource_selector}:
+    get:
+      operationId: getAgentResourceQueue
+      x-operation-audience: agent
+      x-policy-action: lease.read
+      summary: Read an agent-safe resource queue projection.
+      parameters:
+        - $ref: "#/components/parameters/ResourceSelector"
+      responses:
+        "200":
+          description: Agent-safe resource queue state.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AgentResourceQueueEnvelope"
+        default:
+          $ref: "#/components/responses/Error"
   /v1/artifacts/{artifact_id}/content:
     get:
       operationId: readArtifactContent
@@ -267,6 +284,12 @@ components:
         type: string
     ArtifactID:
       name: artifact_id
+      in: path
+      required: true
+      schema:
+        type: string
+    ResourceSelector:
+      name: resource_selector
       in: path
       required: true
       schema:
@@ -405,6 +428,18 @@ components:
           const: true
         data:
           $ref: "#/components/schemas/AgentJob"
+        links:
+          $ref: "#/components/schemas/Links"
+        meta:
+          $ref: "#/components/schemas/Meta"
+    AgentResourceQueueEnvelope:
+      type: object
+      required: [ok, data, links, meta]
+      properties:
+        ok:
+          const: true
+        data:
+          $ref: "#/components/schemas/AgentResourceQueue"
         links:
           $ref: "#/components/schemas/Links"
         meta:
@@ -616,6 +651,40 @@ components:
         lease_id:
           type: string
         resource_id:
+          type: string
+    AgentResourceQueue:
+      type: object
+      required: [resource_selector, resource_count, waiting_count, active_lease_count, current_holder_visible, items, links]
+      properties:
+        resource_selector:
+          type: string
+        resource_count:
+          type: integer
+          minimum: 0
+        waiting_count:
+          type: integer
+          minimum: 0
+        active_lease_count:
+          type: integer
+          minimum: 0
+        current_holder_visible:
+          type: boolean
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/AgentResourceQueueItem"
+        links:
+          $ref: "#/components/schemas/Links"
+    AgentResourceQueueItem:
+      type: object
+      required: [request_id, position]
+      properties:
+        request_id:
+          type: string
+        position:
+          type: integer
+          minimum: 1
+        requester_label:
           type: string
     JobLogEntry:
       type: object

@@ -274,6 +274,33 @@ func TestStorePolicyScopesAndExplicitRules(t *testing.T) {
 	if componentRelease.Allowed {
 		t.Fatalf("component lease release allowed: %#v", componentRelease)
 	}
+	_, err = store.CreateAPIKey(contracts.CreateAPIKeyRequest{SubjectID: "sub_agent", Scopes: []string{"agent"}, Token: "token_agent"})
+	if err != nil {
+		t.Fatalf("create agent key: %v", err)
+	}
+	agentQueue, err := store.CheckPolicy(contracts.PolicyCheckRequest{
+		SubjectID: "sub_agent",
+		Action:    "lease.read",
+		Resource:  "gpu",
+		Context:   map[string]any{"surface": "agent_resource_queue", "resource_selector": "gpu"},
+	})
+	if err != nil {
+		t.Fatalf("agent queue policy: %v", err)
+	}
+	if !agentQueue.Allowed {
+		t.Fatalf("agent queue read denied: %#v", agentQueue)
+	}
+	agentRawLease, err := store.CheckPolicy(contracts.PolicyCheckRequest{
+		SubjectID: "sub_agent",
+		Action:    "lease.read",
+		Resource:  "lease_1",
+	})
+	if err != nil {
+		t.Fatalf("agent raw lease policy: %v", err)
+	}
+	if agentRawLease.Allowed {
+		t.Fatalf("agent raw lease read allowed: %#v", agentRawLease)
+	}
 
 	_, err = store.CreateRule(contracts.CreatePolicyRuleRequest{
 		SubjectID: "sub_runner",

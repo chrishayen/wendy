@@ -277,6 +277,93 @@ func TestGatewayAgentJobProjectionIncludesLeaseQueueStatus(t *testing.T) {
 	}
 }
 
+func TestGatewayAgentResourceQueueProjection(t *testing.T) {
+	env := newGatewayTestEnv(t)
+
+	if _, err := env.leaseStore.RegisterResource(contracts.RegisterResourceRequest{
+		ResourceID: "res_gpu_0",
+		Selector:   "gpu",
+		Status:     contracts.ResourceAvailable,
+	}); err != nil {
+		t.Fatalf("register resource: %v", err)
+	}
+	if _, err := env.leaseStore.CreateLeaseRequest(contracts.CreateLeaseRequest{
+		RequesterID:      "job_holder",
+		ResourceSelector: "gpu",
+	}); err != nil {
+		t.Fatalf("create holder lease: %v", err)
+	}
+	first, err := env.leaseStore.CreateLeaseRequest(contracts.CreateLeaseRequest{
+		RequesterID:      "job_waiting_1",
+		ResourceSelector: "gpu",
+	})
+	if err != nil {
+		t.Fatalf("create first queued lease: %v", err)
+	}
+	second, err := env.leaseStore.CreateLeaseRequest(contracts.CreateLeaseRequest{
+		RequesterID:      "job_waiting_2",
+		ResourceSelector: "gpu",
+	})
+	if err != nil {
+		t.Fatalf("create second queued lease: %v", err)
+	}
+
+	queue := env.doJSON(http.MethodGet, "/v1/agent/resources/queues/gpu", nil, map[string]string{"Authorization": "Bearer token_agent"}, http.StatusOK)
+	if queue["resource_selector"] != "gpu" || queue["resource_count"] != float64(1) || queue["active_lease_count"] != float64(1) || queue["waiting_count"] != float64(2) {
+		t.Fatalf("queue summary = %#v", queue)
+	}
+	if queue["current_holder_visible"] != false {
+		t.Fatalf("queue leaked current holder visibility = %#v", queue)
+	}
+	items := queue["items"].([]any)
+	if len(items) != 2 {
+		t.Fatalf("queue items = %#v", items)
+	}
+	firstItem := items[0].(map[string]any)
+	secondItem := items[1].(map[string]any)
+	if firstItem["request_id"] != first.RequestID || firstItem["position"] != float64(1) {
+		t.Fatalf("first queue item = %#v", firstItem)
+	}
+	if secondItem["request_id"] != second.RequestID || secondItem["position"] != float64(2) {
+		t.Fatalf("second queue item = %#v", secondItem)
+	}
+	if _, leaked := firstItem["requester_id"]; leaked {
+		t.Fatalf("queue item leaked requester_id = %#v", firstItem)
+	}
+	if queue["links"].(map[string]any)["self"] == nil {
+		t.Fatalf("queue links = %#v", queue["links"])
+	}
+}
+
+func TestGatewayAgentResourceQueuePolicyDenied(t *testing.T) {
+	env := newGatewayTestEnv(t)
+	if _, err := env.policyStore.CreateRule(contracts.CreatePolicyRuleRequest{
+		Scope:    "agent",
+		Action:   "lease.read",
+		Resource: "gpu",
+		Effect:   "deny",
+		Reason:   "maintenance_window",
+	}); err != nil {
+		t.Fatalf("create deny rule: %v", err)
+	}
+
+	envelope := env.doJSONEnvelope(http.MethodGet, "/v1/agent/resources/queues/gpu", nil, map[string]string{"Authorization": "Bearer token_agent"}, http.StatusForbidden)
+	errObj := envelope["error"].(map[string]any)
+	if errObj["code"] != "forbidden" {
+		t.Fatalf("deny error = %#v", errObj)
+	}
+}
+
+func TestGatewayAgentResourceQueueNotFound(t *testing.T) {
+	env := newGatewayTestEnv(t)
+
+	envelope := env.doJSONEnvelope(http.MethodGet, "/v1/agent/resources/queues/no_such_selector", nil, map[string]string{"Authorization": "Bearer token_agent"}, http.StatusNotFound)
+	errObj := envelope["error"].(map[string]any)
+	if errObj["code"] != "not_found" {
+		t.Fatalf("not found error = %#v", errObj)
+	}
+}
+
 func TestGatewayReplaysS003PublicDiscoveryAndInvokeFixtures(t *testing.T) {
 	pkg := loadS003GatewayFixturePackage(t)
 	deps := newS003GatewayFixtureDependencies(t, pkg)
@@ -1118,6 +1205,7 @@ func TestGatewayHealthReportsStaticCatalog(t *testing.T) {
 
 type gatewayTestEnv struct {
 	gateway       http.Handler
+	policyStore   *policy.Store
 	jobStore      *jobs.Store
 	leaseStore    *leases.Store
 	artifactStore *artifacts.Store
@@ -1167,6 +1255,7 @@ func newGatewayTestEnv(t *testing.T) *gatewayTestEnv {
 	})
 	env := &gatewayTestEnv{
 		gateway:       gateway,
+		policyStore:   policyStore,
 		jobStore:      jobStore,
 		leaseStore:    leaseStore,
 		artifactStore: artifactStore,

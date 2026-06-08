@@ -90,6 +90,22 @@ type LeaseQueueRecord struct {
 	QueuePosition int    `json:"queue_position"`
 }
 
+type AgentResourceQueue struct {
+	ResourceSelector     string                   `json:"resource_selector"`
+	ResourceCount        int                      `json:"resource_count"`
+	WaitingCount         int                      `json:"waiting_count"`
+	ActiveLeaseCount     int                      `json:"active_lease_count"`
+	CurrentHolderVisible bool                     `json:"current_holder_visible"`
+	Items                []AgentResourceQueueItem `json:"items"`
+	Links                map[string]any           `json:"links"`
+}
+
+type AgentResourceQueueItem struct {
+	RequestID      string `json:"request_id"`
+	Position       int    `json:"position"`
+	RequesterLabel string `json:"requester_label,omitempty"`
+}
+
 type LeaseAuditEvent struct {
 	EventType      string `json:"event_type"`
 	LeaseID        string `json:"lease_id"`
