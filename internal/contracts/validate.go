@@ -230,7 +230,9 @@ func validateEventList(path, id string, eventList map[string]any, report *Report
 	events, ok := eventList["events"].([]any)
 	if !ok || len(events) == 0 {
 		report.add(path, id, "missing_events", "event list must include one or more events")
+		return
 	}
+	validateReplayEventTemplates(path, id, eventList, events, report)
 }
 
 func validateOwnedEvent(path, id string, event map[string]any, report *Report) {
@@ -288,6 +290,148 @@ func validateStep(path, stepID string, step OrchestrationStep, report *Report) {
 	if step.Request != nil || step.Response != nil {
 		validateHTTPExchange(path, stepID, step.Request, step.Response, report)
 	}
+}
+
+func validateReplayEventTemplates(path, id string, eventList map[string]any, events []any, report *Report) {
+	replayKind, _ := eventList["replay_kind"].(string)
+	needsTemplates := strings.Contains(replayKind, "request_response") ||
+		eventList["request_template"] != nil || eventList["response_template"] != nil ||
+		eventList["request_templates"] != nil || eventList["response_templates"] != nil
+	if !needsTemplates {
+		return
+	}
+
+	if eventList["request_template"] != nil || eventList["response_template"] != nil {
+		requestTemplate, requestOK := eventList["request_template"]
+		responseTemplate, responseOK := eventList["response_template"]
+		if !requestOK {
+			report.add(path, id, "missing_event_request_template", "request_response event lists must include request_template")
+			return
+		}
+		if !responseOK {
+			report.add(path, id, "missing_event_response_template", "request_response event lists must include response_template")
+			return
+		}
+		for i, rawEvent := range events {
+			event, ok := rawEvent.(map[string]any)
+			if !ok {
+				report.add(path, fmt.Sprintf("%s.events[%d]", id, i), "invalid_event", "event must be an object")
+				continue
+			}
+			validateTemplatedHTTPExchange(path, fmt.Sprintf("%s.events[%d]", id, i), requestTemplate, responseTemplate, event, report)
+		}
+	}
+
+	if eventList["request_templates"] != nil || eventList["response_templates"] != nil {
+		requestTemplates, requestOK := eventList["request_templates"].(map[string]any)
+		responseTemplates, responseOK := eventList["response_templates"].(map[string]any)
+		if !requestOK {
+			report.add(path, id, "missing_event_request_templates", "multi-endpoint event lists must include request_templates")
+			return
+		}
+		if !responseOK {
+			report.add(path, id, "missing_event_response_templates", "multi-endpoint event lists must include response_templates")
+			return
+		}
+		names := make([]string, 0, len(requestTemplates))
+		for name := range requestTemplates {
+			names = append(names, name)
+		}
+		sort.Strings(names)
+		for _, name := range names {
+			responseTemplate, ok := responseTemplates[name]
+			if !ok {
+				report.add(path, id, "missing_event_response_template", "response_templates is missing endpoint "+name)
+				continue
+			}
+			for i, rawEvent := range events {
+				event, ok := rawEvent.(map[string]any)
+				if !ok {
+					report.add(path, fmt.Sprintf("%s.events[%d]", id, i), "invalid_event", "event must be an object")
+					continue
+				}
+				validateTemplatedHTTPExchange(path, fmt.Sprintf("%s.events[%d].%s", id, i, name), requestTemplates[name], responseTemplate, event, report)
+			}
+		}
+		for name := range responseTemplates {
+			if _, ok := requestTemplates[name]; !ok {
+				report.add(path, id, "missing_event_request_template", "request_templates is missing endpoint "+name)
+			}
+		}
+	}
+}
+
+func validateTemplatedHTTPExchange(path, id string, requestTemplate, responseTemplate any, event map[string]any, report *Report) {
+	requestValue := substituteEventTemplate(requestTemplate, event)
+	responseValue := substituteEventTemplate(responseTemplate, event)
+	if hasUnresolvedTemplate(requestValue) || hasUnresolvedTemplate(responseValue) {
+		report.add(path, id, "unresolved_event_template", "event template contains a placeholder not supplied by the event")
+		return
+	}
+	var request HTTPRequest
+	if !decodeFixtureTemplate(requestValue, &request) {
+		report.add(path, id, "invalid_event_request_template", "request template must expand to an HTTP request")
+		return
+	}
+	var response HTTPResponse
+	if !decodeFixtureTemplate(responseValue, &response) {
+		report.add(path, id, "invalid_event_response_template", "response template must expand to an HTTP response")
+		return
+	}
+	validateHTTPExchange(path, id, &request, &response, report)
+}
+
+func decodeFixtureTemplate(value any, out any) bool {
+	raw, err := json.Marshal(value)
+	if err != nil {
+		return false
+	}
+	return json.Unmarshal(raw, out) == nil
+}
+
+func substituteEventTemplate(value any, event map[string]any) any {
+	switch typed := value.(type) {
+	case string:
+		out := typed
+		for key, replacement := range event {
+			out = strings.ReplaceAll(out, "${"+key+"}", fmt.Sprint(replacement))
+		}
+		return out
+	case map[string]any:
+		out := make(map[string]any, len(typed))
+		for key, item := range typed {
+			out[key] = substituteEventTemplate(item, event)
+		}
+		return out
+	case []any:
+		out := make([]any, len(typed))
+		for i, item := range typed {
+			out[i] = substituteEventTemplate(item, event)
+		}
+		return out
+	default:
+		return value
+	}
+}
+
+func hasUnresolvedTemplate(value any) bool {
+	switch typed := value.(type) {
+	case string:
+		return strings.Contains(typed, "${")
+	case map[string]any:
+		for _, item := range typed {
+			if hasUnresolvedTemplate(item) {
+				return true
+			}
+		}
+	case []any:
+		for _, item := range typed {
+			if hasUnresolvedTemplate(item) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func validateFixtureReferences(path string, file FixtureFile, known map[string]struct{}, report *Report) {

@@ -103,6 +103,77 @@ func TestValidateFixtureFileRejectsSelfFixtureRef(t *testing.T) {
 	}
 }
 
+func TestValidateFixtureFileAcceptsReplayableEventTemplate(t *testing.T) {
+	raw := []byte(`{
+		"scenario_id": "S003",
+		"component": "example",
+		"fixtures": [{
+			"id": "heartbeat_liveness",
+			"event_list": {
+				"schema_version": "event-list.v1",
+				"replay_kind": "deterministic_request_response_sequence",
+				"request_template": {"method": "POST", "path": "/v1/jobs/job_1/heartbeat", "body": {"worker_id": "runner_1"}},
+				"response_template": {"status": 200, "body": {"ok": true, "data": {"updated_at": "${timestamp}"}, "links": {}, "meta": {"request_id": "${request_id}", "schema_version": "v1"}}},
+				"events": [{"timestamp": "2026-06-05T20:00:37Z", "request_id": "req_1"}]
+			}
+		}]
+	}`)
+
+	_, report := ValidateFixtureFile("inline.json", raw)
+	if !report.Passed() {
+		t.Fatalf("unexpected findings: %+v", report.Findings)
+	}
+}
+
+func TestValidateFixtureFileRejectsMissingEventResponseTemplate(t *testing.T) {
+	raw := []byte(`{
+		"scenario_id": "S003",
+		"component": "example",
+		"fixtures": [{
+			"id": "heartbeat_liveness",
+			"event_list": {
+				"schema_version": "event-list.v1",
+				"replay_kind": "deterministic_request_response_sequence",
+				"request_template": {"method": "POST", "path": "/v1/jobs/job_1/heartbeat"},
+				"events": [{"request_id": "req_1"}]
+			}
+		}]
+	}`)
+
+	_, report := ValidateFixtureFile("inline.json", raw)
+	if report.Passed() {
+		t.Fatalf("expected validation finding")
+	}
+	if !hasFindingCode(report, "missing_event_response_template") {
+		t.Fatalf("findings = %+v", report.Findings)
+	}
+}
+
+func TestValidateFixtureFileRejectsUnresolvedEventTemplate(t *testing.T) {
+	raw := []byte(`{
+		"scenario_id": "S003",
+		"component": "example",
+		"fixtures": [{
+			"id": "heartbeat_liveness",
+			"event_list": {
+				"schema_version": "event-list.v1",
+				"replay_kind": "deterministic_request_response_sequence",
+				"request_template": {"method": "POST", "path": "/v1/jobs/job_1/heartbeat"},
+				"response_template": {"status": 200, "body": {"ok": true, "data": {"updated_at": "${missing_timestamp}"}, "links": {}, "meta": {"request_id": "${request_id}", "schema_version": "v1"}}},
+				"events": [{"request_id": "req_1"}]
+			}
+		}]
+	}`)
+
+	_, report := ValidateFixtureFile("inline.json", raw)
+	if report.Passed() {
+		t.Fatalf("expected validation finding")
+	}
+	if !hasFindingCode(report, "unresolved_event_template") {
+		t.Fatalf("findings = %+v", report.Findings)
+	}
+}
+
 func hasFindingCode(report Report, code string) bool {
 	for _, finding := range report.Findings {
 		if finding.Code == code {
