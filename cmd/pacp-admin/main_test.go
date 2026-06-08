@@ -323,6 +323,171 @@ func TestJobsCancelRequiresGatewayToken(t *testing.T) {
 	}
 }
 
+func TestLeasesRegisterResourceCommandPostsResource(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/v1/resources" {
+			t.Fatalf("request = %s %s", r.Method, r.URL.Path)
+		}
+		if r.Header.Get("Authorization") != "Bearer component-token" {
+			t.Fatalf("Authorization = %q", r.Header.Get("Authorization"))
+		}
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatalf("decode body: %v", err)
+		}
+		if body["resource_id"] != "res_gpu_0" || body["selector"] != "gpu" || body["node_id"] != "node_linux_gpu" {
+			t.Fatalf("body = %#v", body)
+		}
+		tags := body["tags"].([]any)
+		if len(tags) != 2 || tags[0] != "gpu" || tags[1] != "gpu:0" {
+			t.Fatalf("tags = %#v", tags)
+		}
+		metadata := body["metadata"].(map[string]any)
+		if metadata["kind"] != "gpu" {
+			t.Fatalf("metadata = %#v", metadata)
+		}
+		writeEnvelope(t, w, http.StatusCreated, map[string]any{"resource_id": "res_gpu_0", "selector": "gpu"})
+	}))
+	defer server.Close()
+
+	var stdout, stderr bytes.Buffer
+	code := run([]string{
+		"-leases-url", server.URL,
+		"-component-token", "component-token",
+		"leases", "register-resource",
+		"-resource-id", "res_gpu_0",
+		"-selector", "gpu",
+		"-node-id", "node_linux_gpu",
+		"-tags", "gpu,gpu:0",
+		"-metadata", `{"kind":"gpu"}`,
+	}, &stdout, &stderr, server.Client())
+	if code != 0 {
+		t.Fatalf("code=%d stderr=%s stdout=%s", code, stderr.String(), stdout.String())
+	}
+	if !strings.Contains(stdout.String(), `"resource_id": "res_gpu_0"`) {
+		t.Fatalf("stdout = %s", stdout.String())
+	}
+}
+
+func TestLeasesCreateRequestCommandPostsRequest(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/v1/lease-requests" {
+			t.Fatalf("request = %s %s", r.Method, r.URL.Path)
+		}
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatalf("decode body: %v", err)
+		}
+		if body["requester_id"] != "job_1" || body["resource_selector"] != "gpu" {
+			t.Fatalf("body = %#v", body)
+		}
+		if body["priority"].(float64) != 5 || body["heartbeat_timeout_seconds"].(float64) != 30 {
+			t.Fatalf("body = %#v", body)
+		}
+		writeEnvelope(t, w, http.StatusCreated, map[string]any{"request_id": "lease_req_1", "state": "pending"})
+	}))
+	defer server.Close()
+
+	var stdout, stderr bytes.Buffer
+	code := run([]string{
+		"-leases-url", server.URL,
+		"leases", "create-request",
+		"-requester-id", "job_1",
+		"-selector", "gpu",
+		"-priority", "5",
+		"-heartbeat-timeout-seconds", "30",
+	}, &stdout, &stderr, server.Client())
+	if code != 0 {
+		t.Fatalf("code=%d stderr=%s stdout=%s", code, stderr.String(), stdout.String())
+	}
+	if !strings.Contains(stdout.String(), `"request_id": "lease_req_1"`) {
+		t.Fatalf("stdout = %s", stdout.String())
+	}
+}
+
+func TestLeasesCancelRequestCommandPostsCancel(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/v1/lease-requests/lease_req_1/cancel" {
+			t.Fatalf("request = %s %s", r.Method, r.URL.Path)
+		}
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatalf("decode body: %v", err)
+		}
+		if body["reason"] != "operator cleanup" {
+			t.Fatalf("reason = %#v", body["reason"])
+		}
+		writeEnvelope(t, w, http.StatusOK, map[string]any{"request_id": "lease_req_1", "state": "canceled"})
+	}))
+	defer server.Close()
+
+	var stdout, stderr bytes.Buffer
+	code := run([]string{
+		"-leases-url", server.URL,
+		"leases", "cancel-request", "lease_req_1", "-reason", "operator cleanup",
+	}, &stdout, &stderr, server.Client())
+	if code != 0 {
+		t.Fatalf("code=%d stderr=%s stdout=%s", code, stderr.String(), stdout.String())
+	}
+	if !strings.Contains(stdout.String(), `"state": "canceled"`) {
+		t.Fatalf("stdout = %s", stdout.String())
+	}
+}
+
+func TestLeasesReleaseCommandPostsReleaseWithAuditActor(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/v1/leases/lease_1/release" {
+			t.Fatalf("request = %s %s", r.Method, r.URL.Path)
+		}
+		if r.Header.Get("Authorization") != "Bearer component-token" {
+			t.Fatalf("Authorization = %q", r.Header.Get("Authorization"))
+		}
+		if r.Header.Get("Idempotency-Key") != "release-1" {
+			t.Fatalf("Idempotency-Key = %q", r.Header.Get("Idempotency-Key"))
+		}
+		if r.Header.Get("X-Actor-Subject-ID") != "sub_admin" {
+			t.Fatalf("X-Actor-Subject-ID = %q", r.Header.Get("X-Actor-Subject-ID"))
+		}
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatalf("decode body: %v", err)
+		}
+		if body["holder_id"] != "job_1" || body["reason"] != "operator release" {
+			t.Fatalf("body = %#v", body)
+		}
+		writeEnvelope(t, w, http.StatusOK, map[string]any{"lease_id": "lease_1", "released_by": "sub_admin"})
+	}))
+	defer server.Close()
+
+	var stdout, stderr bytes.Buffer
+	code := run([]string{
+		"-leases-url", server.URL,
+		"-component-token", "component-token",
+		"leases", "release", "lease_1",
+		"-holder-id", "job_1",
+		"-idempotency-key", "release-1",
+		"-actor-subject-id", "sub_admin",
+		"-reason", "operator release",
+	}, &stdout, &stderr, server.Client())
+	if code != 0 {
+		t.Fatalf("code=%d stderr=%s stdout=%s", code, stderr.String(), stdout.String())
+	}
+	if !strings.Contains(stdout.String(), `"released_by": "sub_admin"`) {
+		t.Fatalf("stdout = %s", stdout.String())
+	}
+}
+
+func TestLeasesReleaseRequiresIdempotencyKey(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := run([]string{"leases", "release", "lease_1", "-holder-id", "job_1"}, &stdout, &stderr, http.DefaultClient)
+	if code != 2 {
+		t.Fatalf("code=%d stderr=%s", code, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "idempotency-key is required") {
+		t.Fatalf("stderr = %s", stderr.String())
+	}
+}
+
 func TestNodeCommandRequiresNodeURL(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	code := run([]string{"-node-url", "", "node", "services"}, &stdout, &stderr, http.DefaultClient)

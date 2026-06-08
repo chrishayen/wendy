@@ -264,7 +264,7 @@ func jobsCancelCommand(cfg adminConfig, httpClient *http.Client, args []string, 
 
 func leasesCommand(cfg adminConfig, httpClient *http.Client, args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
-		return usage(stderr, "usage: pacp-admin [flags] leases <resources|resource|inspect|request|lease> [id]")
+		return usage(stderr, "usage: pacp-admin [flags] leases <resources|resource|register-resource|inspect|request|create-request|cancel-request|lease|release> [id]")
 	}
 	switch args[0] {
 	case "resources":
@@ -277,6 +277,8 @@ func leasesCommand(cfg adminConfig, httpClient *http.Client, args []string, stdo
 			return usage(stderr, "usage: pacp-admin [flags] leases resource <resource-id>")
 		}
 		return getJSON(cfg, httpClient, cfg.LeasesURL, "/v1/resources/"+url.PathEscape(args[1]), authorizationHeader(cfg.ComponentToken), stdout, stderr)
+	case "register-resource":
+		return leasesRegisterResourceCommand(cfg, httpClient, args[1:], stdout, stderr)
 	case "inspect":
 		if len(args) != 2 {
 			return usage(stderr, "usage: pacp-admin [flags] leases inspect <resource-id>")
@@ -287,14 +289,136 @@ func leasesCommand(cfg adminConfig, httpClient *http.Client, args []string, stdo
 			return usage(stderr, "usage: pacp-admin [flags] leases request <request-id>")
 		}
 		return getJSON(cfg, httpClient, cfg.LeasesURL, "/v1/lease-requests/"+url.PathEscape(args[1]), authorizationHeader(cfg.ComponentToken), stdout, stderr)
+	case "create-request":
+		return leasesCreateRequestCommand(cfg, httpClient, args[1:], stdout, stderr)
+	case "cancel-request":
+		return leasesCancelRequestCommand(cfg, httpClient, args[1:], stdout, stderr)
 	case "lease":
 		if len(args) != 2 {
 			return usage(stderr, "usage: pacp-admin [flags] leases lease <lease-id>")
 		}
 		return getJSON(cfg, httpClient, cfg.LeasesURL, "/v1/leases/"+url.PathEscape(args[1]), authorizationHeader(cfg.ComponentToken), stdout, stderr)
+	case "release":
+		return leasesReleaseCommand(cfg, httpClient, args[1:], stdout, stderr)
 	default:
-		return usage(stderr, "usage: pacp-admin [flags] leases <resources|resource|inspect|request|lease> [id]")
+		return usage(stderr, "usage: pacp-admin [flags] leases <resources|resource|register-resource|inspect|request|create-request|cancel-request|lease|release> [id]")
 	}
+}
+
+func leasesRegisterResourceCommand(cfg adminConfig, httpClient *http.Client, args []string, stdout, stderr io.Writer) int {
+	flags := flag.NewFlagSet("leases register-resource", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	resourceID := flags.String("resource-id", "", "resource id")
+	selector := flags.String("selector", "", "resource selector")
+	displayName := flags.String("display-name", "", "display name")
+	status := flags.String("status", "", "resource status")
+	nodeID := flags.String("node-id", "", "owning node id")
+	tags := flags.String("tags", "", "comma-separated resource tags")
+	metadata := flags.String("metadata", "", "JSON object metadata")
+	remaining, err := parseSubcommandFlags(flags, args)
+	if err != nil {
+		return 2
+	}
+	if len(remaining) != 0 {
+		return usage(stderr, "usage: pacp-admin [flags] leases register-resource -selector <selector> [-resource-id id] [-node-id node] [-tags a,b] [-metadata JSON]")
+	}
+	if *selector == "" {
+		return usage(stderr, "selector is required for leases register-resource")
+	}
+	metadataObject, err := optionalJSONObject(*metadata)
+	if err != nil {
+		fmt.Fprintf(stderr, "metadata: %v\n", err)
+		return 2
+	}
+	req := contracts.RegisterResourceRequest{
+		ResourceID:  *resourceID,
+		Selector:    *selector,
+		DisplayName: *displayName,
+		NodeID:      *nodeID,
+		Tags:        splitCSV(*tags),
+		Metadata:    metadataObject,
+	}
+	if *status != "" {
+		req.Status = contracts.ResourceStatus(*status)
+	}
+	return postJSONBody(cfg, httpClient, cfg.LeasesURL, "/v1/resources", authorizationHeader(cfg.ComponentToken), "", req, stdout, stderr)
+}
+
+func leasesCreateRequestCommand(cfg adminConfig, httpClient *http.Client, args []string, stdout, stderr io.Writer) int {
+	flags := flag.NewFlagSet("leases create-request", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	requesterID := flags.String("requester-id", "", "requester or holder id")
+	selector := flags.String("selector", "", "resource selector")
+	priority := flags.Int("priority", 0, "request priority")
+	heartbeatTimeout := flags.Int("heartbeat-timeout-seconds", 0, "heartbeat timeout in seconds")
+	remaining, err := parseSubcommandFlags(flags, args)
+	if err != nil {
+		return 2
+	}
+	if len(remaining) != 0 {
+		return usage(stderr, "usage: pacp-admin [flags] leases create-request -requester-id <id> -selector <selector> [-priority n] [-heartbeat-timeout-seconds n]")
+	}
+	if *requesterID == "" {
+		return usage(stderr, "requester-id is required for leases create-request")
+	}
+	if *selector == "" {
+		return usage(stderr, "selector is required for leases create-request")
+	}
+	req := contracts.CreateLeaseRequest{
+		RequesterID:             *requesterID,
+		ResourceSelector:        *selector,
+		Priority:                *priority,
+		HeartbeatTimeoutSeconds: *heartbeatTimeout,
+	}
+	return postJSONBody(cfg, httpClient, cfg.LeasesURL, "/v1/lease-requests", authorizationHeader(cfg.ComponentToken), "", req, stdout, stderr)
+}
+
+func leasesCancelRequestCommand(cfg adminConfig, httpClient *http.Client, args []string, stdout, stderr io.Writer) int {
+	flags := flag.NewFlagSet("leases cancel-request", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	reason := flags.String("reason", "", "cancel reason")
+	remaining, err := parseSubcommandFlags(flags, args)
+	if err != nil {
+		return 2
+	}
+	if len(remaining) != 1 {
+		return usage(stderr, "usage: pacp-admin [flags] leases cancel-request <request-id> [-reason text]")
+	}
+	body := map[string]any{}
+	if *reason != "" {
+		body["reason"] = *reason
+	}
+	path := "/v1/lease-requests/" + url.PathEscape(remaining[0]) + "/cancel"
+	return postJSONBody(cfg, httpClient, cfg.LeasesURL, path, authorizationHeader(cfg.ComponentToken), "", body, stdout, stderr)
+}
+
+func leasesReleaseCommand(cfg adminConfig, httpClient *http.Client, args []string, stdout, stderr io.Writer) int {
+	flags := flag.NewFlagSet("leases release", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	holderID := flags.String("holder-id", "", "lease holder id")
+	reason := flags.String("reason", "", "release reason")
+	idempotencyKey := flags.String("idempotency-key", "", "idempotency key for this lease release")
+	actorSubjectID := flags.String("actor-subject-id", "", "actor subject id for lease audit")
+	remaining, err := parseSubcommandFlags(flags, args)
+	if err != nil {
+		return 2
+	}
+	if len(remaining) != 1 {
+		return usage(stderr, "usage: pacp-admin [flags] leases release <lease-id> -holder-id <holder> -idempotency-key <key> [-reason text] [-actor-subject-id sub_admin]")
+	}
+	if *holderID == "" {
+		return usage(stderr, "holder-id is required for leases release")
+	}
+	if *idempotencyKey == "" {
+		return usage(stderr, "idempotency-key is required for leases release")
+	}
+	req := contracts.LeaseReleaseRequest{HolderID: *holderID, Reason: *reason}
+	headers := map[string]string{}
+	if *actorSubjectID != "" {
+		headers["X-Actor-Subject-ID"] = *actorSubjectID
+	}
+	path := "/v1/leases/" + url.PathEscape(remaining[0]) + "/release"
+	return postJSONBodyWithHeaders(cfg, httpClient, cfg.LeasesURL, path, authorizationHeader(cfg.ComponentToken), *idempotencyKey, headers, req, stdout, stderr)
 }
 
 func artifactsCommand(cfg adminConfig, httpClient *http.Client, args []string, stdout, stderr io.Writer) int {
@@ -524,8 +648,12 @@ func postJSON(cfg adminConfig, httpClient *http.Client, baseURL, path, credentia
 }
 
 func postJSONBody(cfg adminConfig, httpClient *http.Client, baseURL, path, credential, idempotencyKey string, body any, stdout, stderr io.Writer) int {
+	return postJSONBodyWithHeaders(cfg, httpClient, baseURL, path, credential, idempotencyKey, nil, body, stdout, stderr)
+}
+
+func postJSONBodyWithHeaders(cfg adminConfig, httpClient *http.Client, baseURL, path, credential, idempotencyKey string, headers map[string]string, body any, stdout, stderr io.Writer) int {
 	var envelope any
-	status, err := postJSONDecode(cfg, httpClient, baseURL, path, credential, idempotencyKey, body, &envelope)
+	status, err := postJSONDecodeWithHeaders(cfg, httpClient, baseURL, path, credential, idempotencyKey, headers, body, &envelope)
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1
@@ -547,6 +675,10 @@ func postJSONBody(cfg adminConfig, httpClient *http.Client, baseURL, path, crede
 }
 
 func postJSONDecode(cfg adminConfig, httpClient *http.Client, baseURL, path, credential, idempotencyKey string, body any, out any) (int, error) {
+	return postJSONDecodeWithHeaders(cfg, httpClient, baseURL, path, credential, idempotencyKey, nil, body, out)
+}
+
+func postJSONDecodeWithHeaders(cfg adminConfig, httpClient *http.Client, baseURL, path, credential, idempotencyKey string, headers map[string]string, body any, out any) (int, error) {
 	baseURL = strings.TrimRight(strings.TrimSpace(baseURL), "/")
 	if baseURL == "" {
 		return 0, fmt.Errorf("service URL is required for %s", path)
@@ -577,6 +709,11 @@ func postJSONDecode(cfg adminConfig, httpClient *http.Client, baseURL, path, cre
 	}
 	if idempotencyKey != "" {
 		req.Header.Set("Idempotency-Key", idempotencyKey)
+	}
+	for key, value := range headers {
+		if value != "" {
+			req.Header.Set(key, value)
+		}
 	}
 	resp, err := httpClient.Do(req)
 	if err != nil {
@@ -628,6 +765,37 @@ func envFirst(names ...string) string {
 		}
 	}
 	return ""
+}
+
+func splitCSV(raw string) []string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil
+	}
+	parts := strings.Split(raw, ",")
+	values := make([]string, 0, len(parts))
+	for _, part := range parts {
+		value := strings.TrimSpace(part)
+		if value != "" {
+			values = append(values, value)
+		}
+	}
+	return values
+}
+
+func optionalJSONObject(raw string) (map[string]any, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil, nil
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal([]byte(raw), &decoded); err != nil {
+		return nil, err
+	}
+	if decoded == nil {
+		return nil, fmt.Errorf("must be a JSON object")
+	}
+	return decoded, nil
 }
 
 func authorizationHeader(token string) string {
