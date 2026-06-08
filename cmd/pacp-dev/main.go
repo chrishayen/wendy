@@ -5,12 +5,15 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
+	"errors"
 	"flag"
+	"fmt"
 	"log"
 	"net"
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -35,12 +38,21 @@ type devConfig struct {
 	GatewayAddr    string
 	ProviderAddr   string
 	ArtifactRoot   string
+	StateDir       string
 	AgentToken     string
 	ComponentToken string
 	WorkerToken    string
 	WorkerID       string
 	PollInterval   time.Duration
 	DisableRunner  bool
+}
+
+type devStores struct {
+	catalogStore  *catalog.Store
+	jobStore      *jobs.Store
+	leaseStore    *leases.Store
+	artifactStore *artifacts.Store
+	policyStore   *policy.Store
 }
 
 func main() {
@@ -53,6 +65,7 @@ func main() {
 	flag.StringVar(&cfg.GatewayAddr, "gateway-addr", "localhost:18086", "gateway listen address")
 	flag.StringVar(&cfg.ProviderAddr, "provider-addr", "localhost:18088", "fake provider listen address")
 	flag.StringVar(&cfg.ArtifactRoot, "artifact-root", "/tmp/pacp-dev-artifacts", "artifact storage root")
+	flag.StringVar(&cfg.StateDir, "state-dir", "", "optional directory for durable dev stack state")
 	flag.StringVar(&cfg.AgentToken, "agent-token", "token_agent", "local agent token")
 	flag.StringVar(&cfg.ComponentToken, "component-token", "token_component", "local component token")
 	flag.StringVar(&cfg.WorkerToken, "worker-token", "token_worker", "local worker token")
@@ -77,35 +90,9 @@ func runDevStack(ctx context.Context, cfg devConfig) error {
 	gatewayURL := endpointForAddr(cfg.GatewayAddr)
 	providerURL := endpointForAddr(cfg.ProviderAddr)
 
-	catalogStore := catalog.NewStore()
 	manifest := devManifest(providerURL)
-	if _, err := catalogStore.RegisterManifest(manifest); err != nil {
-		return err
-	}
-
-	jobStore := jobs.NewStore()
-	leaseStore := leases.NewStore()
-	if _, err := leaseStore.RegisterResource(contracts.RegisterResourceRequest{
-		ResourceID:  "res_dev_gpu",
-		Selector:    "gpu",
-		DisplayName: "Local development GPU",
-		Status:      contracts.ResourceAvailable,
-		Tags:        []string{"gpu", "dev"},
-	}); err != nil {
-		return err
-	}
-	artifactStore, err := artifacts.NewStore(cfg.ArtifactRoot)
+	stores, err := newDevStores(cfg, manifest)
 	if err != nil {
-		return err
-	}
-	policyStore := policy.NewStore()
-	if _, err := policyStore.CreateAPIKey(contracts.CreateAPIKeyRequest{SubjectID: "sub_agent_local", Scopes: []string{"agent"}, Token: cfg.AgentToken}); err != nil {
-		return err
-	}
-	if _, err := policyStore.CreateAPIKey(contracts.CreateAPIKeyRequest{SubjectID: "sub_gateway_local", Scopes: []string{"component"}, Token: cfg.ComponentToken}); err != nil {
-		return err
-	}
-	if _, err := policyStore.CreateAPIKey(contracts.CreateAPIKeyRequest{SubjectID: "sub_runner_local", Scopes: []string{"worker"}, Token: cfg.WorkerToken}); err != nil {
 		return err
 	}
 
@@ -123,11 +110,11 @@ func runDevStack(ctx context.Context, cfg devConfig) error {
 		addr    string
 		handler http.Handler
 	}{
-		{name: "catalog", addr: cfg.CatalogAddr, handler: catalog.NewHandler(catalogStore)},
-		{name: "jobs", addr: cfg.JobsAddr, handler: jobs.NewHandler(jobStore)},
-		{name: "leases", addr: cfg.LeasesAddr, handler: leases.NewHandler(leaseStore)},
-		{name: "artifacts", addr: cfg.ArtifactsAddr, handler: artifacts.NewHandler(artifactStore)},
-		{name: "policy", addr: cfg.PolicyAddr, handler: policy.NewHandler(policyStore)},
+		{name: "catalog", addr: cfg.CatalogAddr, handler: catalog.NewHandler(stores.catalogStore)},
+		{name: "jobs", addr: cfg.JobsAddr, handler: jobs.NewHandler(stores.jobStore)},
+		{name: "leases", addr: cfg.LeasesAddr, handler: leases.NewHandler(stores.leaseStore)},
+		{name: "artifacts", addr: cfg.ArtifactsAddr, handler: artifacts.NewHandler(stores.artifactStore)},
+		{name: "policy", addr: cfg.PolicyAddr, handler: policy.NewHandler(stores.policyStore)},
 		{name: "provider", addr: cfg.ProviderAddr, handler: providerServer},
 		{name: "gateway", addr: cfg.GatewayAddr, handler: gateway.NewHandler(gateway.Config{
 			CatalogURL:        catalogURL,
@@ -156,12 +143,174 @@ func runDevStack(ctx context.Context, cfg devConfig) error {
 		go runnerLoop(ctx, r, cfg.PollInterval)
 	}
 
-	log.Printf("dev stack ready gateway=%s tools=cap_dev_echo,cap_dev_artifact", gatewayURL)
+	log.Printf("dev stack ready gateway=%s state_dir=%s tools=cap_dev_echo,cap_dev_artifact", gatewayURL, cfg.StateDir)
 	<-ctx.Done()
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	shutdownServers(shutdownCtx, servers)
 	return nil
+}
+
+func newDevStores(cfg devConfig, manifest contracts.ProviderManifest) (devStores, error) {
+	durable := cfg.StateDir != ""
+	if durable {
+		if err := os.MkdirAll(cfg.StateDir, 0o700); err != nil {
+			return devStores{}, err
+		}
+	}
+
+	catalogStore, err := newCatalogStore(cfg)
+	if err != nil {
+		return devStores{}, fmt.Errorf("create catalog store: %w", err)
+	}
+	jobStore, err := newJobStore(cfg)
+	if err != nil {
+		return devStores{}, fmt.Errorf("create job store: %w", err)
+	}
+	leaseStore, err := newLeaseStore(cfg)
+	if err != nil {
+		return devStores{}, fmt.Errorf("create lease store: %w", err)
+	}
+	artifactStore, err := newArtifactStore(cfg)
+	if err != nil {
+		return devStores{}, fmt.Errorf("create artifact store: %w", err)
+	}
+	policyStore, err := newPolicyStore(cfg)
+	if err != nil {
+		return devStores{}, fmt.Errorf("create policy store: %w", err)
+	}
+
+	if err := registerDevManifest(catalogStore, manifest, durable); err != nil {
+		return devStores{}, fmt.Errorf("seed catalog: %w", err)
+	}
+	if err := registerDevResource(leaseStore, durable); err != nil {
+		return devStores{}, fmt.Errorf("seed resource: %w", err)
+	}
+	for _, req := range []contracts.CreateAPIKeyRequest{
+		{SubjectID: "sub_agent_local", Scopes: []string{"agent"}, Token: cfg.AgentToken},
+		{SubjectID: "sub_gateway_local", Scopes: []string{"component"}, Token: cfg.ComponentToken},
+		{SubjectID: "sub_runner_local", Scopes: []string{"worker"}, Token: cfg.WorkerToken},
+	} {
+		if err := createDevAPIKey(policyStore, durable, req); err != nil {
+			return devStores{}, fmt.Errorf("seed api key %s: %w", req.SubjectID, err)
+		}
+	}
+
+	return devStores{
+		catalogStore:  catalogStore,
+		jobStore:      jobStore,
+		leaseStore:    leaseStore,
+		artifactStore: artifactStore,
+		policyStore:   policyStore,
+	}, nil
+}
+
+func newCatalogStore(cfg devConfig) (*catalog.Store, error) {
+	if path := statePath(cfg, "catalog"); path != "" {
+		return catalog.NewPersistentStore(path)
+	}
+	return catalog.NewStore(), nil
+}
+
+func newJobStore(cfg devConfig) (*jobs.Store, error) {
+	if path := statePath(cfg, "jobs"); path != "" {
+		return jobs.NewPersistentStore(path)
+	}
+	return jobs.NewStore(), nil
+}
+
+func newLeaseStore(cfg devConfig) (*leases.Store, error) {
+	if path := statePath(cfg, "leases"); path != "" {
+		return leases.NewPersistentStore(path)
+	}
+	return leases.NewStore(), nil
+}
+
+func newArtifactStore(cfg devConfig) (*artifacts.Store, error) {
+	if path := statePath(cfg, "artifacts"); path != "" {
+		return artifacts.NewPersistentStore(cfg.ArtifactRoot, path)
+	}
+	return artifacts.NewStore(cfg.ArtifactRoot)
+}
+
+func newPolicyStore(cfg devConfig) (*policy.Store, error) {
+	if path := statePath(cfg, "policy"); path != "" {
+		return policy.NewPersistentStore(path)
+	}
+	return policy.NewStore(), nil
+}
+
+func statePath(cfg devConfig, name string) string {
+	if cfg.StateDir == "" {
+		return ""
+	}
+	return filepath.Join(cfg.StateDir, name+".json")
+}
+
+func registerDevManifest(store *catalog.Store, manifest contracts.ProviderManifest, durable bool) error {
+	_, err := store.RegisterManifest(manifest)
+	if err == nil {
+		return nil
+	}
+	if !durable || !errors.Is(err, catalog.ErrDuplicateService) {
+		return err
+	}
+	for _, capability := range manifest.Capabilities {
+		if _, ok := store.GetCapability(capability.ID); !ok {
+			return err
+		}
+	}
+	return nil
+}
+
+func registerDevResource(store *leases.Store, durable bool) error {
+	req := contracts.RegisterResourceRequest{
+		ResourceID:  "res_dev_gpu",
+		Selector:    "gpu",
+		DisplayName: "Local development GPU",
+		Status:      contracts.ResourceAvailable,
+		Tags:        []string{"gpu", "dev"},
+	}
+	_, err := store.RegisterResource(req)
+	if err == nil {
+		return nil
+	}
+	if !durable || !errors.Is(err, leases.ErrResourceConflict) {
+		return err
+	}
+	resource, getErr := store.GetResource(req.ResourceID)
+	if getErr == nil && resource.Selector == req.Selector && resource.Status == req.Status {
+		return nil
+	}
+	return err
+}
+
+func createDevAPIKey(store *policy.Store, durable bool, req contracts.CreateAPIKeyRequest) error {
+	_, err := store.CreateAPIKey(req)
+	if err == nil {
+		return nil
+	}
+	if !durable || !errors.Is(err, policy.ErrConflict) {
+		return err
+	}
+	verification, verifyErr := store.VerifyCredential(contracts.VerifyCredentialRequest{Credential: authorizationHeader(req.Token)})
+	if verifyErr == nil && verification.Valid && verification.SubjectID != nil && *verification.SubjectID == req.SubjectID && hasScopes(verification.Scopes, req.Scopes) {
+		return nil
+	}
+	return err
+}
+
+func hasScopes(actual, required []string) bool {
+	seen := map[string]bool{}
+	for _, scope := range actual {
+		seen[scope] = true
+	}
+	for _, scope := range required {
+		if !seen[scope] {
+			return false
+		}
+	}
+	return true
 }
 
 func serve(ctx context.Context, name, addr string, handler http.Handler) (*http.Server, error) {

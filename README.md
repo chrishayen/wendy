@@ -58,10 +58,15 @@ Contract simulation data is kept as test input, not as product behavior.
 go test ./...
 go run ./cmd/pacp-contract-smoke
 go run ./cmd/pacp-dev
+go run ./cmd/pacp-dev -state-dir /tmp/pacp-dev-state
 go run ./cmd/pacp-control -gateway-url http://localhost:18086 -token token_agent tools
 go run ./cmd/pacp-control -gateway-url http://localhost:18086 -token token_agent invoke cap_dev_echo -idempotency-key echo-1 -input '{"message":"hello"}'
 go run ./cmd/pacp-control -gateway-url http://localhost:18086 -token token_agent invoke cap_dev_artifact -idempotency-key artifact-1 -input '{"prompt":"red mug"}'
 ```
+
+Use `pacp-dev -state-dir` when local jobs, catalog entries, leases, artifact
+metadata, and policy credentials should survive a restart. Artifact bytes are
+stored under `-artifact-root`.
 
 The services can also be run separately for distributed testing:
 
@@ -92,7 +97,7 @@ curl -X POST http://localhost:18085/v1/auth/api-keys -H 'Content-Type: applicati
 go run ./cmd/pacp-control -gateway-url http://localhost:18086 -token token_agent tools
 ```
 
-This is not the full control plane yet. It is an in-memory service stack with
-public HTTP boundaries, a provider SDK, a composition runner, and a gateway
-control CLI. Durable storage, production node adapters, provider-specific
-wrappers, and hardening remain.
+This is not the full production control plane yet. It is a usable service stack
+with public HTTP boundaries, file-backed local durability, a provider SDK, a
+composition runner, runtime node adapters, and a gateway control CLI. Production
+databases, provider-specific wrappers, and hardening remain.
