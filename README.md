@@ -69,8 +69,9 @@ Contract simulation data is kept as test input, not as product behavior.
 - `cmd/pacp-speech-provider`: purpose-specific text-to-speech and
   speech-to-text provider with voice/format validation and command-backed
   engine adapters.
-- `cmd/pacp-ai-toolkit-provider`: purpose-specific dataset registry and LoRA
-  training provider with a provider-owned workspace and dry-run mode.
+- `cmd/pacp-ai-toolkit-provider`: purpose-specific dataset registry, dataset
+  update, and LoRA training provider with a provider-owned workspace and
+  dry-run mode.
 - `cmd/pacp-catalog`: runnable catalog server that loads provider manifests.
 - `cmd/pacp-gateway`: runnable agent tool gateway.
 - `cmd/pacp-jobs`: runnable async job service.

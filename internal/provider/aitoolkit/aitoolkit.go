@@ -26,6 +26,7 @@ const (
 	DefaultDatasetRegisterCapability = "cap_ai_toolkit_dataset_register"
 	DefaultDatasetListCapability     = "cap_ai_toolkit_dataset_list"
 	DefaultDatasetInspectCapability  = "cap_ai_toolkit_dataset_inspect"
+	DefaultDatasetUpdateCapability   = "cap_ai_toolkit_dataset_update"
 	DefaultTrainCapability           = "cap_ai_toolkit_lora_train"
 
 	defaultServiceName = "AI-Toolkit Provider"
@@ -41,6 +42,7 @@ type Config struct {
 	DatasetRegisterCapability string
 	DatasetListCapability     string
 	DatasetInspectCapability  string
+	DatasetUpdateCapability   string
 	TrainCapability           string
 	WorkspaceRoot             string
 	DryRun                    bool
@@ -120,6 +122,7 @@ func NewServer(cfg Config) (*provider.Server, error) {
 		normalized.DatasetRegisterCapability: p.registerDataset,
 		normalized.DatasetListCapability:     p.listDatasets,
 		normalized.DatasetInspectCapability:  p.inspectDataset,
+		normalized.DatasetUpdateCapability:   p.updateDataset,
 		normalized.TrainCapability:           p.train,
 	})
 }
@@ -142,6 +145,9 @@ func normalizeConfig(cfg Config) (Config, error) {
 	}
 	if cfg.DatasetInspectCapability == "" {
 		cfg.DatasetInspectCapability = DefaultDatasetInspectCapability
+	}
+	if cfg.DatasetUpdateCapability == "" {
+		cfg.DatasetUpdateCapability = DefaultDatasetUpdateCapability
 	}
 	if cfg.TrainCapability == "" {
 		cfg.TrainCapability = DefaultTrainCapability
@@ -259,6 +265,63 @@ func (p *providerImpl) inspectDataset(ctx context.Context, req contracts.Provide
 	dataset, ok := p.datasets[datasetID]
 	if !ok {
 		return contracts.ProviderInvokeResponse{}, fmt.Errorf("%w: dataset %s is not registered", provider.ErrValidation, datasetID)
+	}
+	return contracts.ProviderInvokeResponse{Output: datasetOutput(dataset)}, nil
+}
+
+func (p *providerImpl) updateDataset(ctx context.Context, req contracts.ProviderInvokeRequest) (contracts.ProviderInvokeResponse, error) {
+	datasetID, err := requiredID(req.Input, "dataset_id")
+	if err != nil {
+		return contracts.ProviderInvokeResponse{}, err
+	}
+	name, hasName, err := optionalString(req.Input, "name")
+	if err != nil {
+		return contracts.ProviderInvokeResponse{}, err
+	}
+	path, hasPath, err := optionalString(req.Input, "path")
+	if err != nil {
+		return contracts.ProviderInvokeResponse{}, err
+	}
+	metadata, hasMetadata, err := optionalObject(req.Input, "metadata")
+	if err != nil {
+		return contracts.ProviderInvokeResponse{}, err
+	}
+	if !hasName && !hasPath && !hasMetadata {
+		return contracts.ProviderInvokeResponse{}, fmt.Errorf("%w: at least one of name, path, or metadata is required", provider.ErrValidation)
+	}
+
+	var resolved string
+	var count int
+	if hasPath {
+		resolved, err = p.resolveDatasetPath(path)
+		if err != nil {
+			return contracts.ProviderInvokeResponse{}, err
+		}
+		count, err = countImages(resolved)
+		if err != nil {
+			return contracts.ProviderInvokeResponse{}, err
+		}
+	}
+
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	dataset, ok := p.datasets[datasetID]
+	if !ok {
+		return contracts.ProviderInvokeResponse{}, fmt.Errorf("%w: dataset %s is not registered", provider.ErrValidation, datasetID)
+	}
+	if hasName {
+		dataset.Name = name
+	}
+	if hasPath {
+		dataset.Path = relativeToRoot(p.cfg.WorkspaceRoot, resolved)
+		dataset.ImageCount = count
+	}
+	if hasMetadata {
+		dataset.Metadata = metadata
+	}
+	p.datasets[datasetID] = dataset
+	if err := p.saveStateLocked(); err != nil {
+		return contracts.ProviderInvokeResponse{}, err
 	}
 	return contracts.ProviderInvokeResponse{Output: datasetOutput(dataset)}, nil
 }
@@ -508,6 +571,34 @@ func optionalStringDefault(input map[string]any, key, fallback string) string {
 	return value
 }
 
+func optionalString(input map[string]any, key string) (string, bool, error) {
+	raw, ok := input[key]
+	if !ok || raw == nil {
+		return "", false, nil
+	}
+	value, ok := raw.(string)
+	if !ok {
+		return "", false, fmt.Errorf("%w: %s must be a string", provider.ErrValidation, key)
+	}
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return "", false, fmt.Errorf("%w: %s must not be empty", provider.ErrValidation, key)
+	}
+	return value, true, nil
+}
+
+func optionalObject(input map[string]any, key string) (map[string]any, bool, error) {
+	raw, ok := input[key]
+	if !ok || raw == nil {
+		return nil, false, nil
+	}
+	value, ok := raw.(map[string]any)
+	if !ok {
+		return nil, false, fmt.Errorf("%w: %s must be an object", provider.ErrValidation, key)
+	}
+	return value, true, nil
+}
+
 func intInput(input map[string]any, key string, fallback int) (int, error) {
 	value, ok := input[key]
 	if !ok || value == nil {
@@ -549,6 +640,7 @@ func manifest(cfg Config) contracts.ProviderManifest {
 			datasetRegisterCapability(cfg.DatasetRegisterCapability),
 			datasetListCapability(cfg.DatasetListCapability),
 			datasetInspectCapability(cfg.DatasetInspectCapability),
+			datasetUpdateCapability(cfg.DatasetUpdateCapability),
 			trainCapability(cfg.TrainCapability),
 		},
 	}
@@ -621,6 +713,32 @@ func datasetInspectCapability(id string) contracts.Capability {
 		OutputSchema:  datasetSchema(),
 		Examples:      []map[string]any{{"dataset_id": "product_photos"}},
 		SideEffects:   "none",
+		ResourceHints: []contracts.ResourceHint{},
+		ArtifactHints: []contracts.ArtifactHint{},
+		TimeoutHint:   "30s",
+	}
+}
+
+func datasetUpdateCapability(id string) contracts.Capability {
+	return contracts.Capability{
+		ID:            id,
+		Name:          "Update dataset",
+		Description:   "Update the name, path, or metadata for a registered dataset in the provider workspace.",
+		Tags:          []string{"dataset", "update"},
+		ExecutionMode: "sync",
+		InputSchema: map[string]any{
+			"type":     "object",
+			"required": []any{"dataset_id"},
+			"properties": map[string]any{
+				"dataset_id": map[string]any{"type": "string"},
+				"name":       map[string]any{"type": "string"},
+				"path":       map[string]any{"type": "string"},
+				"metadata":   map[string]any{"type": "object"},
+			},
+		},
+		OutputSchema:  datasetSchema(),
+		Examples:      []map[string]any{{"dataset_id": "product_photos", "name": "Updated Product Photos", "metadata": map[string]any{"source": "operator"}}},
+		SideEffects:   "local_state",
 		ResourceHints: []contracts.ResourceHint{},
 		ArtifactHints: []contracts.ArtifactHint{},
 		TimeoutHint:   "30s",
