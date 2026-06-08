@@ -595,7 +595,7 @@ func builtinDecision(req contracts.PolicyCheckRequest, scopes []string) contract
 		if hasScope(scopes, "component") {
 			return allow("allowed_by_component_scope")
 		}
-	case "job.execute", "lease.request", "lease.heartbeat", "lease.release", "artifact.register", "node.read", "node.service.start", "node.service.touch", "provider.invoke":
+	case "job.execute", "lease.request", "lease.heartbeat", "lease.release", "artifact.register", "node.read", "node.service.start", "node.service.touch", "node.service.stop", "provider.invoke":
 		if hasScope(scopes, "worker") {
 			return allow("allowed_by_worker_scope")
 		}

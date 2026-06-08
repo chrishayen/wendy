@@ -193,7 +193,7 @@ func TestStorePolicyScopesAndExplicitRules(t *testing.T) {
 	if !worker.Allowed {
 		t.Fatalf("worker denied: %#v", worker)
 	}
-	for _, action := range []string{"lease.heartbeat", "lease.release", "lease.read", "lease.cancel", "node.read", "node.service.start", "node.service.touch"} {
+	for _, action := range []string{"lease.heartbeat", "lease.release", "lease.read", "lease.cancel", "node.read", "node.service.start", "node.service.touch", "node.service.stop"} {
 		decision, err := store.CheckPolicy(contracts.PolicyCheckRequest{
 			SubjectID: "sub_runner",
 			Action:    action,
