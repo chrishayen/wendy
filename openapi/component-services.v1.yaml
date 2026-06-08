@@ -68,11 +68,7 @@ paths:
               $ref: "#/components/schemas/ProviderManifest"
       responses:
         "201":
-          description: Manifest registered.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/SuccessEnvelope"
+          $ref: "#/components/responses/CatalogRegistrationResponse"
         default:
           $ref: "#/components/responses/Error"
   /v1/catalog/export:
@@ -106,7 +102,7 @@ paths:
         - $ref: "#/components/parameters/Limit"
       responses:
         "200":
-          $ref: "#/components/responses/JobListResponse"
+          $ref: "#/components/responses/CatalogServiceListResponse"
         default:
           $ref: "#/components/responses/Error"
   /v1/catalog/services/{service_id}:
@@ -119,7 +115,7 @@ paths:
         - $ref: "#/components/parameters/ServiceID"
       responses:
         "200":
-          $ref: "#/components/responses/Success"
+          $ref: "#/components/responses/CatalogServiceResponse"
         default:
           $ref: "#/components/responses/Error"
   /v1/catalog/capabilities:
@@ -159,7 +155,7 @@ paths:
         - $ref: "#/components/parameters/Limit"
       responses:
         "200":
-          $ref: "#/components/responses/Success"
+          $ref: "#/components/responses/CatalogCapabilityListResponse"
         default:
           $ref: "#/components/responses/Error"
   /v1/catalog/capabilities/{capability_id}:
@@ -172,7 +168,7 @@ paths:
         - $ref: "#/components/parameters/CapabilityID"
       responses:
         "200":
-          $ref: "#/components/responses/Success"
+          $ref: "#/components/responses/CatalogCapabilityResponse"
         default:
           $ref: "#/components/responses/Error"
   /v1/catalog/capabilities/{capability_id}/route:
@@ -185,7 +181,7 @@ paths:
         - $ref: "#/components/parameters/CapabilityID"
       responses:
         "200":
-          $ref: "#/components/responses/Success"
+          $ref: "#/components/responses/CapabilityRouteResponse"
         default:
           $ref: "#/components/responses/Error"
   /v1/catalog/tags:
@@ -199,7 +195,7 @@ paths:
         - $ref: "#/components/parameters/Limit"
       responses:
         "200":
-          $ref: "#/components/responses/Success"
+          $ref: "#/components/responses/CatalogTagListResponse"
         default:
           $ref: "#/components/responses/Error"
 
@@ -244,7 +240,7 @@ paths:
         - $ref: "#/components/parameters/Limit"
       responses:
         "200":
-          $ref: "#/components/responses/Success"
+          $ref: "#/components/responses/JobListResponse"
         default:
           $ref: "#/components/responses/Error"
     post:
@@ -1401,6 +1397,83 @@ components:
                 properties:
                   data:
                     $ref: "#/components/schemas/ComponentMetrics"
+    CatalogRegistrationResponse:
+      description: Catalog manifest registration envelope.
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: "#/components/schemas/SuccessEnvelope"
+              - type: object
+                properties:
+                  data:
+                    $ref: "#/components/schemas/CatalogRegistration"
+    CatalogServiceResponse:
+      description: Catalog service envelope.
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: "#/components/schemas/SuccessEnvelope"
+              - type: object
+                properties:
+                  data:
+                    $ref: "#/components/schemas/Service"
+    CatalogServiceListResponse:
+      description: Catalog service list envelope.
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: "#/components/schemas/SuccessEnvelope"
+              - type: object
+                properties:
+                  data:
+                    $ref: "#/components/schemas/CatalogServiceList"
+    CatalogCapabilityResponse:
+      description: Catalog capability record envelope.
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: "#/components/schemas/SuccessEnvelope"
+              - type: object
+                properties:
+                  data:
+                    $ref: "#/components/schemas/CatalogCapabilityRecord"
+    CatalogCapabilityListResponse:
+      description: Catalog capability list envelope.
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: "#/components/schemas/SuccessEnvelope"
+              - type: object
+                properties:
+                  data:
+                    $ref: "#/components/schemas/CatalogCapabilityList"
+    CapabilityRouteResponse:
+      description: Capability route envelope.
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: "#/components/schemas/SuccessEnvelope"
+              - type: object
+                properties:
+                  data:
+                    $ref: "#/components/schemas/CapabilityRoute"
+    CatalogTagListResponse:
+      description: Catalog tag list envelope.
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: "#/components/schemas/SuccessEnvelope"
+              - type: object
+                properties:
+                  data:
+                    $ref: "#/components/schemas/CatalogTagList"
     JobResponse:
       description: Job envelope.
       content:
@@ -1577,6 +1650,49 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/ProviderManifest"
+    CatalogRegistration:
+      type: object
+      required: [service_id, capability_ids]
+      properties:
+        service_id:
+          type: string
+        capability_ids:
+          type: array
+          items:
+            type: string
+    CatalogServiceList:
+      type: object
+      required: [items, next_cursor]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/Service"
+        next_cursor:
+          type: string
+          nullable: true
+    CatalogCapabilityList:
+      type: object
+      required: [items, next_cursor]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/CatalogCapabilityRecord"
+        next_cursor:
+          type: string
+          nullable: true
+    CatalogTagList:
+      type: object
+      required: [items, next_cursor]
+      properties:
+        items:
+          type: array
+          items:
+            type: string
+        next_cursor:
+          type: string
+          nullable: true
     ProviderInvokeRequest:
       type: object
       required: [input]
@@ -1733,6 +1849,51 @@ components:
           type: string
         notes:
           type: string
+    CapabilityRoute:
+      type: object
+      required:
+        - capability_id
+        - service_id
+        - provider_endpoint
+        - provider_health_path
+        - provider_invoke_path
+        - node_managed
+        - service_start_mode
+      properties:
+        capability_id:
+          type: string
+        service_id:
+          type: string
+        provider_endpoint:
+          type: string
+        provider_health_path:
+          type: string
+        provider_invoke_path:
+          type: string
+        node_id:
+          type: string
+        node_managed:
+          type: boolean
+        service_start_mode:
+          type: string
+        resource_hints:
+          type: array
+          items:
+            $ref: "#/components/schemas/ResourceHint"
+        artifact_hints:
+          type: array
+          items:
+            $ref: "#/components/schemas/ArtifactHint"
+    CatalogCapabilityRecord:
+      type: object
+      required: [capability, route]
+      properties:
+        capability:
+          $ref: "#/components/schemas/Capability"
+        route:
+          $ref: "#/components/schemas/CapabilityRoute"
+        service:
+          $ref: "#/components/schemas/Service"
 
     JobState:
       type: string
