@@ -85,7 +85,7 @@ func commandBridgeHandler(route CommandBridgeRoute) CapabilityHandler {
 		if route.WorkingDirectory != "" {
 			cmd.Dir = route.WorkingDirectory
 		}
-		cmd.Env = commandEnvironment(route.Environment)
+		cmd.Env = commandEnvironment(route.Environment, req.Context)
 		cmd.Stdin = bytes.NewReader(body)
 		var stdout bytes.Buffer
 		var stderr bytes.Buffer
@@ -102,10 +102,25 @@ func commandBridgeHandler(route CommandBridgeRoute) CapabilityHandler {
 	}
 }
 
-func commandEnvironment(values map[string]string) []string {
+func commandEnvironment(values map[string]string, invokeContext contracts.ProviderInvokeContext) []string {
 	env := os.Environ()
 	for key, value := range values {
 		env = append(env, key+"="+value)
+	}
+	if invokeContext.RequestID != "" {
+		env = append(env, "PACP_REQUEST_ID="+invokeContext.RequestID)
+	}
+	if invokeContext.SubjectID != "" {
+		env = append(env, "PACP_SUBJECT_ID="+invokeContext.SubjectID)
+	}
+	if invokeContext.JobID != "" {
+		env = append(env, "PACP_JOB_ID="+invokeContext.JobID)
+	}
+	if invokeContext.ResourceLeaseID != "" {
+		env = append(env, "PACP_RESOURCE_LEASE_ID="+invokeContext.ResourceLeaseID)
+	}
+	if invokeContext.ArtifactBaseURL != "" {
+		env = append(env, "PACP_ARTIFACT_BASE_URL="+invokeContext.ArtifactBaseURL)
 	}
 	return env
 }
