@@ -77,7 +77,8 @@ type JobFailRequest struct {
 }
 
 type CancelRequest struct {
-	Reason string `json:"reason,omitempty"`
+	RequesterID string `json:"requester_id,omitempty"`
+	Reason      string `json:"reason,omitempty"`
 }
 
 type JobLogEntry struct {

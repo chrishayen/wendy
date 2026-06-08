@@ -7,11 +7,14 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -150,7 +153,40 @@ func TestGatewayReplaysS003PublicDiscoveryAndInvokeFixtures(t *testing.T) {
 		"public_invoke_idempotency_replay",
 		"public_invoke_idempotency_conflict",
 	} {
-		if _, err := testkit.ReplayHTTPFixture(handler, pkg, fixtureID); err != nil {
+		if _, err := deps.replay(handler, fixtureID); err != nil {
+			t.Fatalf("replay %s: %v", fixtureID, err)
+		}
+	}
+}
+
+func TestGatewayReplaysS003PublicJobAndArtifactFixtures(t *testing.T) {
+	pkg := loadS003GatewayFixturePackage(t)
+	deps := newS003GatewayFixtureDependencies(t, pkg)
+	defer deps.server.Close()
+
+	handler := NewHandler(Config{
+		PolicyURL:         deps.server.URL,
+		JobsURL:           deps.server.URL,
+		ArtifactsURL:      deps.server.URL,
+		GatewayCredential: "Bearer token_s003_gateway",
+		Client:            deps.server.Client(),
+	})
+
+	for _, fixtureID := range []string{
+		"public_cancel_queued_ok",
+		"public_running_cancel_forbidden",
+		"public_job_not_found",
+		"public_job_missing_owner_context",
+		"public_job_policy_missing_context_forbidden",
+		"public_job_context_build_failure",
+		"public_job_running",
+		"public_job_succeeded",
+		"public_artifact_list_ok",
+		"public_artifact_content_proxy",
+		"public_artifact_content_not_found",
+		"public_artifact_content_forbidden",
+	} {
+		if _, err := deps.replay(handler, fixtureID); err != nil {
 			t.Fatalf("replay %s: %v", fixtureID, err)
 		}
 	}
@@ -230,9 +266,10 @@ func writeGatewayTestEnvelope(t *testing.T, w http.ResponseWriter, status int, d
 }
 
 type s003GatewayFixtureDependencies struct {
-	t      *testing.T
-	pkg    testkit.FixturePackage
-	server *httptest.Server
+	t                   *testing.T
+	pkg                 testkit.FixturePackage
+	server              *httptest.Server
+	activePublicFixture string
 }
 
 func newS003GatewayFixtureDependencies(t *testing.T, pkg testkit.FixturePackage) *s003GatewayFixtureDependencies {
@@ -240,6 +277,12 @@ func newS003GatewayFixtureDependencies(t *testing.T, pkg testkit.FixturePackage)
 	deps := &s003GatewayFixtureDependencies{t: t, pkg: pkg}
 	deps.server = httptest.NewServer(http.HandlerFunc(deps.serveHTTP))
 	return deps
+}
+
+func (d *s003GatewayFixtureDependencies) replay(handler http.Handler, fixtureID string) (testkit.ReplayResult, error) {
+	d.activePublicFixture = fixtureID
+	defer func() { d.activePublicFixture = "" }()
+	return testkit.ReplayHTTPFixture(handler, d.pkg, fixtureID)
 }
 
 func (d *s003GatewayFixtureDependencies) serveHTTP(w http.ResponseWriter, r *http.Request) {
@@ -261,7 +304,7 @@ func (d *s003GatewayFixtureDependencies) serveHTTP(w http.ResponseWriter, r *htt
 	if !d.assertDownstreamRequest(w, fixtureID, fixture, r, raw) {
 		return
 	}
-	writeS003FixtureResponse(d.t, w, fixtureID, fixture)
+	writeS003FixtureResponse(d.t, w, d.pkg, fixtureID, fixture)
 }
 
 func (d *s003GatewayFixtureDependencies) fixtureIDFor(r *http.Request, raw []byte) (string, bool) {
@@ -285,6 +328,20 @@ func (d *s003GatewayFixtureDependencies) fixtureIDFor(r *http.Request, raw []byt
 			return "c08_policy_tool_discover_capability_allow", true
 		case action == "tool.invoke" && resource == "cap_image_generate_gpu":
 			return "c08_policy_tool_invoke_allow", true
+		case action == "job.read" && resource == "job_s003_0001" && d.activePublicFixture == "public_job_policy_missing_context_forbidden":
+			return "c08_policy_job_read_missing_context_deny", true
+		case action == "job.read" && resource == "job_s003_0001":
+			return "c08_policy_job_read_allow", true
+		case action == "job.cancel" && resource == "job_s003_0001" && d.activePublicFixture == "public_running_cancel_forbidden":
+			return "c08_policy_job_cancel_running_deny", true
+		case action == "job.cancel" && resource == "job_s003_0001":
+			return "c08_policy_job_cancel_queued_allow", true
+		case action == "artifact.read" && resource == "job_artifacts:job_s003_0001":
+			return "c08_policy_job_artifacts_read_allow", true
+		case action == "artifact.read" && resource == "art_s003_0001" && d.activePublicFixture == "public_artifact_content_forbidden":
+			return "c08_policy_artifact_read_forbidden", true
+		case action == "artifact.read" && resource == "art_s003_0001":
+			return "c08_policy_artifact_read_allow", true
 		default:
 			return "", false
 		}
@@ -296,6 +353,41 @@ func (d *s003GatewayFixtureDependencies) fixtureIDFor(r *http.Request, raw []byt
 		return "c03_catalog_route_ok", true
 	case r.Method == http.MethodPost && path == "/v1/jobs":
 		return "c05_create_job_ok", true
+	case r.Method == http.MethodGet && path == "/v1/jobs/job_s003_0001/policy-context":
+		return d.jobPolicyContextFixtureID()
+	case r.Method == http.MethodGet && path == "/v1/jobs/job_s003_missing/policy-context":
+		return "c05_job_policy_context_not_found", true
+	case r.Method == http.MethodGet && path == "/v1/jobs/job_s003_0001/agent-projection" && d.activePublicFixture == "public_job_running":
+		return "c05_agent_projection_running", true
+	case r.Method == http.MethodGet && path == "/v1/jobs/job_s003_0001/agent-projection":
+		return "c05_agent_projection_succeeded", true
+	case r.Method == http.MethodPost && path == "/v1/jobs/job_s003_0001/cancel":
+		return "c05_cancel_queued_ok", true
+	case r.Method == http.MethodGet && path == "/v1/artifacts" && r.URL.Query().Get("producer_ref") == "job_s003_0001":
+		return "c07_artifact_list_by_producer_ok", true
+	case r.Method == http.MethodGet && path == "/v1/artifacts/art_s003_0001/policy-context":
+		return "c07_artifact_policy_context_ok", true
+	case r.Method == http.MethodGet && path == "/v1/artifacts/art_s003_missing/policy-context":
+		return "c07_artifact_policy_context_not_found", true
+	case r.Method == http.MethodGet && path == "/v1/artifacts/art_s003_0001/content":
+		return "c07_artifact_content_ok", true
+	default:
+		return "", false
+	}
+}
+
+func (d *s003GatewayFixtureDependencies) jobPolicyContextFixtureID() (string, bool) {
+	switch d.activePublicFixture {
+	case "public_cancel_queued_ok", "public_job_policy_missing_context_forbidden":
+		return "c05_job_policy_context_queued", true
+	case "public_running_cancel_forbidden", "public_job_running":
+		return "c05_job_policy_context_running", true
+	case "public_job_succeeded", "public_artifact_list_ok":
+		return "c05_job_policy_context_succeeded", true
+	case "public_job_missing_owner_context":
+		return "c05_job_policy_context_missing_owner", true
+	case "public_job_context_build_failure":
+		return "c05_job_policy_context_malformed", true
 	default:
 		return "", false
 	}
@@ -333,8 +425,8 @@ func (d *s003GatewayFixtureDependencies) assertDownstreamRequest(w http.Response
 			d.fail(w, "%s decode request body: %v", fixtureID, err)
 			return false
 		}
-		if !reflect.DeepEqual(got, fixture.Request.Body) {
-			d.fail(w, "%s request body = %#v, want %#v", fixtureID, got, fixture.Request.Body)
+		if err := compareS003JSONSubset("$", fixture.Request.Body, got); err != nil {
+			d.fail(w, "%s request body mismatch: %v; got %#v", fixtureID, err, got)
 			return false
 		}
 	}
@@ -369,7 +461,7 @@ func s003FixtureByID(pkg testkit.FixturePackage, id string) (contracts.Fixture, 
 	return contracts.Fixture{}, false
 }
 
-func writeS003FixtureResponse(t *testing.T, w http.ResponseWriter, fixtureID string, fixture contracts.Fixture) {
+func writeS003FixtureResponse(t *testing.T, w http.ResponseWriter, pkg testkit.FixturePackage, fixtureID string, fixture contracts.Fixture) {
 	t.Helper()
 	if fixture.Response == nil || fixture.Response.Status == nil {
 		t.Fatalf("%s has no response status", fixtureID)
@@ -384,6 +476,20 @@ func writeS003FixtureResponse(t *testing.T, w http.ResponseWriter, fixtureID str
 	if fixture.Response.Body != nil {
 		if err := json.NewEncoder(w).Encode(fixture.Response.Body); err != nil {
 			t.Fatalf("encode %s fixture response: %v", fixtureID, err)
+		}
+		return
+	}
+	if fixture.Response.BodyFixture != "" {
+		raw, err := os.ReadFile(filepath.Join(filepath.Dir(pkg.AbsPath), fixture.Response.BodyFixture))
+		if err != nil {
+			t.Fatalf("read %s fixture body: %v", fixtureID, err)
+		}
+		body, err := base64.StdEncoding.DecodeString(string(raw))
+		if err != nil {
+			t.Fatalf("decode %s fixture body: %v", fixtureID, err)
+		}
+		if _, err := w.Write(body); err != nil {
+			t.Fatalf("write %s fixture body: %v", fixtureID, err)
 		}
 	}
 }
@@ -403,6 +509,47 @@ func queryValues(raw any) []string {
 	default:
 		return nil
 	}
+}
+
+func compareS003JSONSubset(path string, expected any, actual any) error {
+	switch typedExpected := expected.(type) {
+	case map[string]any:
+		typedActual, ok := actual.(map[string]any)
+		if !ok {
+			return errS003JSON(path, "expected object, got %T", actual)
+		}
+		for key, value := range typedExpected {
+			actualValue, ok := typedActual[key]
+			if !ok {
+				return errS003JSON(path+"."+key, "missing")
+			}
+			if err := compareS003JSONSubset(path+"."+key, value, actualValue); err != nil {
+				return err
+			}
+		}
+	case []any:
+		typedActual, ok := actual.([]any)
+		if !ok {
+			return errS003JSON(path, "expected array, got %T", actual)
+		}
+		if len(typedActual) != len(typedExpected) {
+			return errS003JSON(path, "length %d, want %d", len(typedActual), len(typedExpected))
+		}
+		for i := range typedExpected {
+			if err := compareS003JSONSubset(path+"["+strconv.Itoa(i)+"]", typedExpected[i], typedActual[i]); err != nil {
+				return err
+			}
+		}
+	default:
+		if !reflect.DeepEqual(expected, actual) {
+			return errS003JSON(path, "got %#v, want %#v", actual, expected)
+		}
+	}
+	return nil
+}
+
+func errS003JSON(path, format string, args ...any) error {
+	return fmt.Errorf("%s: "+format, append([]any{path}, args...)...)
 }
 
 func labelsMatch(raw any, want map[string]string) bool {

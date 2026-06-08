@@ -358,6 +358,10 @@ func (h *Handler) cancelAgentJob(w http.ResponseWriter, r *http.Request, jobID s
 	if r.Body != nil {
 		_ = json.NewDecoder(r.Body).Decode(&req)
 	}
+	req.RequesterID = sub.ID
+	if req.Reason == "" {
+		req.Reason = "canceled by requester"
+	}
 	var job contracts.Job
 	if err := h.postJSON(r.Context(), h.cfg.JobsURL+"/v1/jobs/"+url.PathEscape(jobID)+"/cancel", req, "gateway-cancel-"+idempotencyKey, &job); err != nil {
 		h.writeGatewayError(w, r, err)
@@ -498,6 +502,9 @@ func (h *Handler) requirePolicy(w http.ResponseWriter, r *http.Request, subjectI
 		return false
 	}
 	if !decision.Allowed {
+		if decision.Reason == "missing_context" {
+			message = "required policy context is missing"
+		}
 		writeError(w, r, http.StatusForbidden, "forbidden", message, false)
 		return false
 	}
@@ -532,8 +539,12 @@ func (h *Handler) jobPolicyContext(w http.ResponseWriter, r *http.Request, jobID
 		h.writeGatewayError(w, r, err)
 		return contracts.JobPolicyContext{}, false
 	}
+	if context.ResourceKind != "job" || context.JobID == "" || context.JobState == "" {
+		writeError(w, r, http.StatusInternalServerError, "internal_error", "could not build policy context", true)
+		return contracts.JobPolicyContext{}, false
+	}
 	if context.OwnerSubjectID == "" {
-		writeError(w, r, http.StatusInternalServerError, "internal_error", "job policy context is missing owner_subject_id", false)
+		writeError(w, r, http.StatusInternalServerError, "internal_error", "job policy context is missing required owner", false)
 		return contracts.JobPolicyContext{}, false
 	}
 	return context, true

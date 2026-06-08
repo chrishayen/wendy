@@ -454,7 +454,7 @@ func seedS003JobCanceledWithCancelIdempotency(store *Store) {
 	fingerprint, err := fingerprint(struct {
 		JobID   string                  `json:"job_id"`
 		Request contracts.CancelRequest `json:"request"`
-	}{JobID: s003JobID, Request: contracts.CancelRequest{Reason: "canceled by requester"}})
+	}{JobID: s003JobID, Request: contracts.CancelRequest{RequesterID: "sub_agent_s003", Reason: "canceled by requester"}})
 	if err != nil {
 		panic(err)
 	}

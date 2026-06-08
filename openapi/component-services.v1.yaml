@@ -1521,6 +1521,8 @@ components:
     CancelRequest:
       type: object
       properties:
+        requester_id:
+          type: string
         reason:
           type: string
     JobLogEntry:
