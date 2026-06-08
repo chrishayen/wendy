@@ -22,6 +22,79 @@ func TestValidateRepositoryOpenAPIContracts(t *testing.T) {
 	}
 }
 
+func TestValidateFileDetectsLocalhostOpenAPIServerURL(t *testing.T) {
+	path := writeContract(t, `
+openapi: 3.1.0
+info:
+  title: Localhost server
+  version: v1
+servers:
+  - url: http://localhost:18086
+    description: Local only.
+  - url: "{gateway_url}"
+    variables:
+      gateway_url:
+        default: http://127.0.0.1:18086
+paths:
+  /v1/one:
+    get:
+      operationId: one
+      x-operation-audience: component
+      x-policy-action: test.read
+      responses:
+        "200":
+          $ref: "#/components/responses/ThingResponse"
+        default:
+          $ref: "#/components/responses/Error"
+components:
+  responses:
+    ThingResponse:
+      description: Thing envelope.
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: "#/components/schemas/SuccessEnvelope"
+              - type: object
+                properties:
+                  data:
+                    $ref: "#/components/schemas/Thing"
+    Error:
+      description: Error.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorEnvelope"
+  schemas:
+    Meta:
+      type: object
+      required: [request_id, schema_version]
+      properties:
+        request_id:
+          type: string
+        schema_version:
+          type: string
+    SuccessEnvelope:
+      type: object
+      required: [ok, data, links, meta]
+      properties:
+        meta:
+          $ref: "#/components/schemas/Meta"
+    ErrorEnvelope:
+      type: object
+      required: [ok, error, links, meta]
+      properties:
+        meta:
+          $ref: "#/components/schemas/Meta"
+    Thing:
+      type: object
+`)
+	report := ValidateFile(path)
+	if !hasFinding(report, "server_url_localhost") {
+		t.Fatalf("expected localhost server finding, got %#v", report.Findings)
+	}
+}
+
 func TestPublicGatewayCancelSummaryDocumentsQueuedOnly(t *testing.T) {
 	path := filepath.Join("..", "..", "openapi", "public-gateway.v1.yaml")
 	doc := loadOpenAPIDoc(t, path)

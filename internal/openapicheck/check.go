@@ -74,6 +74,7 @@ func ValidateFile(path string) FileReport {
 	if _, ok := asMap(doc["info"]); !ok {
 		report.add("info_missing", "/info", "info object is required")
 	}
+	validateServerURLs(&report, doc)
 	paths, ok := asMap(doc["paths"])
 	if !ok {
 		report.add("paths_missing", "/paths", "paths object is required")
@@ -168,6 +169,44 @@ func validateSecurityRequirementList(report *FileReport, location string, raw an
 			}
 		}
 	}
+}
+
+func validateServerURLs(report *FileReport, doc map[string]any) {
+	servers, ok := doc["servers"].([]any)
+	if !ok {
+		return
+	}
+	for i, serverValue := range servers {
+		location := fmt.Sprintf("/servers/%d", i)
+		server, ok := asMap(serverValue)
+		if !ok {
+			report.add("server_invalid", location, "server entries must be objects")
+			continue
+		}
+		url, _ := server["url"].(string)
+		if isLocalhostURL(url) {
+			report.add("server_url_localhost", location+"/url", "OpenAPI server URLs must be deployment-neutral; keep localhost URLs in development docs")
+		}
+		variables, _ := asMap(server["variables"])
+		for variableName, variableValue := range variables {
+			variable, ok := asMap(variableValue)
+			if !ok {
+				continue
+			}
+			defaultValue, _ := variable["default"].(string)
+			if isLocalhostURL(defaultValue) {
+				report.add("server_url_localhost", location+"/variables/"+escapePointer(variableName)+"/default", "OpenAPI server variable defaults must be deployment-neutral; keep localhost URLs in development docs")
+			}
+		}
+	}
+}
+
+func isLocalhostURL(value string) bool {
+	normalized := strings.ToLower(value)
+	return strings.Contains(normalized, "localhost") ||
+		strings.Contains(normalized, "127.0.0.1") ||
+		strings.Contains(normalized, "[::1]") ||
+		strings.Contains(normalized, "//::1")
 }
 
 func validateOperations(report *FileReport, doc map[string]any, paths map[string]any) {

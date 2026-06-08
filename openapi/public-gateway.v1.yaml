@@ -4,8 +4,12 @@ info:
   version: v1
   description: Agent-facing public API for tool discovery, invocation, job status, logs, artifacts, and artifact content.
 servers:
-  - url: http://localhost:18086
-    description: Local development gateway
+  - url: "{gateway_url}"
+    description: Configured PACP gateway base URL.
+    variables:
+      gateway_url:
+        default: https://gateway.pacp.example
+        description: Replace with the deployed gateway URL, or a local development URL.
 security:
   - bearerAuth: []
 paths:

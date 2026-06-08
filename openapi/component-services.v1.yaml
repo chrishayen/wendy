@@ -4,22 +4,54 @@ info:
   version: v1
   description: Internal distributed HTTP contracts between PACP components, runners, nodes, and operators.
 servers:
-  - url: http://localhost:18081
-    description: Catalog service
-  - url: http://localhost:18082
-    description: Jobs service
-  - url: http://localhost:18083
-    description: Leases service
-  - url: http://localhost:18084
-    description: Artifacts service
-  - url: http://localhost:18085
-    description: Policy service
-  - url: http://localhost:18087
-    description: Node service
-  - url: http://localhost:18088
-    description: Provider service
-  - url: http://localhost:18089
-    description: Runner monitor service
+  - url: "{catalog_url}"
+    description: Configured catalog service base URL.
+    variables:
+      catalog_url:
+        default: https://catalog.pacp.example
+        description: Replace with the deployed catalog URL, or a local development URL.
+  - url: "{jobs_url}"
+    description: Configured jobs service base URL.
+    variables:
+      jobs_url:
+        default: https://jobs.pacp.example
+        description: Replace with the deployed jobs URL, or a local development URL.
+  - url: "{leases_url}"
+    description: Configured leases service base URL.
+    variables:
+      leases_url:
+        default: https://leases.pacp.example
+        description: Replace with the deployed leases URL, or a local development URL.
+  - url: "{artifacts_url}"
+    description: Configured artifacts service base URL.
+    variables:
+      artifacts_url:
+        default: https://artifacts.pacp.example
+        description: Replace with the deployed artifacts URL, or a local development URL.
+  - url: "{policy_url}"
+    description: Configured policy service base URL.
+    variables:
+      policy_url:
+        default: https://policy.pacp.example
+        description: Replace with the deployed policy URL, or a local development URL.
+  - url: "{node_url}"
+    description: Configured node service base URL.
+    variables:
+      node_url:
+        default: https://node.pacp.example
+        description: Replace with the deployed node URL, or a local development URL.
+  - url: "{provider_url}"
+    description: Configured provider service base URL.
+    variables:
+      provider_url:
+        default: https://provider.pacp.example
+        description: Replace with the deployed provider URL, or a local development URL.
+  - url: "{runner_url}"
+    description: Configured runner monitor service base URL.
+    variables:
+      runner_url:
+        default: https://runner.pacp.example
+        description: Replace with the deployed runner monitor URL, or a local development URL.
 security:
   - componentBearer: []
 tags:
