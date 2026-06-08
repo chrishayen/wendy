@@ -17,6 +17,7 @@ type ProviderCheckOptions struct {
 	BaseURL      string
 	CapabilityID string
 	Input        map[string]any
+	Credential   string
 }
 
 type ProviderCheckReport struct {
@@ -46,25 +47,27 @@ func CheckProvider(ctx context.Context, httpClient *http.Client, opts ProviderCh
 		return report
 	}
 
-	manifest, ok := checkProviderManifest(ctx, httpClient, baseURL, &report)
+	credential := strings.TrimSpace(opts.Credential)
+	opts.Credential = credential
+	manifest, ok := checkProviderManifest(ctx, httpClient, baseURL, credential, &report)
 	if !ok {
 		return report
 	}
-	checkProviderHealth(ctx, httpClient, baseURL, manifest, &report)
+	checkProviderHealth(ctx, httpClient, baseURL, credential, manifest, &report)
 	invoked := false
 	if strings.TrimSpace(opts.CapabilityID) != "" {
 		invoked = checkProviderInvoke(ctx, httpClient, baseURL, manifest, opts, &report)
 		if invoked {
-			checkProviderInvalidInput(ctx, httpClient, baseURL, manifest, strings.TrimSpace(opts.CapabilityID), &report)
+			checkProviderInvalidInput(ctx, httpClient, baseURL, credential, manifest, strings.TrimSpace(opts.CapabilityID), &report)
 		}
 	}
-	checkProviderMetrics(ctx, httpClient, baseURL, strings.TrimSpace(opts.CapabilityID), invoked, &report)
+	checkProviderMetrics(ctx, httpClient, baseURL, credential, strings.TrimSpace(opts.CapabilityID), invoked, &report)
 	return report
 }
 
-func checkProviderManifest(ctx context.Context, httpClient *http.Client, baseURL string, report *ProviderCheckReport) (contracts.ProviderManifest, bool) {
+func checkProviderManifest(ctx context.Context, httpClient *http.Client, baseURL, credential string, report *ProviderCheckReport) (contracts.ProviderManifest, bool) {
 	var envelope rawSuccessEnvelope
-	status, err := getEnvelope(ctx, httpClient, joinURLPath(baseURL, "/v1/provider/manifest"), &envelope)
+	status, err := getEnvelope(ctx, httpClient, joinURLPath(baseURL, "/v1/provider/manifest"), credential, &envelope)
 	result := ProviderCheckResult{Name: "provider.manifest", HTTPStatus: status}
 	if err != nil {
 		result.Error = err.Error()
@@ -97,7 +100,7 @@ func checkProviderManifest(ctx context.Context, httpClient *http.Client, baseURL
 	return manifest, true
 }
 
-func checkProviderHealth(ctx context.Context, httpClient *http.Client, baseURL string, manifest contracts.ProviderManifest, report *ProviderCheckReport) {
+func checkProviderHealth(ctx context.Context, httpClient *http.Client, baseURL, credential string, manifest contracts.ProviderManifest, report *ProviderCheckReport) {
 	healthPath := manifest.Provider.HealthPath
 	if healthPath == "" {
 		healthPath = "/v1/provider/health"
@@ -108,7 +111,7 @@ func checkProviderHealth(ctx context.Context, httpClient *http.Client, baseURL s
 			Status string `json:"status"`
 		} `json:"data"`
 	}
-	status, err := getEnvelope(ctx, httpClient, joinURLPath(baseURL, healthPath), &envelope)
+	status, err := getEnvelope(ctx, httpClient, joinURLPath(baseURL, healthPath), credential, &envelope)
 	result := ProviderCheckResult{Name: "provider.health", HTTPStatus: status}
 	if err != nil {
 		result.Error = err.Error()
@@ -155,7 +158,7 @@ func checkProviderInvoke(ctx context.Context, httpClient *http.Client, baseURL s
 	request := contracts.ProviderInvokeRequest{Input: input}
 	var envelope rawSuccessEnvelope
 	path := "/v1/provider/capabilities/" + url.PathEscape(capabilityID) + "/invoke"
-	status, err := postEnvelope(ctx, httpClient, joinURLPath(baseURL, path), request, &envelope)
+	status, err := postEnvelope(ctx, httpClient, joinURLPath(baseURL, path), opts.Credential, request, &envelope)
 	result.HTTPStatus = status
 	if err != nil {
 		result.Error = err.Error()
@@ -188,7 +191,7 @@ func checkProviderInvoke(ctx context.Context, httpClient *http.Client, baseURL s
 	return true
 }
 
-func checkProviderInvalidInput(ctx context.Context, httpClient *http.Client, baseURL string, manifest contracts.ProviderManifest, capabilityID string, report *ProviderCheckReport) {
+func checkProviderInvalidInput(ctx context.Context, httpClient *http.Client, baseURL, credential string, manifest contracts.ProviderManifest, capabilityID string, report *ProviderCheckReport) {
 	capability, ok := findCapability(manifest, capabilityID)
 	if !ok || len(requiredFields(capability.InputSchema)) == 0 {
 		return
@@ -196,7 +199,7 @@ func checkProviderInvalidInput(ctx context.Context, httpClient *http.Client, bas
 	request := contracts.ProviderInvokeRequest{Input: map[string]any{}}
 	var envelope rawErrorEnvelope
 	path := "/v1/provider/capabilities/" + url.PathEscape(capabilityID) + "/invoke"
-	status, err := postEnvelope(ctx, httpClient, joinURLPath(baseURL, path), request, &envelope)
+	status, err := postEnvelope(ctx, httpClient, joinURLPath(baseURL, path), credential, request, &envelope)
 	result := ProviderCheckResult{Name: "provider.invalid_input", HTTPStatus: status}
 	if err != nil {
 		result.Error = err.Error()
@@ -222,9 +225,9 @@ func checkProviderInvalidInput(ctx context.Context, httpClient *http.Client, bas
 	report.add(result)
 }
 
-func checkProviderMetrics(ctx context.Context, httpClient *http.Client, baseURL, capabilityID string, expectInvocation bool, report *ProviderCheckReport) {
+func checkProviderMetrics(ctx context.Context, httpClient *http.Client, baseURL, credential, capabilityID string, expectInvocation bool, report *ProviderCheckReport) {
 	var envelope rawSuccessEnvelope
-	status, err := getEnvelope(ctx, httpClient, joinURLPath(baseURL, "/v1/provider/metrics"), &envelope)
+	status, err := getEnvelope(ctx, httpClient, joinURLPath(baseURL, "/v1/provider/metrics"), credential, &envelope)
 	result := ProviderCheckResult{Name: "provider.metrics", HTTPStatus: status}
 	if err != nil {
 		result.Error = err.Error()
@@ -335,10 +338,14 @@ func requiredFields(schema map[string]any) []string {
 	}
 }
 
-func getEnvelope(ctx context.Context, httpClient *http.Client, endpoint string, out any) (int, error) {
+func getEnvelope(ctx context.Context, httpClient *http.Client, endpoint, credential string, out any) (int, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
 		return 0, err
+	}
+	credential = strings.TrimSpace(credential)
+	if credential != "" {
+		req.Header.Set("Authorization", credential)
 	}
 	resp, err := httpClient.Do(req)
 	if err != nil {
@@ -351,7 +358,7 @@ func getEnvelope(ctx context.Context, httpClient *http.Client, endpoint string, 
 	return resp.StatusCode, nil
 }
 
-func postEnvelope(ctx context.Context, httpClient *http.Client, endpoint string, body any, out any) (int, error) {
+func postEnvelope(ctx context.Context, httpClient *http.Client, endpoint, credential string, body any, out any) (int, error) {
 	raw, err := json.Marshal(body)
 	if err != nil {
 		return 0, err
@@ -361,6 +368,10 @@ func postEnvelope(ctx context.Context, httpClient *http.Client, endpoint string,
 		return 0, err
 	}
 	req.Header.Set("Content-Type", "application/json")
+	credential = strings.TrimSpace(credential)
+	if credential != "" {
+		req.Header.Set("Authorization", credential)
+	}
 	resp, err := httpClient.Do(req)
 	if err != nil {
 		return 0, err

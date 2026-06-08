@@ -30,6 +30,10 @@ func TestRunScenarioSmokeStillPasses(t *testing.T) {
 func TestRunProviderSmokeChecksLiveProvider(t *testing.T) {
 	invoked := false
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer provider-token" {
+			writeSmokeErrorEnvelope(t, w, http.StatusUnauthorized, "unauthorized", "missing token")
+			return
+		}
 		switch r.URL.Path {
 		case "/v1/provider/manifest":
 			writeSmokeEnvelope(t, w, http.StatusOK, smokeProviderManifest("http://"+r.Host))
@@ -70,6 +74,7 @@ func TestRunProviderSmokeChecksLiveProvider(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	code := run([]string{
 		"-provider-url", server.URL,
+		"-provider-credential", "provider-token",
 		"-capability-id", "cap_echo",
 		"-input", `{"message":"hello"}`,
 	}, &stdout, &stderr, server.Client())

@@ -29,6 +29,7 @@ func run(args []string, stdout, stderr io.Writer, httpClient *http.Client) int {
 	componentKind := flags.String("component-kind", "", "component kind for -component-url: artifacts, catalog, gateway, jobs, leases, node, policy, or runner")
 	componentCredential := flags.String("component-credential", "", "optional bearer credential for protected component checks")
 	providerURL := flags.String("provider-url", "", "optional live provider base URL to check instead of fixture simulation")
+	providerCredential := flags.String("provider-credential", "", "optional bearer credential for protected provider checks")
 	capabilityID := flags.String("capability-id", "", "optional provider capability id to invoke")
 	inputRaw := flags.String("input", "{}", "JSON object input for provider invocation")
 	openAPIPaths := flags.String("openapi", "", "optional comma-separated OpenAPI files to validate")
@@ -47,7 +48,7 @@ func run(args []string, stdout, stderr io.Writer, httpClient *http.Client) int {
 		return runComponentSmoke(*componentURL, *componentKind, *componentCredential, *timeout, stdout, stderr, httpClient)
 	}
 	if *providerURL != "" {
-		return runProviderSmoke(*providerURL, *capabilityID, *inputRaw, *timeout, stdout, stderr, httpClient)
+		return runProviderSmoke(*providerURL, *providerCredential, *capabilityID, *inputRaw, *timeout, stdout, stderr, httpClient)
 	}
 
 	scenario, err := testkit.LoadScenario(*root, *scenarioManifest)
@@ -165,7 +166,7 @@ func runComponentSmoke(componentURL, componentKind, credential string, timeout t
 	return 1
 }
 
-func runProviderSmoke(providerURL, capabilityID, inputRaw string, timeout time.Duration, stdout, stderr io.Writer, httpClient *http.Client) int {
+func runProviderSmoke(providerURL, credential, capabilityID, inputRaw string, timeout time.Duration, stdout, stderr io.Writer, httpClient *http.Client) int {
 	input, err := parseInput(inputRaw)
 	if err != nil {
 		fmt.Fprintf(stderr, "input: %v\n", err)
@@ -181,6 +182,7 @@ func runProviderSmoke(providerURL, capabilityID, inputRaw string, timeout time.D
 		BaseURL:      providerURL,
 		CapabilityID: capabilityID,
 		Input:        input,
+		Credential:   authorizationHeader(credential),
 	})
 	fmt.Fprintf(stdout, "provider=%s checks=%d\n", providerURL, len(report.Checks))
 	for _, check := range report.Checks {

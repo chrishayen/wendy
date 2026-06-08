@@ -37,6 +37,10 @@ func TestCheckProviderManifestAndHealth(t *testing.T) {
 func TestCheckProviderInvoke(t *testing.T) {
 	invoked := false
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer provider-token" {
+			writeTestErrorEnvelope(t, w, http.StatusUnauthorized, "unauthorized", "missing token")
+			return
+		}
 		switch r.URL.Path {
 		case "/v1/provider/manifest":
 			writeTestEnvelope(t, w, http.StatusOK, testProviderManifest(serverURL(r)))
@@ -78,6 +82,7 @@ func TestCheckProviderInvoke(t *testing.T) {
 		BaseURL:      server.URL,
 		CapabilityID: "cap_echo",
 		Input:        map[string]any{"message": "hello"},
+		Credential:   "Bearer provider-token",
 	})
 	if !report.Passed() {
 		t.Fatalf("report = %#v", report)
