@@ -251,7 +251,7 @@ func checkLeaseReleaseAudit(store *leases.Store, runnerID, jobID string, report 
 		return
 	}
 	event := events[0]
-	if event.ActorSubjectID != runnerID || event.HolderID != jobID || event.EventType != "lease.released" {
+	if event.ActorSubjectID != runnerID || event.HolderID != jobID || event.EventType != "lease.released" || event.ReleaseReason != "job completed" {
 		report.add(DistributedSmokeCheck{Name: "leases.release_audit", Error: fmt.Sprintf("event=%#v", event)})
 		return
 	}

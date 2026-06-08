@@ -174,7 +174,7 @@ func (r *Runner) runJob(ctx context.Context, job contracts.Job) error {
 	}
 
 	var lease *contracts.Lease
-	leaseReleaseReason := "job finished"
+	leaseReleaseReason := "job completed"
 	if plan.ResourceSelector != "" {
 		lease, err = r.acquireLease(ctx, job.JobID, plan.ResourceSelector)
 		if err != nil {

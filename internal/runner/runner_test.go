@@ -105,7 +105,7 @@ func TestRunnerCompletesJobAndUploadsArtifact(t *testing.T) {
 		t.Fatalf("artifact = %#v", artifact)
 	}
 	auditEvents := leaseStore.AuditEvents()
-	if len(auditEvents) != 1 || auditEvents[0].ActorSubjectID != "sub_runner_test" {
+	if len(auditEvents) != 1 || auditEvents[0].ActorSubjectID != "sub_runner_test" || auditEvents[0].ReleaseReason != "job completed" {
 		t.Fatalf("lease audit events = %#v", auditEvents)
 	}
 
