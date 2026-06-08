@@ -48,6 +48,8 @@ Contract simulation data is kept as test input, not as product behavior.
 - `cmd/pacp-policy`: runnable access policy and secrets service.
 - `cmd/pacp-node`: runnable runtime node agent for one configured service node.
 - `cmd/pacp-runner`: runnable composition runner.
+- `cmd/pacp-admin`: JSON-first operator CLI for component, gateway, and node
+  health checks.
 - `cmd/pacp-control`: JSON-first CLI for gateway health and agent-facing
   gateway operations.
 - `cmd/pacp-dev`: one-command local development stack using the real service
@@ -67,6 +69,7 @@ go run ./cmd/pacp-contract-smoke
 go run ./cmd/pacp-dev
 go run ./cmd/pacp-dev -state-dir /tmp/pacp-dev-state
 PACP_HTTP_ECHO_TOKEN='Bearer dev-token' go run ./cmd/pacp-http-provider -addr localhost:18088 -manifest testdata/http-provider/echo-manifest.json -routes testdata/http-provider/echo-routes.json -endpoint http://localhost:18088
+go run ./cmd/pacp-admin health
 go run ./cmd/pacp-control -gateway-url http://localhost:18086 health
 go run ./cmd/pacp-control -gateway-url http://localhost:18086 -token token_agent tools
 go run ./cmd/pacp-control -gateway-url http://localhost:18086 -token token_agent invoke cap_dev_echo -idempotency-key echo-1 -input '{"message":"hello"}'
@@ -134,6 +137,7 @@ curl http://localhost:18083/v1/leases/health
 curl http://localhost:18084/v1/artifacts/health
 curl http://localhost:18085/v1/policy/health
 curl http://localhost:18086/v1/gateway/health
+go run ./cmd/pacp-admin -node-url http://localhost:18087 -node-token token_agent_smoke health
 go run ./cmd/pacp-control -gateway-url http://localhost:18086 -token token_agent tools
 ```
 
@@ -141,4 +145,4 @@ This is not the full production control plane yet. It is a usable service stack
 with public HTTP boundaries, file-backed local durability, a provider SDK, a
 generic HTTP provider bridge, a composition runner, runtime node adapters, and a
 gateway control CLI. Production databases, richer provider-specific wrappers,
-and hardening remain.
+admin commands beyond health, and hardening remain.
