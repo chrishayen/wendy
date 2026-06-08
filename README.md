@@ -63,7 +63,7 @@ Contract simulation data is kept as test input, not as product behavior.
   read a provider invocation JSON object on stdin and write a provider response
   JSON object on stdout.
 - `cmd/pacp-browser-search-provider`: constrained browser/search provider with
-  file-backed search and guarded page extraction.
+  file-backed search and action-aware guarded page extraction.
 - `cmd/pacp-comfyui-provider`: purpose-specific ComfyUI image generation
   provider with workflow templates, LoRA validation, and dry-run mode.
 - `cmd/pacp-speech-provider`: purpose-specific text-to-speech and

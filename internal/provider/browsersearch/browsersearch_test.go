@@ -47,9 +47,9 @@ func TestFetchExtractsAllowedHTMLPage(t *testing.T) {
 		AllowHTTP:    true,
 	})
 
-	data := invokeProvider(t, server, FetchCapabilityID, map[string]any{"url": page.URL, "extract_text": true, "include_links": true}, http.StatusOK)
+	data := invokeProvider(t, server, FetchCapabilityID, map[string]any{"action": "extract", "url": page.URL, "extract_text": true, "include_links": true}, http.StatusOK)
 	output := data["output"].(map[string]any)
-	if output["status"].(float64) != 200 || output["title"] != "Docs" {
+	if output["action"] != "extract" || output["status"].(float64) != 200 || output["title"] != "Docs" {
 		t.Fatalf("output = %#v", output)
 	}
 	if !strings.Contains(output["text"].(string), "Hello PACP") {
@@ -70,6 +70,15 @@ func TestFetchRejectsDisallowedHost(t *testing.T) {
 	envelope := invokeProviderEnvelope(t, server, FetchCapabilityID, map[string]any{"url": "https://example.com"}, http.StatusBadRequest)
 	errObj := envelope["error"].(map[string]any)
 	if errObj["code"] != "validation_failed" {
+		t.Fatalf("error = %#v", errObj)
+	}
+}
+
+func TestFetchRejectsUnsupportedAction(t *testing.T) {
+	server := newTestServer(t, Config{Endpoint: "http://provider.local"})
+	envelope := invokeProviderEnvelope(t, server, FetchCapabilityID, map[string]any{"action": "click", "url": "http://localhost"}, http.StatusBadRequest)
+	errObj := envelope["error"].(map[string]any)
+	if errObj["code"] != "validation_failed" || !strings.Contains(errObj["message"].(string), "action") {
 		t.Fatalf("error = %#v", errObj)
 	}
 }

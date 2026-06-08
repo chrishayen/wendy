@@ -184,6 +184,10 @@ func (p *browserSearchProvider) fetch(ctx context.Context, req contracts.Provide
 	if err != nil {
 		return contracts.ProviderInvokeResponse{}, err
 	}
+	action, err := browserAction(req.Input)
+	if err != nil {
+		return contracts.ProviderInvokeResponse{}, err
+	}
 	if err := p.validateURL(rawURL); err != nil {
 		return contracts.ProviderInvokeResponse{}, err
 	}
@@ -234,6 +238,7 @@ func (p *browserSearchProvider) fetch(ctx context.Context, req contracts.Provide
 		text = normalizeWhitespace(string(body))
 	}
 	return contracts.ProviderInvokeResponse{Output: map[string]any{
+		"action":       action,
 		"url":          baseURL.String(),
 		"status":       resp.StatusCode,
 		"content_type": contentType,
@@ -457,6 +462,20 @@ func boolInput(input map[string]any, key string, fallback bool) bool {
 	return typed
 }
 
+func browserAction(input map[string]any) (string, error) {
+	value, _ := input["action"].(string)
+	value = strings.TrimSpace(strings.ToLower(value))
+	if value == "" {
+		return "fetch", nil
+	}
+	switch value {
+	case "fetch", "extract":
+		return value, nil
+	default:
+		return "", fmt.Errorf("%w: action %s is not supported", provider.ErrValidation, value)
+	}
+}
+
 func stringsSliceAsAny(values []string) []any {
 	items := make([]any, 0, len(values))
 	for _, value := range values {
@@ -525,6 +544,7 @@ func manifest(cfg Config) contracts.ProviderManifest {
 					"type":     "object",
 					"required": []any{"url"},
 					"properties": map[string]any{
+						"action":       map[string]any{"type": "string", "enum": []any{"fetch", "extract"}},
 						"url":          map[string]any{"type": "string"},
 						"extract_text": map[string]any{"type": "boolean"},
 						"include_links": map[string]any{
@@ -535,8 +555,9 @@ func manifest(cfg Config) contracts.ProviderManifest {
 				},
 				OutputSchema: map[string]any{
 					"type":     "object",
-					"required": []any{"url", "status", "content_type", "truncated"},
+					"required": []any{"action", "url", "status", "content_type", "truncated"},
 					"properties": map[string]any{
+						"action":       map[string]any{"type": "string"},
 						"url":          map[string]any{"type": "string"},
 						"status":       map[string]any{"type": "integer"},
 						"content_type": map[string]any{"type": "string"},
@@ -546,7 +567,7 @@ func manifest(cfg Config) contracts.ProviderManifest {
 						"truncated":    map[string]any{"type": "boolean"},
 					},
 				},
-				Examples:      []map[string]any{{"url": "https://example.com", "extract_text": true, "include_links": true}},
+				Examples:      []map[string]any{{"action": "fetch", "url": "https://example.com", "extract_text": true, "include_links": true}},
 				SideEffects:   "network",
 				ResourceHints: []contracts.ResourceHint{},
 				ArtifactHints: []contracts.ArtifactHint{},
