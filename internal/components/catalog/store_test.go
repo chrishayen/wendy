@@ -2,6 +2,7 @@ package catalog
 
 import (
 	"errors"
+	"path/filepath"
 	"testing"
 )
 
@@ -51,5 +52,36 @@ func TestInvalidCursor(t *testing.T) {
 	_, err := store.ListCapabilities(CapabilityFilter{Cursor: "cursor_s003_invalid"})
 	if !errors.Is(err, ErrInvalidCursor) {
 		t.Fatalf("error = %v, want ErrInvalidCursor", err)
+	}
+}
+
+func TestPersistentStoreReloadsCatalogRecordsAndRoutes(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "catalog.json")
+	store, err := NewPersistentStore(path)
+	if err != nil {
+		t.Fatalf("new persistent store: %v", err)
+	}
+	manifest := sampleManifest(t)
+	if _, err := store.RegisterManifest(manifest); err != nil {
+		t.Fatalf("register persistent manifest: %v", err)
+	}
+
+	reloaded, err := NewPersistentStore(path)
+	if err != nil {
+		t.Fatalf("reload persistent store: %v", err)
+	}
+	record, ok := reloaded.GetCapability("cap_image_generate_gpu")
+	if !ok {
+		t.Fatalf("missing reloaded capability")
+	}
+	if record.Service.ID != manifest.Service.ID {
+		t.Fatalf("service = %#v", record.Service)
+	}
+	if record.Route.ProviderEndpoint != manifest.Provider.Endpoint || record.Route.ProviderInvokePath == "" {
+		t.Fatalf("route = %#v", record.Route)
+	}
+	services := reloaded.ListServices()
+	if len(services) != 1 || services[0].ID != manifest.Service.ID {
+		t.Fatalf("services = %#v", services)
 	}
 }

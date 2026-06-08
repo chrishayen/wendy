@@ -14,8 +14,8 @@ Contract simulation data is kept as test input, not as product behavior.
 - `internal/runner`: composition runner that claims jobs, acquires leases,
   invokes providers, uploads artifacts, and completes or fails jobs through
   public APIs.
-- `internal/components/catalog`: service catalog with in-memory storage and
-  HTTP handlers.
+- `internal/components/catalog`: service catalog with in-memory or file-backed
+  provider registration storage and HTTP handlers.
 - `internal/components/gateway`: agent-facing tool discovery, invocation, job,
   log, artifact, and content gateway that composes public component APIs.
 - `internal/components/jobs`: async job lifecycle service with in-memory or
@@ -67,7 +67,7 @@ The services can also be run separately for distributed testing:
 
 ```sh
 go run ./cmd/pacp-fake-provider -addr localhost:18088
-go run ./cmd/pacp-catalog -addr localhost:18081 -manifest testdata/manifests/s003-comfyui-gpu.json
+go run ./cmd/pacp-catalog -addr localhost:18081 -manifest testdata/manifests/s003-comfyui-gpu.json -state-file /tmp/pacp-catalog-state.json
 go run ./cmd/pacp-jobs -addr localhost:18082 -state-file /tmp/pacp-jobs-state.json
 go run ./cmd/pacp-leases -addr localhost:18083 -state-file /tmp/pacp-leases-state.json
 go run ./cmd/pacp-artifacts -addr localhost:18084 -root /tmp/pacp-artifacts -state-file /tmp/pacp-artifacts-state.json

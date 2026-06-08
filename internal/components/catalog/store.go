@@ -1,8 +1,11 @@
 package catalog
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -24,6 +27,14 @@ type Store struct {
 	providers    map[string]contracts.Provider
 	capabilities map[string]contracts.Capability
 	routes       map[string]contracts.CapabilityRoute
+	snapshotPath string
+}
+
+type snapshotFile struct {
+	Version      int                             `json:"version"`
+	Services     map[string]contracts.Service    `json:"services"`
+	Providers    map[string]contracts.Provider   `json:"providers"`
+	Capabilities map[string]contracts.Capability `json:"capabilities"`
 }
 
 type CapabilityFilter struct {
@@ -35,6 +46,18 @@ type CapabilityFilter struct {
 	VisibleCapabilityIDs []string
 	Cursor               string
 	Limit                int
+}
+
+func NewPersistentStore(path string) (*Store, error) {
+	store := NewStore()
+	store.snapshotPath = path
+	if path == "" {
+		return store, nil
+	}
+	if err := store.loadSnapshot(path); err != nil {
+		return nil, err
+	}
+	return store, nil
 }
 
 func NewStore() *Store {
@@ -78,6 +101,9 @@ func (s *Store) RegisterManifest(manifest contracts.ProviderManifest) ([]string,
 		ids = append(ids, capability.ID)
 	}
 	sort.Strings(ids)
+	if err := s.saveLocked(); err != nil {
+		return nil, err
+	}
 	return ids, nil
 }
 
@@ -240,4 +266,90 @@ func hasResourceSelector(hints []contracts.ResourceHint, selector string) bool {
 		}
 	}
 	return false
+}
+
+func (s *Store) loadSnapshot(path string) error {
+	raw, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	var snapshot snapshotFile
+	if err := json.Unmarshal(raw, &snapshot); err != nil {
+		return fmt.Errorf("%w: invalid catalog snapshot: %v", ErrInvalidManifest, err)
+	}
+	s.services = map[string]contracts.Service{}
+	for id, service := range snapshot.Services {
+		if service.ID == "" {
+			service.ID = id
+		}
+		s.services[service.ID] = cloneService(service)
+	}
+	s.providers = map[string]contracts.Provider{}
+	for id, provider := range snapshot.Providers {
+		s.providers[id] = provider
+	}
+	s.capabilities = map[string]contracts.Capability{}
+	s.routes = map[string]contracts.CapabilityRoute{}
+	for id, capability := range snapshot.Capabilities {
+		if capability.ID == "" {
+			capability.ID = id
+		}
+		s.capabilities[capability.ID] = cloneCapability(capability)
+		provider := s.providers[capability.ServiceID]
+		if provider.HealthPath == "" {
+			provider.HealthPath = "/v1/provider/health"
+		}
+		s.routes[capability.ID] = buildRoute(capability.ServiceID, capability, provider)
+	}
+	return nil
+}
+
+func (s *Store) saveLocked() error {
+	if s.snapshotPath == "" {
+		return nil
+	}
+	snapshot := snapshotFile{
+		Version:      1,
+		Services:     map[string]contracts.Service{},
+		Providers:    map[string]contracts.Provider{},
+		Capabilities: map[string]contracts.Capability{},
+	}
+	for id, service := range s.services {
+		snapshot.Services[id] = cloneService(service)
+	}
+	for id, provider := range s.providers {
+		snapshot.Providers[id] = provider
+	}
+	for id, capability := range s.capabilities {
+		snapshot.Capabilities[id] = cloneCapability(capability)
+	}
+	raw, err := json.MarshalIndent(snapshot, "", "  ")
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(s.snapshotPath), 0o755); err != nil {
+		return err
+	}
+	tmpPath := s.snapshotPath + ".tmp"
+	if err := os.WriteFile(tmpPath, raw, 0o600); err != nil {
+		return err
+	}
+	return os.Rename(tmpPath, s.snapshotPath)
+}
+
+func cloneService(service contracts.Service) contracts.Service {
+	raw, _ := json.Marshal(service)
+	var cloned contracts.Service
+	_ = json.Unmarshal(raw, &cloned)
+	return cloned
+}
+
+func cloneCapability(capability contracts.Capability) contracts.Capability {
+	raw, _ := json.Marshal(capability)
+	var cloned contracts.Capability
+	_ = json.Unmarshal(raw, &cloned)
+	return cloned
 }
