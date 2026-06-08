@@ -488,6 +488,197 @@ func TestLeasesReleaseRequiresIdempotencyKey(t *testing.T) {
 	}
 }
 
+func TestPolicyCreateKeyCommandPostsKey(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/v1/api-keys" {
+			t.Fatalf("request = %s %s", r.Method, r.URL.Path)
+		}
+		if r.Header.Get("Authorization") != "Bearer component-token" {
+			t.Fatalf("Authorization = %q", r.Header.Get("Authorization"))
+		}
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatalf("decode body: %v", err)
+		}
+		if body["subject_id"] != "sub_admin" || body["token"] != "token_admin" {
+			t.Fatalf("body = %#v", body)
+		}
+		scopes := body["scopes"].([]any)
+		if len(scopes) != 2 || scopes[0] != "admin" || scopes[1] != "component" {
+			t.Fatalf("scopes = %#v", scopes)
+		}
+		writeEnvelope(t, w, http.StatusCreated, map[string]any{"key_id": "key_1", "subject_id": "sub_admin"})
+	}))
+	defer server.Close()
+
+	var stdout, stderr bytes.Buffer
+	code := run([]string{
+		"-policy-url", server.URL,
+		"-component-token", "component-token",
+		"policy", "create-key",
+		"-subject-id", "sub_admin",
+		"-scopes", "admin,component",
+		"-token", "token_admin",
+	}, &stdout, &stderr, server.Client())
+	if code != 0 {
+		t.Fatalf("code=%d stderr=%s stdout=%s", code, stderr.String(), stdout.String())
+	}
+	if !strings.Contains(stdout.String(), `"key_id": "key_1"`) {
+		t.Fatalf("stdout = %s", stdout.String())
+	}
+}
+
+func TestPolicyRevokeKeyCommandPostsRevoke(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/v1/api-keys/key_1/revoke" {
+			t.Fatalf("request = %s %s", r.Method, r.URL.Path)
+		}
+		writeEnvelope(t, w, http.StatusOK, map[string]any{"key_id": "key_1", "revoked_at": "2026-06-07T00:00:00Z"})
+	}))
+	defer server.Close()
+
+	var stdout, stderr bytes.Buffer
+	code := run([]string{"-policy-url", server.URL, "policy", "revoke-key", "key_1"}, &stdout, &stderr, server.Client())
+	if code != 0 {
+		t.Fatalf("code=%d stderr=%s stdout=%s", code, stderr.String(), stdout.String())
+	}
+	if !strings.Contains(stdout.String(), `"revoked_at": "2026-06-07T00:00:00Z"`) {
+		t.Fatalf("stdout = %s", stdout.String())
+	}
+}
+
+func TestPolicyCheckCommandPostsDecisionRequest(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/v1/policy/check" {
+			t.Fatalf("request = %s %s", r.Method, r.URL.Path)
+		}
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatalf("decode body: %v", err)
+		}
+		if body["subject_id"] != "sub_agent" || body["action"] != "tool.invoke" || body["resource"] != "cap_image" {
+			t.Fatalf("body = %#v", body)
+		}
+		context := body["context"].(map[string]any)
+		if context["job_state"] != "queued" {
+			t.Fatalf("context = %#v", context)
+		}
+		writeEnvelope(t, w, http.StatusOK, map[string]any{"allowed": true, "reason": "builtin_allow"})
+	}))
+	defer server.Close()
+
+	var stdout, stderr bytes.Buffer
+	code := run([]string{
+		"-policy-url", server.URL,
+		"policy", "check",
+		"-subject-id", "sub_agent",
+		"-action", "tool.invoke",
+		"-resource", "cap_image",
+		"-context", `{"job_state":"queued"}`,
+	}, &stdout, &stderr, server.Client())
+	if code != 0 {
+		t.Fatalf("code=%d stderr=%s stdout=%s", code, stderr.String(), stdout.String())
+	}
+	if !strings.Contains(stdout.String(), `"allowed": true`) {
+		t.Fatalf("stdout = %s", stdout.String())
+	}
+}
+
+func TestPolicyCreateRuleCommandPostsRule(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/v1/policy/rules" {
+			t.Fatalf("request = %s %s", r.Method, r.URL.Path)
+		}
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatalf("decode body: %v", err)
+		}
+		if body["scope"] != "agent" || body["action"] != "tool.invoke" || body["resource"] != "cap_image" || body["effect"] != "allow" {
+			t.Fatalf("body = %#v", body)
+		}
+		writeEnvelope(t, w, http.StatusCreated, map[string]any{"rule_id": "rule_1", "effect": "allow"})
+	}))
+	defer server.Close()
+
+	var stdout, stderr bytes.Buffer
+	code := run([]string{
+		"-policy-url", server.URL,
+		"policy", "create-rule",
+		"-scope", "agent",
+		"-action", "tool.invoke",
+		"-resource", "cap_image",
+		"-effect", "allow",
+	}, &stdout, &stderr, server.Client())
+	if code != 0 {
+		t.Fatalf("code=%d stderr=%s stdout=%s", code, stderr.String(), stdout.String())
+	}
+	if !strings.Contains(stdout.String(), `"rule_id": "rule_1"`) {
+		t.Fatalf("stdout = %s", stdout.String())
+	}
+}
+
+func TestPolicyCreateSecretCommandReadsValueEnv(t *testing.T) {
+	t.Setenv("PACP_TEST_SECRET", "super-secret")
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/v1/secrets" {
+			t.Fatalf("request = %s %s", r.Method, r.URL.Path)
+		}
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatalf("decode body: %v", err)
+		}
+		if body["name"] != "provider_token" || body["value"] != "super-secret" {
+			t.Fatalf("body = %#v", body)
+		}
+		writeEnvelope(t, w, http.StatusCreated, map[string]any{"secret_ref": "secret_1", "name": "provider_token"})
+	}))
+	defer server.Close()
+
+	var stdout, stderr bytes.Buffer
+	code := run([]string{
+		"-policy-url", server.URL,
+		"policy", "create-secret",
+		"-name", "provider_token",
+		"-value-env", "PACP_TEST_SECRET",
+	}, &stdout, &stderr, server.Client())
+	if code != 0 {
+		t.Fatalf("code=%d stderr=%s stdout=%s", code, stderr.String(), stdout.String())
+	}
+	if !strings.Contains(stdout.String(), `"secret_ref": "secret_1"`) {
+		t.Fatalf("stdout = %s", stdout.String())
+	}
+}
+
+func TestPolicyRedactCommandPostsText(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/v1/redact" {
+			t.Fatalf("request = %s %s", r.Method, r.URL.Path)
+		}
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatalf("decode body: %v", err)
+		}
+		if body["text"] != "token is super-secret" {
+			t.Fatalf("body = %#v", body)
+		}
+		writeEnvelope(t, w, http.StatusOK, map[string]any{"text": "token is [REDACTED]"})
+	}))
+	defer server.Close()
+
+	var stdout, stderr bytes.Buffer
+	code := run([]string{
+		"-policy-url", server.URL,
+		"policy", "redact",
+		"-text", "token is super-secret",
+	}, &stdout, &stderr, server.Client())
+	if code != 0 {
+		t.Fatalf("code=%d stderr=%s stdout=%s", code, stderr.String(), stdout.String())
+	}
+	if !strings.Contains(stdout.String(), `"text": "token is [REDACTED]"`) {
+		t.Fatalf("stdout = %s", stdout.String())
+	}
+}
+
 func TestNodeCommandRequiresNodeURL(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	code := run([]string{"-node-url", "", "node", "services"}, &stdout, &stderr, http.DefaultClient)

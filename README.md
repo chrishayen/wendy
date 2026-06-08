@@ -85,6 +85,9 @@ go run ./cmd/pacp-admin leases create-request -requester-id job_manual -selector
 go run ./cmd/pacp-admin leases cancel-request lease_req_000001 -reason "operator cleanup"
 go run ./cmd/pacp-admin leases release lease_000001 -holder-id job_manual -idempotency-key release-1 -actor-subject-id sub_admin -reason "operator release"
 go run ./cmd/pacp-admin artifacts list
+go run ./cmd/pacp-admin policy create-key -subject-id sub_admin -scopes admin,component
+go run ./cmd/pacp-admin policy check -subject-id sub_agent -action tool.invoke -resource cap_image_generate
+PACP_PROVIDER_TOKEN='secret-value' go run ./cmd/pacp-admin policy create-secret -name provider_token -value-env PACP_PROVIDER_TOKEN
 go run ./cmd/pacp-bundle -bundle testdata/deploy/generic-gpu-bundle.json -out-dir /tmp/pacp-bundle
 go run ./cmd/pacp-primary -manifest /tmp/pacp-bundle/catalog -resources /tmp/pacp-bundle/leases/resources.json -policy-seed /tmp/pacp-bundle/policy/policy-seed.json -state-dir /tmp/pacp-primary-state -artifact-root /tmp/pacp-primary-artifacts -disable-runner
 go run ./cmd/pacp-control -gateway-url http://localhost:18086 health

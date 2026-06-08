@@ -119,6 +119,8 @@ func run(args []string, stdout, stderr io.Writer, httpClient *http.Client) int {
 		return leasesCommand(cfg, httpClient, remaining[1:], stdout, stderr)
 	case "artifacts":
 		return artifactsCommand(cfg, httpClient, remaining[1:], stdout, stderr)
+	case "policy":
+		return policyCommand(cfg, httpClient, remaining[1:], stdout, stderr)
 	case "node":
 		return nodeCommand(cfg, httpClient, remaining[1:], stdout, stderr)
 	default:
@@ -444,6 +446,190 @@ func artifactsCommand(cfg adminConfig, httpClient *http.Client, args []string, s
 	default:
 		return usage(stderr, "usage: pacp-admin [flags] artifacts <list|artifact|upload> [id]")
 	}
+}
+
+func policyCommand(cfg adminConfig, httpClient *http.Client, args []string, stdout, stderr io.Writer) int {
+	if len(args) == 0 {
+		return usage(stderr, "usage: pacp-admin [flags] policy <create-key|revoke-key|verify|check|create-rule|create-secret|redact>")
+	}
+	switch args[0] {
+	case "create-key":
+		return policyCreateKeyCommand(cfg, httpClient, args[1:], stdout, stderr)
+	case "revoke-key":
+		if len(args) != 2 {
+			return usage(stderr, "usage: pacp-admin [flags] policy revoke-key <key-id>")
+		}
+		return postJSON(cfg, httpClient, cfg.PolicyURL, "/v1/api-keys/"+url.PathEscape(args[1])+"/revoke", authorizationHeader(cfg.ComponentToken), "", stdout, stderr)
+	case "verify":
+		return policyVerifyCommand(cfg, httpClient, args[1:], stdout, stderr)
+	case "check":
+		return policyCheckCommand(cfg, httpClient, args[1:], stdout, stderr)
+	case "create-rule":
+		return policyCreateRuleCommand(cfg, httpClient, args[1:], stdout, stderr)
+	case "create-secret":
+		return policyCreateSecretCommand(cfg, httpClient, args[1:], stdout, stderr)
+	case "redact":
+		return policyRedactCommand(cfg, httpClient, args[1:], stdout, stderr)
+	default:
+		return usage(stderr, "usage: pacp-admin [flags] policy <create-key|revoke-key|verify|check|create-rule|create-secret|redact>")
+	}
+}
+
+func policyCreateKeyCommand(cfg adminConfig, httpClient *http.Client, args []string, stdout, stderr io.Writer) int {
+	flags := flag.NewFlagSet("policy create-key", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	subjectID := flags.String("subject-id", "", "subject id")
+	scopes := flags.String("scopes", "", "comma-separated scopes")
+	token := flags.String("token", "", "optional explicit token")
+	remaining, err := parseSubcommandFlags(flags, args)
+	if err != nil {
+		return 2
+	}
+	if len(remaining) != 0 {
+		return usage(stderr, "usage: pacp-admin [flags] policy create-key -subject-id <id> -scopes <scope[,scope]> [-token token]")
+	}
+	if *subjectID == "" {
+		return usage(stderr, "subject-id is required for policy create-key")
+	}
+	scopeList := splitCSV(*scopes)
+	if len(scopeList) == 0 {
+		return usage(stderr, "scopes are required for policy create-key")
+	}
+	req := contracts.CreateAPIKeyRequest{SubjectID: *subjectID, Scopes: scopeList, Token: *token}
+	return postJSONBody(cfg, httpClient, cfg.PolicyURL, "/v1/api-keys", authorizationHeader(cfg.ComponentToken), "", req, stdout, stderr)
+}
+
+func policyVerifyCommand(cfg adminConfig, httpClient *http.Client, args []string, stdout, stderr io.Writer) int {
+	flags := flag.NewFlagSet("policy verify", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	credential := flags.String("credential", "", "credential to verify, usually 'Bearer <token>'")
+	remaining, err := parseSubcommandFlags(flags, args)
+	if err != nil {
+		return 2
+	}
+	if len(remaining) != 0 {
+		return usage(stderr, "usage: pacp-admin [flags] policy verify -credential 'Bearer <token>'")
+	}
+	if *credential == "" {
+		return usage(stderr, "credential is required for policy verify")
+	}
+	req := contracts.VerifyCredentialRequest{Credential: *credential}
+	return postJSONBody(cfg, httpClient, cfg.PolicyURL, "/v1/auth/verify", authorizationHeader(cfg.ComponentToken), "", req, stdout, stderr)
+}
+
+func policyCheckCommand(cfg adminConfig, httpClient *http.Client, args []string, stdout, stderr io.Writer) int {
+	flags := flag.NewFlagSet("policy check", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	subjectID := flags.String("subject-id", "", "subject id")
+	action := flags.String("action", "", "policy action")
+	resource := flags.String("resource", "", "policy resource")
+	contextRaw := flags.String("context", "", "JSON object context")
+	remaining, err := parseSubcommandFlags(flags, args)
+	if err != nil {
+		return 2
+	}
+	if len(remaining) != 0 {
+		return usage(stderr, "usage: pacp-admin [flags] policy check -subject-id <id> -action <action> -resource <resource> [-context JSON]")
+	}
+	if *subjectID == "" {
+		return usage(stderr, "subject-id is required for policy check")
+	}
+	if *action == "" {
+		return usage(stderr, "action is required for policy check")
+	}
+	if *resource == "" {
+		return usage(stderr, "resource is required for policy check")
+	}
+	contextObject, err := optionalJSONObject(*contextRaw)
+	if err != nil {
+		fmt.Fprintf(stderr, "context: %v\n", err)
+		return 2
+	}
+	req := contracts.PolicyCheckRequest{SubjectID: *subjectID, Action: *action, Resource: *resource, Context: contextObject}
+	return postJSONBody(cfg, httpClient, cfg.PolicyURL, "/v1/policy/check", authorizationHeader(cfg.ComponentToken), "", req, stdout, stderr)
+}
+
+func policyCreateRuleCommand(cfg adminConfig, httpClient *http.Client, args []string, stdout, stderr io.Writer) int {
+	flags := flag.NewFlagSet("policy create-rule", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	subjectID := flags.String("subject-id", "", "subject id")
+	scope := flags.String("scope", "", "scope")
+	action := flags.String("action", "", "policy action")
+	resource := flags.String("resource", "", "policy resource")
+	effect := flags.String("effect", "", "allow or deny")
+	reason := flags.String("reason", "", "human reason")
+	remaining, err := parseSubcommandFlags(flags, args)
+	if err != nil {
+		return 2
+	}
+	if len(remaining) != 0 {
+		return usage(stderr, "usage: pacp-admin [flags] policy create-rule [-subject-id id|-scope scope] -action <action> -resource <resource> -effect <allow|deny> [-reason text]")
+	}
+	if *subjectID == "" && *scope == "" {
+		return usage(stderr, "subject-id or scope is required for policy create-rule")
+	}
+	if *action == "" {
+		return usage(stderr, "action is required for policy create-rule")
+	}
+	if *resource == "" {
+		return usage(stderr, "resource is required for policy create-rule")
+	}
+	if *effect == "" {
+		return usage(stderr, "effect is required for policy create-rule")
+	}
+	req := contracts.CreatePolicyRuleRequest{SubjectID: *subjectID, Scope: *scope, Action: *action, Resource: *resource, Effect: *effect, Reason: *reason}
+	return postJSONBody(cfg, httpClient, cfg.PolicyURL, "/v1/policy/rules", authorizationHeader(cfg.ComponentToken), "", req, stdout, stderr)
+}
+
+func policyCreateSecretCommand(cfg adminConfig, httpClient *http.Client, args []string, stdout, stderr io.Writer) int {
+	flags := flag.NewFlagSet("policy create-secret", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	name := flags.String("name", "", "secret name")
+	value := flags.String("value", "", "secret value")
+	valueEnv := flags.String("value-env", "", "environment variable containing the secret value")
+	remaining, err := parseSubcommandFlags(flags, args)
+	if err != nil {
+		return 2
+	}
+	if len(remaining) != 0 {
+		return usage(stderr, "usage: pacp-admin [flags] policy create-secret -name <name> (-value <secret>|-value-env ENV)")
+	}
+	if *name == "" {
+		return usage(stderr, "name is required for policy create-secret")
+	}
+	secretValue := *value
+	if *valueEnv != "" {
+		if secretValue != "" {
+			return usage(stderr, "use only one of -value or -value-env for policy create-secret")
+		}
+		secretValue = os.Getenv(*valueEnv)
+		if secretValue == "" {
+			return usage(stderr, "value-env did not resolve to a non-empty value for policy create-secret")
+		}
+	}
+	if secretValue == "" {
+		return usage(stderr, "value or value-env is required for policy create-secret")
+	}
+	req := contracts.CreateSecretRequest{Name: *name, Value: secretValue}
+	return postJSONBody(cfg, httpClient, cfg.PolicyURL, "/v1/secrets", authorizationHeader(cfg.ComponentToken), "", req, stdout, stderr)
+}
+
+func policyRedactCommand(cfg adminConfig, httpClient *http.Client, args []string, stdout, stderr io.Writer) int {
+	flags := flag.NewFlagSet("policy redact", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	text := flags.String("text", "", "text to redact")
+	remaining, err := parseSubcommandFlags(flags, args)
+	if err != nil {
+		return 2
+	}
+	if len(remaining) != 0 {
+		return usage(stderr, "usage: pacp-admin [flags] policy redact -text <text>")
+	}
+	if *text == "" {
+		return usage(stderr, "text is required for policy redact")
+	}
+	req := contracts.RedactRequest{Text: *text}
+	return postJSONBody(cfg, httpClient, cfg.PolicyURL, "/v1/redact", authorizationHeader(cfg.ComponentToken), "", req, stdout, stderr)
 }
 
 func nodeCommand(cfg adminConfig, httpClient *http.Client, args []string, stdout, stderr io.Writer) int {
@@ -844,7 +1030,7 @@ func writePrettyJSON(w io.Writer, raw []byte) error {
 
 func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "usage: pacp-admin [flags] <command>")
-	fmt.Fprintln(w, "commands: health, catalog, jobs, leases, artifacts, node")
+	fmt.Fprintln(w, "commands: health, catalog, jobs, leases, artifacts, policy, node")
 }
 
 func loadManifestInputs(path string) ([]contracts.ProviderManifest, error) {
