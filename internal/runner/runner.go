@@ -22,6 +22,7 @@ import (
 
 type Config struct {
 	WorkerID                  string
+	CatalogURL                string
 	JobsURL                   string
 	LeasesURL                 string
 	ArtifactsURL              string
@@ -134,6 +135,7 @@ func New(cfg Config) *Runner {
 		cfg.ProviderHeartbeatInterval = 30 * time.Second
 	}
 	cfg.JobsURL = strings.TrimRight(cfg.JobsURL, "/")
+	cfg.CatalogURL = strings.TrimRight(cfg.CatalogURL, "/")
 	cfg.LeasesURL = strings.TrimRight(cfg.LeasesURL, "/")
 	cfg.ArtifactsURL = strings.TrimRight(cfg.ArtifactsURL, "/")
 	cfg.PolicyURL = strings.TrimRight(cfg.PolicyURL, "/")
@@ -183,7 +185,7 @@ func (r *Runner) RunOnce(ctx context.Context) (string, bool, error) {
 }
 
 func (r *Runner) runJob(ctx context.Context, job contracts.Job) error {
-	plan, err := parseExecutionPlan(job)
+	plan, err := r.executionPlan(ctx, job)
 	if err != nil {
 		_ = r.failJob(ctx, job.JobID, "invalid_execution_plan", err.Error())
 		return err
@@ -939,6 +941,27 @@ func (r *Runner) fetchProviderContentRefs(ctx context.Context, providerEndpoint 
 	return artifacts, nil
 }
 
+func (r *Runner) executionPlan(ctx context.Context, job contracts.Job) (executionPlan, error) {
+	plan, err := parseExecutionPlan(job)
+	if err != nil {
+		return executionPlan{}, err
+	}
+	if plan.Route.ProviderEndpoint == "" || plan.Route.ProviderInvokePath == "" {
+		route, err := r.resolveCapabilityRoute(ctx, plan.CapabilityID)
+		if err != nil {
+			return executionPlan{}, err
+		}
+		plan.Route = route
+	}
+	if plan.ResourceSelector == "" {
+		plan.ResourceSelector = firstRequiredResourceSelector(plan.Route.ResourceHints)
+	}
+	if plan.Route.ProviderEndpoint == "" || plan.Route.ProviderInvokePath == "" {
+		return executionPlan{}, errors.New("execution_plan route is incomplete")
+	}
+	return plan, nil
+}
+
 func parseExecutionPlan(job contracts.Job) (executionPlan, error) {
 	rawPlan, ok := job.Metadata["execution_plan"]
 	if !ok {
@@ -952,10 +975,30 @@ func parseExecutionPlan(job contracts.Job) (executionPlan, error) {
 	if err := json.Unmarshal(raw, &plan); err != nil {
 		return executionPlan{}, err
 	}
-	if plan.CapabilityID == "" || plan.Route.ProviderEndpoint == "" || plan.Route.ProviderInvokePath == "" {
-		return executionPlan{}, errors.New("execution_plan route is incomplete")
+	if plan.CapabilityID == "" {
+		return executionPlan{}, errors.New("execution_plan capability_id is required")
 	}
 	return plan, nil
+}
+
+func (r *Runner) resolveCapabilityRoute(ctx context.Context, capabilityID string) (contracts.CapabilityRoute, error) {
+	if r.cfg.CatalogURL == "" {
+		return contracts.CapabilityRoute{}, errors.New("catalog URL is required when execution_plan route is missing")
+	}
+	var route contracts.CapabilityRoute
+	if err := r.getJSON(ctx, r.cfg.CatalogURL+"/v1/catalog/capabilities/"+url.PathEscape(capabilityID)+"/route", &route); err != nil {
+		return contracts.CapabilityRoute{}, err
+	}
+	return route, nil
+}
+
+func firstRequiredResourceSelector(hints []contracts.ResourceHint) string {
+	for _, hint := range hints {
+		if hint.Required && hint.Selector != "" {
+			return hint.Selector
+		}
+	}
+	return ""
 }
 
 func (r *Runner) getJSON(ctx context.Context, target string, out any) error {

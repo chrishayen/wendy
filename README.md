@@ -186,7 +186,7 @@ go run ./cmd/pacp-artifacts -addr localhost:18084 -root /tmp/pacp-artifacts -sta
 go run ./cmd/pacp-policy -addr localhost:18085 -state-file /tmp/pacp-policy-state.json -seed testdata/policy/local-seed.json
 go run ./cmd/pacp-gateway -addr localhost:18086 -catalog-url http://localhost:18081 -jobs-url http://localhost:18082 -leases-url http://localhost:18083 -artifacts-url http://localhost:18084 -policy-url http://localhost:18085 -idempotency-state-file /tmp/pacp-gateway-idempotency-state.json
 go run ./cmd/pacp-node -addr localhost:18087 -config testdata/node/linux-gpu-fake.json
-go run ./cmd/pacp-runner -once -worker-id runner_local -actor-subject-id sub_runner_local -jobs-url http://localhost:18082 -leases-url http://localhost:18083 -artifacts-url http://localhost:18084 -policy-url http://localhost:18085 -credential token_worker -node-urls node_linux_gpu=http://localhost:18087 -node-start-timeout 30s -lease-poll 1s -addr localhost:18089
+go run ./cmd/pacp-runner -once -worker-id runner_local -actor-subject-id sub_runner_local -catalog-url http://localhost:18081 -jobs-url http://localhost:18082 -leases-url http://localhost:18083 -artifacts-url http://localhost:18084 -policy-url http://localhost:18085 -credential token_worker -node-urls node_linux_gpu=http://localhost:18087 -node-start-timeout 30s -lease-poll 1s -addr localhost:18089
 ```
 
 Deployment bundles are offline packaging inputs for distributed nodes. Render a
@@ -260,6 +260,9 @@ then omits the audit header and lets the lease service use its local default.
 Set `-addr` to expose `/v1/runner/health` and `/v1/runner/metrics`; set
 `-monitor-token` or `PACP_RUNNER_MONITOR_TOKEN` when those endpoints should
 require a bearer token.
+Set `-catalog-url` or `PACP_CATALOG_URL` when queued jobs contain lean execution
+plans that identify the capability and input but rely on C03 for the current
+provider route and resource hints.
 
 Use `pacp-runner -node-urls` or `PACP_NODE_URLS` for distributed nodes. The
 format is comma-separated `node_id=URL` entries, for example

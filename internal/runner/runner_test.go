@@ -121,6 +121,98 @@ func TestRunnerCompletesJobAndUploadsArtifact(t *testing.T) {
 	assertContractMetricExists(t, metrics.Samples, "runner_last_successful_heartbeat_unix_seconds", nil)
 }
 
+func TestRunnerResolvesCatalogRouteForLeanExecutionPlan(t *testing.T) {
+	jobStore := jobs.NewStore()
+	jobsServer := httptest.NewServer(jobs.NewHandler(jobStore))
+	defer jobsServer.Close()
+
+	leaseStore := leases.NewStore()
+	if _, err := leaseStore.RegisterResource(contracts.RegisterResourceRequest{Selector: "gpu", Status: contracts.ResourceAvailable}); err != nil {
+		t.Fatalf("register resource: %v", err)
+	}
+	leasesServer := httptest.NewServer(leases.NewHandler(leaseStore))
+	defer leasesServer.Close()
+
+	artifactStore, err := artifacts.NewStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("artifact store: %v", err)
+	}
+	artifactsServer := httptest.NewServer(artifacts.NewHandler(artifactStore))
+	defer artifactsServer.Close()
+
+	providerServer := httptest.NewServer(newFakeProvider(t))
+	defer providerServer.Close()
+
+	catalogHits := 0
+	route := contracts.CapabilityRoute{
+		CapabilityID:       "cap_fake_image",
+		ServiceID:          "svc_catalog_provider",
+		ProviderEndpoint:   providerServer.URL,
+		ProviderHealthPath: "/v1/provider/health",
+		ProviderInvokePath: "/v1/provider/capabilities/cap_fake_image/invoke",
+		ServiceStartMode:   "manual",
+		ResourceHints:      []contracts.ResourceHint{{Selector: "gpu", Required: true}},
+		ArtifactHints:      []contracts.ArtifactHint{{MediaType: "text/plain", Count: "one"}},
+	}
+	catalogServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/v1/catalog/capabilities/cap_fake_image/route" {
+			t.Fatalf("unexpected catalog request %s %s", r.Method, r.URL.Path)
+		}
+		if got := r.Header.Get("Authorization"); got != "Bearer token_runner" {
+			t.Fatalf("catalog Authorization = %q", got)
+		}
+		catalogHits++
+		writeRunnerTestSuccess(w, http.StatusOK, route)
+	}))
+	defer catalogServer.Close()
+
+	created, _, err := jobStore.Create(contracts.CreateJobRequest{
+		RequesterID:  "sub_agent",
+		CapabilityID: "cap_fake_image",
+		InputSummary: map[string]any{"prompt_present": true},
+		Metadata: map[string]any{"execution_plan": map[string]any{
+			"capability_id":   "cap_fake_image",
+			"subject_id":      "sub_agent",
+			"input":           map[string]any{"prompt": "red mug"},
+			"timeout_seconds": 30,
+		}},
+	}, "create-catalog-route-job")
+	if err != nil {
+		t.Fatalf("create job: %v", err)
+	}
+
+	r := New(Config{
+		WorkerID:            "runner_test",
+		CatalogURL:          catalogServer.URL,
+		JobsURL:             jobsServer.URL,
+		LeasesURL:           leasesServer.URL,
+		ArtifactsURL:        artifactsServer.URL,
+		ComponentCredential: "Bearer token_runner",
+		ActorSubjectID:      "sub_runner_test",
+		Client:              jobsServer.Client(),
+	})
+	jobID, ok, err := r.RunOnce(context.Background())
+	if err != nil {
+		t.Fatalf("run once: %v", err)
+	}
+	if !ok || jobID != created.JobID {
+		t.Fatalf("run result jobID=%q ok=%v", jobID, ok)
+	}
+	if catalogHits != 1 {
+		t.Fatalf("catalog hits = %d", catalogHits)
+	}
+	completed, err := jobStore.Get(created.JobID)
+	if err != nil {
+		t.Fatalf("get completed job: %v", err)
+	}
+	if completed.State != contracts.JobSucceeded || len(completed.ArtifactRefs) != 1 {
+		t.Fatalf("completed job = %#v", completed)
+	}
+	if events := leaseStore.AuditEvents(); len(events) != 1 || events[0].ReleaseReason != "job completed" {
+		t.Fatalf("lease audit events = %#v", events)
+	}
+}
+
 func TestRunnerCompleteJobIncludesOutputArtifactRefs(t *testing.T) {
 	var observed contracts.JobCompleteRequest
 	jobsServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

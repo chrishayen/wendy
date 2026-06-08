@@ -17,6 +17,7 @@ import (
 
 func main() {
 	workerID := flag.String("worker-id", "runner_local", "worker id used for job claims")
+	catalogURL := flag.String("catalog-url", os.Getenv("PACP_CATALOG_URL"), "optional catalog service base URL used to resolve routes for lean job execution plans")
 	jobsURL := flag.String("jobs-url", os.Getenv("PACP_JOBS_URL"), "jobs service base URL")
 	leasesURL := flag.String("leases-url", os.Getenv("PACP_LEASES_URL"), "lease service base URL")
 	artifactsURL := flag.String("artifacts-url", os.Getenv("PACP_ARTIFACTS_URL"), "artifact service base URL")
@@ -45,6 +46,7 @@ func main() {
 
 	r := runner.New(runner.Config{
 		WorkerID:            *workerID,
+		CatalogURL:          *catalogURL,
 		JobsURL:             *jobsURL,
 		LeasesURL:           *leasesURL,
 		ArtifactsURL:        *artifactsURL,
