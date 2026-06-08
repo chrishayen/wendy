@@ -50,6 +50,12 @@ func TestHandlerCredentialPolicyAndSecretFlow(t *testing.T) {
 	if redacted["text"] != "token is [REDACTED]" {
 		t.Fatalf("redacted = %#v", redacted)
 	}
+	metrics := doJSON(t, handler, http.MethodGet, "/v1/policy/metrics", nil, http.StatusOK)
+	if metrics["component"] != "policy" {
+		t.Fatalf("metrics = %#v", metrics)
+	}
+	assertMetric(t, metrics, "policy_api_keys_total", nil, 1)
+	assertMetric(t, metrics, "policy_decisions_total", map[string]string{"action": "tool.invoke", "decision": "allow"}, 1)
 }
 
 func TestHandlerMalformedCredentialError(t *testing.T) {
@@ -106,4 +112,38 @@ func doJSONEnvelope(t *testing.T, handler http.Handler, method, path string, bod
 		t.Fatalf("decode response: %v", err)
 	}
 	return envelope
+}
+
+func assertMetric(t *testing.T, data map[string]any, name string, labels map[string]string, value float64) {
+	t.Helper()
+	for _, rawSample := range data["samples"].([]any) {
+		sample := rawSample.(map[string]any)
+		if sample["name"] != name {
+			continue
+		}
+		if !labelsMatch(sample["labels"], labels) {
+			continue
+		}
+		if sample["value"] != value {
+			t.Fatalf("metric %s value=%#v want=%v", name, sample["value"], value)
+		}
+		return
+	}
+	t.Fatalf("metric %s labels=%#v not found in %#v", name, labels, data["samples"])
+}
+
+func labelsMatch(raw any, want map[string]string) bool {
+	if len(want) == 0 {
+		return raw == nil
+	}
+	labels, ok := raw.(map[string]any)
+	if !ok {
+		return false
+	}
+	for key, value := range want {
+		if labels[key] != value {
+			return false
+		}
+	}
+	return true
 }

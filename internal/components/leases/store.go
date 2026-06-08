@@ -175,6 +175,57 @@ func (s *Store) HealthDetails() map[string]any {
 	}
 }
 
+func (s *Store) Metrics() contracts.ComponentMetrics {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	samples := []contracts.MetricSample{
+		contracts.CountMetric("lease_resources_total", len(s.resources), nil),
+		contracts.CountMetric("lease_requests_total", len(s.requests), nil),
+	}
+	requestsByState := map[string]int{
+		string(contracts.LeaseRequestPending):  0,
+		string(contracts.LeaseRequestGranted):  0,
+		string(contracts.LeaseRequestCanceled): 0,
+		string(contracts.LeaseRequestExpired):  0,
+	}
+	activeLeases := 0
+	waitTotals := map[string]float64{}
+	waitCounts := map[string]int{}
+	for _, rec := range s.requests {
+		requestsByState[string(rec.request.State)]++
+		if rec.request.State == contracts.LeaseRequestGranted {
+			if seconds, ok := leaseGrantWaitSeconds(rec.request); ok {
+				selector := rec.request.ResourceSelector
+				if selector == "" {
+					selector = "unknown"
+				}
+				waitTotals[selector] += seconds
+				waitCounts[selector]++
+			}
+		}
+	}
+	for _, rec := range s.leases {
+		if rec.state == leaseActive {
+			activeLeases++
+		}
+	}
+	for state, count := range requestsByState {
+		samples = append(samples, contracts.CountMetric("lease_requests_by_state", count, map[string]string{"state": state}))
+	}
+	for selector, queue := range s.queues {
+		samples = append(samples, contracts.CountMetric("lease_queue_depth", len(queue), map[string]string{"selector": selector}))
+	}
+	for selector, total := range waitTotals {
+		count := waitCounts[selector]
+		if count == 0 {
+			continue
+		}
+		samples = append(samples, contracts.GaugeMetric("lease_grant_wait_seconds_avg", total/float64(count), "seconds", map[string]string{"selector": selector}))
+	}
+	samples = append(samples, contracts.CountMetric("leases_active_total", activeLeases, nil))
+	return contracts.NewComponentMetrics("leases", samples)
+}
+
 func (s *Store) SetClock(now func() time.Time) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -966,4 +1017,19 @@ func backendLabel(path string) string {
 		return "memory"
 	}
 	return "file_snapshot"
+}
+
+func leaseGrantWaitSeconds(request contracts.LeaseRequest) (float64, bool) {
+	createdAt, err := time.Parse(time.RFC3339, request.CreatedAt)
+	if err != nil {
+		return 0, false
+	}
+	updatedAt, err := time.Parse(time.RFC3339, request.UpdatedAt)
+	if err != nil {
+		return 0, false
+	}
+	if updatedAt.Before(createdAt) {
+		return 0, false
+	}
+	return updatedAt.Sub(createdAt).Seconds(), true
 }

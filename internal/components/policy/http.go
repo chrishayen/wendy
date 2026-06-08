@@ -22,6 +22,8 @@ func (h Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case path == "/v1/policy/health" && r.Method == http.MethodGet:
 		writeSuccess(w, r, http.StatusOK, contracts.NewComponentHealth("policy", h.store.HealthDetails()))
+	case path == "/v1/policy/metrics" && r.Method == http.MethodGet:
+		writeSuccess(w, r, http.StatusOK, h.store.Metrics())
 	case path == "/v1/api-keys" && r.Method == http.MethodPost:
 		h.createAPIKey(w, r)
 	case strings.HasPrefix(path, "/v1/api-keys/"):

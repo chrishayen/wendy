@@ -91,6 +91,8 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case path == "/v1/gateway/health" && r.Method == http.MethodGet:
 		writeSuccess(w, r, http.StatusOK, contracts.NewComponentHealth("gateway", h.healthDetails()))
+	case path == "/v1/gateway/metrics" && r.Method == http.MethodGet:
+		writeSuccess(w, r, http.StatusOK, h.metrics())
 	case path == "/v1/tools" && r.Method == http.MethodGet:
 		h.listTools(w, r)
 	case strings.HasPrefix(path, "/v1/tools/"):
@@ -103,6 +105,26 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	default:
 		writeError(w, r, http.StatusNotFound, "not_found", "gateway route not found", false)
 	}
+}
+
+func (h *Handler) metrics() contracts.ComponentMetrics {
+	samples := []contracts.MetricSample{
+		contracts.CountMetric("gateway_idempotency_records_total", h.idempotency.recordCount(), nil),
+	}
+	downstreams := map[string]bool{
+		"catalog":   h.cfg.CatalogURL != "",
+		"policy":    h.cfg.PolicyURL != "",
+		"jobs":      h.cfg.JobsURL != "",
+		"artifacts": h.cfg.ArtifactsURL != "",
+	}
+	for name, configured := range downstreams {
+		value := 0
+		if configured {
+			value = 1
+		}
+		samples = append(samples, contracts.CountMetric("gateway_downstream_configured", value, map[string]string{"downstream": name}))
+	}
+	return contracts.NewComponentMetrics("gateway", samples)
 }
 
 func (h *Handler) healthDetails() map[string]any {

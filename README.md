@@ -208,6 +208,9 @@ curl http://localhost:18083/v1/leases/health
 curl http://localhost:18084/v1/artifacts/health
 curl http://localhost:18085/v1/policy/health
 curl http://localhost:18086/v1/gateway/health
+curl http://localhost:18082/v1/jobs/metrics
+curl http://localhost:18083/v1/leases/metrics
+curl http://localhost:18086/v1/gateway/metrics
 go run ./cmd/pacp-admin -node-url http://localhost:18087 -node-token token_agent_smoke health
 go run ./cmd/pacp-admin -node-urls node_linux_gpu=http://localhost:18087 -node-token token_agent_smoke health -providers
 go run ./cmd/pacp-admin catalog route cap_image_generate_gpu

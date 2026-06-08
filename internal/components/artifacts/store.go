@@ -191,6 +191,36 @@ func (s *Store) HealthDetails() map[string]any {
 	}
 }
 
+func (s *Store) Metrics() contracts.ComponentMetrics {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	samples := []contracts.MetricSample{
+		contracts.CountMetric("artifacts_total", len(s.artifacts), nil),
+		contracts.CountMetric("artifact_uploads_total", len(s.uploads), nil),
+		contracts.CountMetric("artifact_idempotency_records_total", len(s.idempotency), nil),
+	}
+	totalBytes := int64(0)
+	for _, rec := range s.artifacts {
+		totalBytes += rec.artifact.Size
+	}
+	samples = append(samples, contracts.GaugeMetric("artifact_bytes_total", float64(totalBytes), "bytes", nil))
+	uploadsByState := map[string]int{
+		string(contracts.ArtifactUploadCreated):   0,
+		string(contracts.ArtifactUploadReceived):  0,
+		string(contracts.ArtifactUploadCompleted): 0,
+		string(contracts.ArtifactUploadAborted):   0,
+		string(contracts.ArtifactUploadExpired):   0,
+	}
+	for _, upload := range s.uploads {
+		uploadsByState[string(upload.session.State)]++
+	}
+	for state, count := range uploadsByState {
+		samples = append(samples, contracts.CountMetric("artifact_uploads_by_state", count, map[string]string{"state": state}))
+	}
+	samples = append(samples, contracts.CountMetric("artifact_upload_expirations_total", uploadsByState[string(contracts.ArtifactUploadExpired)], nil))
+	return contracts.NewComponentMetrics("artifacts", samples)
+}
+
 func (s *Store) SetClock(now func() time.Time) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

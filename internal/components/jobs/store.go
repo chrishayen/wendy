@@ -127,6 +127,60 @@ func (s *Store) HealthDetails() map[string]any {
 	}
 }
 
+func (s *Store) Metrics() contracts.ComponentMetrics {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	samples := []contracts.MetricSample{
+		contracts.CountMetric("jobs_total", len(s.jobs), nil),
+	}
+	byState := map[string]int{
+		string(contracts.JobQueued):    0,
+		string(contracts.JobClaimed):   0,
+		string(contracts.JobRunning):   0,
+		string(contracts.JobSucceeded): 0,
+		string(contracts.JobFailed):    0,
+		string(contracts.JobCanceled):  0,
+		string(contracts.JobExpired):   0,
+	}
+	activeClaims := 0
+	logEntries := 0
+	durationTotals := map[string]float64{}
+	durationCounts := map[string]int{}
+	for _, rec := range s.jobs {
+		state := string(rec.job.State)
+		byState[state]++
+		if rec.job.Claim != nil && !s.claimExpired(rec.job.Claim) {
+			activeClaims++
+		}
+		logEntries += len(rec.logs)
+		if isTerminal(rec.job.State) {
+			capability := capabilityID(rec.job.Metadata)
+			if capability == "" {
+				capability = "unknown"
+			}
+			if duration, ok := jobDurationSeconds(rec.job); ok {
+				durationTotals[capability] += duration
+				durationCounts[capability]++
+			}
+		}
+	}
+	for state, count := range byState {
+		samples = append(samples, contracts.CountMetric("jobs_by_state", count, map[string]string{"state": state}))
+	}
+	samples = append(samples,
+		contracts.CountMetric("jobs_active_claims", activeClaims, nil),
+		contracts.CountMetric("job_log_entries_total", logEntries, nil),
+	)
+	for capability, total := range durationTotals {
+		count := durationCounts[capability]
+		if count == 0 {
+			continue
+		}
+		samples = append(samples, contracts.GaugeMetric("job_duration_seconds_avg", total/float64(count), "seconds", map[string]string{"capability_id": capability}))
+	}
+	return contracts.NewComponentMetrics("jobs", samples)
+}
+
 func (s *Store) SetClock(now func() time.Time) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -690,4 +744,19 @@ func backendLabel(path string) string {
 		return "memory"
 	}
 	return "file_snapshot"
+}
+
+func jobDurationSeconds(job contracts.Job) (float64, bool) {
+	createdAt, err := time.Parse(time.RFC3339, job.CreatedAt)
+	if err != nil {
+		return 0, false
+	}
+	updatedAt, err := time.Parse(time.RFC3339, job.UpdatedAt)
+	if err != nil {
+		return 0, false
+	}
+	if updatedAt.Before(createdAt) {
+		return 0, false
+	}
+	return updatedAt.Sub(createdAt).Seconds(), true
 }

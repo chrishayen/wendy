@@ -50,6 +50,12 @@ func (s *idempotencyStore) healthDetails() map[string]any {
 	}
 }
 
+func (s *idempotencyStore) recordCount() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return len(s.records)
+}
+
 func (s *idempotencyStore) replay(key, fingerprint string) (invokeRecord, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

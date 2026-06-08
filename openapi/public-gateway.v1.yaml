@@ -23,6 +23,20 @@ paths:
                 $ref: "#/components/schemas/HealthEnvelope"
         default:
           $ref: "#/components/responses/Error"
+  /v1/gateway/metrics:
+    get:
+      operationId: getGatewayMetrics
+      summary: Read gateway metrics without requiring downstream component calls.
+      security: []
+      responses:
+        "200":
+          description: Gateway metrics.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MetricsEnvelope"
+        default:
+          $ref: "#/components/responses/Error"
   /v1/tools:
     get:
       operationId: listTools
@@ -233,6 +247,18 @@ components:
           $ref: "#/components/schemas/Links"
         meta:
           $ref: "#/components/schemas/Meta"
+    MetricsEnvelope:
+      type: object
+      required: [ok, data, links, meta]
+      properties:
+        ok:
+          const: true
+        data:
+          $ref: "#/components/schemas/ComponentMetrics"
+        links:
+          $ref: "#/components/schemas/Links"
+        meta:
+          $ref: "#/components/schemas/Meta"
     ComponentHealth:
       type: object
       required: [status, version, checked_at]
@@ -247,6 +273,35 @@ components:
         details:
           type: object
           additionalProperties: true
+    ComponentMetrics:
+      type: object
+      required: [component, version, collected_at, samples]
+      properties:
+        component:
+          type: string
+        version:
+          type: string
+        collected_at:
+          type: string
+          format: date-time
+        samples:
+          type: array
+          items:
+            $ref: "#/components/schemas/MetricSample"
+    MetricSample:
+      type: object
+      required: [name, value]
+      properties:
+        name:
+          type: string
+        value:
+          type: number
+        unit:
+          type: string
+        labels:
+          type: object
+          additionalProperties:
+            type: string
     ToolListEnvelope:
       type: object
       required: [ok, data, links, meta]

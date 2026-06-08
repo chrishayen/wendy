@@ -82,6 +82,16 @@ func (s *Store) HealthDetails() map[string]any {
 	}
 }
 
+func (s *Store) Metrics() contracts.ComponentMetrics {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return contracts.NewComponentMetrics("catalog", []contracts.MetricSample{
+		contracts.CountMetric("catalog_services_total", len(s.services), nil),
+		contracts.CountMetric("catalog_providers_total", len(s.providers), nil),
+		contracts.CountMetric("catalog_capabilities_total", len(s.capabilities), nil),
+	})
+}
+
 func (s *Store) RegisterManifest(manifest contracts.ProviderManifest) ([]string, error) {
 	if errs := contracts.ValidateProviderManifest(manifest); len(errs) > 0 {
 		return nil, fmt.Errorf("%w: %s", ErrInvalidManifest, strings.Join(errs, "; "))

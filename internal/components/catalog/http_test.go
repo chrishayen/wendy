@@ -84,6 +84,22 @@ func TestHealthHTTP(t *testing.T) {
 	}
 }
 
+func TestMetricsHTTP(t *testing.T) {
+	handler := NewHandler(NewStore())
+	req := httptest.NewRequest(http.MethodGet, "/v1/catalog/metrics", nil)
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+	data := decodeData(t, rec.Body)
+	if data["component"] != "catalog" {
+		t.Fatalf("metrics = %#v", data)
+	}
+	assertMetric(t, data, "catalog_capabilities_total", nil, 0)
+}
+
 func TestLoadManifestsFromDirectory(t *testing.T) {
 	manifests, err := LoadManifests(filepath.Join("..", "..", "..", "testdata", "manifests"))
 	if err != nil {
@@ -167,4 +183,38 @@ func marshalReader(t *testing.T, value any) io.Reader {
 		t.Fatalf("marshal request body: %v", err)
 	}
 	return bytes.NewReader(raw)
+}
+
+func assertMetric(t *testing.T, data map[string]any, name string, labels map[string]string, value float64) {
+	t.Helper()
+	for _, rawSample := range data["samples"].([]any) {
+		sample := rawSample.(map[string]any)
+		if sample["name"] != name {
+			continue
+		}
+		if !labelsMatch(sample["labels"], labels) {
+			continue
+		}
+		if sample["value"] != value {
+			t.Fatalf("metric %s value=%#v want=%v", name, sample["value"], value)
+		}
+		return
+	}
+	t.Fatalf("metric %s labels=%#v not found in %#v", name, labels, data["samples"])
+}
+
+func labelsMatch(raw any, want map[string]string) bool {
+	if len(want) == 0 {
+		return raw == nil
+	}
+	labels, ok := raw.(map[string]any)
+	if !ok {
+		return false
+	}
+	for key, value := range want {
+		if labels[key] != value {
+			return false
+		}
+	}
+	return true
 }

@@ -23,6 +23,8 @@ func (h Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case r.Method == http.MethodGet && path == "/v1/catalog/health":
 		writeSuccess(w, r, http.StatusOK, contracts.NewComponentHealth("catalog", h.store.HealthDetails()))
+	case r.Method == http.MethodGet && path == "/v1/catalog/metrics":
+		writeSuccess(w, r, http.StatusOK, h.store.Metrics())
 	case r.Method == http.MethodPost && path == "/v1/catalog/manifests":
 		h.registerManifest(w, r)
 	case r.Method == http.MethodGet && path == "/v1/catalog/services":

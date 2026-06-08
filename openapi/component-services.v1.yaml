@@ -35,6 +35,15 @@ paths:
           $ref: "#/components/responses/Health"
         default:
           $ref: "#/components/responses/Error"
+  /v1/catalog/metrics:
+    get:
+      tags: [catalog]
+      operationId: getCatalogMetrics
+      responses:
+        "200":
+          $ref: "#/components/responses/Metrics"
+        default:
+          $ref: "#/components/responses/Error"
   /v1/catalog/manifests:
     post:
       tags: [catalog]
@@ -151,6 +160,15 @@ paths:
       responses:
         "200":
           $ref: "#/components/responses/Health"
+        default:
+          $ref: "#/components/responses/Error"
+  /v1/jobs/metrics:
+    get:
+      tags: [jobs]
+      operationId: getJobsMetrics
+      responses:
+        "200":
+          $ref: "#/components/responses/Metrics"
         default:
           $ref: "#/components/responses/Error"
   /v1/jobs:
@@ -348,6 +366,15 @@ paths:
           $ref: "#/components/responses/Health"
         default:
           $ref: "#/components/responses/Error"
+  /v1/leases/metrics:
+    get:
+      tags: [leases]
+      operationId: getLeasesMetrics
+      responses:
+        "200":
+          $ref: "#/components/responses/Metrics"
+        default:
+          $ref: "#/components/responses/Error"
   /v1/resources:
     get:
       tags: [leases]
@@ -496,6 +523,15 @@ paths:
       responses:
         "200":
           $ref: "#/components/responses/Health"
+        default:
+          $ref: "#/components/responses/Error"
+  /v1/artifacts/metrics:
+    get:
+      tags: [artifacts]
+      operationId: getArtifactsMetrics
+      responses:
+        "200":
+          $ref: "#/components/responses/Metrics"
         default:
           $ref: "#/components/responses/Error"
   /v1/artifact-uploads:
@@ -671,6 +707,15 @@ paths:
           $ref: "#/components/responses/Health"
         default:
           $ref: "#/components/responses/Error"
+  /v1/policy/metrics:
+    get:
+      tags: [policy]
+      operationId: getPolicyMetrics
+      responses:
+        "200":
+          $ref: "#/components/responses/Metrics"
+        default:
+          $ref: "#/components/responses/Error"
   /v1/api-keys:
     post:
       tags: [policy]
@@ -797,6 +842,17 @@ paths:
       responses:
         "200":
           $ref: "#/components/responses/Success"
+        default:
+          $ref: "#/components/responses/Error"
+  /v1/node/metrics:
+    get:
+      tags: [node]
+      operationId: getNodeMetrics
+      security:
+        - nodeBearer: []
+      responses:
+        "200":
+          $ref: "#/components/responses/Metrics"
         default:
           $ref: "#/components/responses/Error"
   /v1/node/resources:
@@ -978,6 +1034,17 @@ components:
                 properties:
                   data:
                     $ref: "#/components/schemas/ComponentHealth"
+    Metrics:
+      description: Component metrics envelope.
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: "#/components/schemas/SuccessEnvelope"
+              - type: object
+                properties:
+                  data:
+                    $ref: "#/components/schemas/ComponentMetrics"
     Success:
       description: Success envelope.
       content:
@@ -1045,6 +1112,35 @@ components:
           format: date-time
         details:
           $ref: "#/components/schemas/AnyMap"
+    ComponentMetrics:
+      type: object
+      required: [component, version, collected_at, samples]
+      properties:
+        component:
+          type: string
+        version:
+          type: string
+        collected_at:
+          type: string
+          format: date-time
+        samples:
+          type: array
+          items:
+            $ref: "#/components/schemas/MetricSample"
+    MetricSample:
+      type: object
+      required: [name, value]
+      properties:
+        name:
+          type: string
+        value:
+          type: number
+        unit:
+          type: string
+        labels:
+          type: object
+          additionalProperties:
+            type: string
 
     ProviderManifest:
       type: object

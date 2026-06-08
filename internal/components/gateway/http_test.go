@@ -49,6 +49,27 @@ func TestGatewayHealthDoesNotRequireDownstreamServices(t *testing.T) {
 	}
 }
 
+func TestGatewayMetricsReportsConfiguredDownstreams(t *testing.T) {
+	handler := NewHandler(Config{CatalogURL: "http://catalog.local", JobsURL: "http://jobs.local"})
+	req := httptest.NewRequest(http.MethodGet, "/v1/gateway/metrics", nil)
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("metrics status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var envelope map[string]any
+	if err := json.NewDecoder(rec.Body).Decode(&envelope); err != nil {
+		t.Fatalf("decode metrics response: %v", err)
+	}
+	data := envelope["data"].(map[string]any)
+	if data["component"] != "gateway" {
+		t.Fatalf("metrics response = %#v", envelope)
+	}
+	assertMetric(t, data, "gateway_downstream_configured", map[string]string{"downstream": "catalog"}, 1)
+	assertMetric(t, data, "gateway_downstream_configured", map[string]string{"downstream": "policy"}, 0)
+}
+
 func TestGatewayDiscoveryInvokeAndJobProjection(t *testing.T) {
 	env := newGatewayTestEnv(t)
 
@@ -94,6 +115,40 @@ func TestGatewayDiscoveryInvokeAndJobProjection(t *testing.T) {
 	if status["job_id"] != "job_000001" || status["metadata"] != nil || status["claim"] != nil {
 		t.Fatalf("job status leaked private fields = %#v", status)
 	}
+}
+
+func assertMetric(t *testing.T, data map[string]any, name string, labels map[string]string, value float64) {
+	t.Helper()
+	for _, rawSample := range data["samples"].([]any) {
+		sample := rawSample.(map[string]any)
+		if sample["name"] != name {
+			continue
+		}
+		if !labelsMatch(sample["labels"], labels) {
+			continue
+		}
+		if sample["value"] != value {
+			t.Fatalf("metric %s value=%#v want=%v", name, sample["value"], value)
+		}
+		return
+	}
+	t.Fatalf("metric %s labels=%#v not found in %#v", name, labels, data["samples"])
+}
+
+func labelsMatch(raw any, want map[string]string) bool {
+	if len(want) == 0 {
+		return raw == nil
+	}
+	labels, ok := raw.(map[string]any)
+	if !ok {
+		return false
+	}
+	for key, value := range want {
+		if labels[key] != value {
+			return false
+		}
+	}
+	return true
 }
 
 func TestGatewayCancelArtifactsAndContent(t *testing.T) {

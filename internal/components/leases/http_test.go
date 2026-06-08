@@ -96,6 +96,29 @@ func TestHandlerHealth(t *testing.T) {
 	}
 }
 
+func TestHandlerMetricsReportsQueueDepth(t *testing.T) {
+	handler := NewHandler(NewStore())
+	_ = doJSON(t, handler, http.MethodPost, "/v1/resources", map[string]any{
+		"resource_id": "res_gpu_0",
+		"selector":    "gpu",
+		"status":      "available",
+	}, nil)
+	_ = doJSON(t, handler, http.MethodPost, "/v1/lease-requests", map[string]any{
+		"requester_id":      "job_1",
+		"resource_selector": "gpu",
+	}, nil)
+	_ = doJSON(t, handler, http.MethodPost, "/v1/lease-requests", map[string]any{
+		"requester_id":      "job_2",
+		"resource_selector": "gpu",
+	}, nil)
+
+	data := doJSON(t, handler, http.MethodGet, "/v1/leases/metrics", nil, nil)
+	if data["component"] != "leases" {
+		t.Fatalf("metrics = %#v", data)
+	}
+	assertMetric(t, data, "lease_queue_depth", map[string]string{"selector": "gpu"}, 1)
+}
+
 func doJSON(t *testing.T, handler http.Handler, method, path string, body any, headers map[string]string) map[string]any {
 	t.Helper()
 	envelope := doJSONStatus(t, handler, method, path, body, headers, successStatus(method, path))
@@ -137,4 +160,38 @@ func successStatus(method, path string) int {
 		return http.StatusCreated
 	}
 	return http.StatusOK
+}
+
+func assertMetric(t *testing.T, data map[string]any, name string, labels map[string]string, value float64) {
+	t.Helper()
+	for _, rawSample := range data["samples"].([]any) {
+		sample := rawSample.(map[string]any)
+		if sample["name"] != name {
+			continue
+		}
+		if !labelsMatch(sample["labels"], labels) {
+			continue
+		}
+		if sample["value"] != value {
+			t.Fatalf("metric %s value=%#v want=%v", name, sample["value"], value)
+		}
+		return
+	}
+	t.Fatalf("metric %s labels=%#v not found in %#v", name, labels, data["samples"])
+}
+
+func labelsMatch(raw any, want map[string]string) bool {
+	if len(want) == 0 {
+		return raw == nil
+	}
+	labels, ok := raw.(map[string]any)
+	if !ok {
+		return false
+	}
+	for key, value := range want {
+		if labels[key] != value {
+			return false
+		}
+	}
+	return true
 }

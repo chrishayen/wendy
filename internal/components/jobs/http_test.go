@@ -80,6 +80,23 @@ func TestHTTPHealth(t *testing.T) {
 	}
 }
 
+func TestHTTPMetrics(t *testing.T) {
+	handler := NewHandler(NewStore())
+	createResp := requestJSON(t, handler, http.MethodPost, "/v1/jobs", createRequest())
+	if createResp.Code != http.StatusCreated {
+		t.Fatalf("create status=%d body=%s", createResp.Code, createResp.Body.String())
+	}
+	resp := requestJSON(t, handler, http.MethodGet, "/v1/jobs/metrics", nil)
+	if resp.Code != http.StatusOK {
+		t.Fatalf("metrics status=%d body=%s", resp.Code, resp.Body.String())
+	}
+	data := responseData(t, resp)
+	if data["component"] != "jobs" {
+		t.Fatalf("metrics = %#v", data)
+	}
+	assertMetric(t, data, "jobs_by_state", map[string]string{"state": "queued"}, 1)
+}
+
 func requestJSON(t *testing.T, handler http.Handler, method, path string, body any) *httptest.ResponseRecorder {
 	t.Helper()
 	var reader *bytes.Reader
@@ -112,4 +129,38 @@ func responseData(t *testing.T, rec *httptest.ResponseRecorder) map[string]any {
 		t.Fatalf("data missing from envelope: %+v", envelope)
 	}
 	return data
+}
+
+func assertMetric(t *testing.T, data map[string]any, name string, labels map[string]string, value float64) {
+	t.Helper()
+	for _, rawSample := range data["samples"].([]any) {
+		sample := rawSample.(map[string]any)
+		if sample["name"] != name {
+			continue
+		}
+		if !labelsMatch(sample["labels"], labels) {
+			continue
+		}
+		if sample["value"] != value {
+			t.Fatalf("metric %s value=%#v want=%v", name, sample["value"], value)
+		}
+		return
+	}
+	t.Fatalf("metric %s labels=%#v not found in %#v", name, labels, data["samples"])
+}
+
+func labelsMatch(raw any, want map[string]string) bool {
+	if len(want) == 0 {
+		return raw == nil
+	}
+	labels, ok := raw.(map[string]any)
+	if !ok {
+		return false
+	}
+	for key, value := range want {
+		if labels[key] != value {
+			return false
+		}
+	}
+	return true
 }

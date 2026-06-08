@@ -25,6 +25,11 @@ func (h Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		writeSuccess(w, r, http.StatusOK, h.store.Health())
+	case path == "/v1/node/metrics" && r.Method == http.MethodGet:
+		if !h.require(w, r, "node.read") {
+			return
+		}
+		writeSuccess(w, r, http.StatusOK, h.store.Metrics())
 	case path == "/v1/node/resources" && r.Method == http.MethodGet:
 		if !h.require(w, r, "node.read") {
 			return

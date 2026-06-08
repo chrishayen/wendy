@@ -32,6 +32,8 @@ type Store struct {
 	authByToken map[string]contracts.NodeAuthSubject
 	services    map[string]*serviceRecord
 	idempotency map[string]idempotentStart
+	startCount  int
+	stopCount   int
 }
 
 type serviceRecord struct {
@@ -140,6 +142,31 @@ func (s *Store) Health() contracts.NodeHealth {
 	}
 }
 
+func (s *Store) Metrics() contracts.ComponentMetrics {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	samples := []contracts.MetricSample{
+		contracts.CountMetric("node_resources_total", len(s.config.Resources), map[string]string{"node_id": s.config.NodeID}),
+		contracts.CountMetric("node_services_total", len(s.services), map[string]string{"node_id": s.config.NodeID}),
+		contracts.CountMetric("node_service_start_total", s.startCount, map[string]string{"node_id": s.config.NodeID}),
+		contracts.CountMetric("node_service_stop_total", s.stopCount, map[string]string{"node_id": s.config.NodeID}),
+	}
+	servicesByStatus := map[string]int{}
+	servicesByAdapter := map[string]int{}
+	for _, rec := range s.services {
+		s.advanceRuntimeLocked(rec)
+		servicesByStatus[rec.status]++
+		servicesByAdapter[rec.config.RuntimeAdapter]++
+	}
+	for status, count := range servicesByStatus {
+		samples = append(samples, contracts.CountMetric("node_services_by_status", count, map[string]string{"node_id": s.config.NodeID, "status": status}))
+	}
+	for adapter, count := range servicesByAdapter {
+		samples = append(samples, contracts.CountMetric("node_services_by_adapter", count, map[string]string{"node_id": s.config.NodeID, "adapter": adapter}))
+	}
+	return contracts.NewComponentMetrics("node", samples)
+}
+
 func (s *Store) Resources() []contracts.NodeResource {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -185,6 +212,7 @@ func (s *Store) StartService(serviceID, idempotencyKey string) (contracts.NodeSe
 	if !ok {
 		return contracts.NodeService{}, 0, ErrNotFound
 	}
+	s.startCount++
 	s.advanceRuntimeLocked(rec)
 	status := 200
 	switch rec.config.RuntimeAdapter {
@@ -256,6 +284,7 @@ func (s *Store) StopService(serviceID string) (contracts.NodeService, error) {
 		rec = s.services[serviceID]
 		rec.status = "stopped"
 		rec.dockerReadyDeadline = time.Time{}
+		s.stopCount++
 		service := serviceProjection(rec)
 		s.mu.Unlock()
 		return service, nil
@@ -263,6 +292,7 @@ func (s *Store) StopService(serviceID string) (contracts.NodeService, error) {
 	process := rec.process
 	rec.process = nil
 	rec.status = "stopped"
+	s.stopCount++
 	service := serviceProjection(rec)
 	timeout := processStopTimeout(rec.config)
 	s.mu.Unlock()

@@ -69,6 +69,12 @@ func TestHandlerUploadLifecycleAndContentRead(t *testing.T) {
 	if rec.Body.String() != string(body) {
 		t.Fatalf("content body = %q", rec.Body.String())
 	}
+	metrics := doJSON(t, handler, http.MethodGet, "/v1/artifacts/metrics", nil, nil, http.StatusOK)
+	if metrics["component"] != "artifacts" {
+		t.Fatalf("metrics = %#v", metrics)
+	}
+	assertMetric(t, metrics, "artifacts_total", nil, 1)
+	assertMetric(t, metrics, "artifact_uploads_by_state", map[string]string{"state": "completed"}, 1)
 }
 
 func TestHandlerMissingIdempotencyEnvelope(t *testing.T) {
@@ -151,4 +157,38 @@ func doJSONEnvelope(t *testing.T, handler http.Handler, method, path string, bod
 		t.Fatalf("decode response: %v", err)
 	}
 	return envelope
+}
+
+func assertMetric(t *testing.T, data map[string]any, name string, labels map[string]string, value float64) {
+	t.Helper()
+	for _, rawSample := range data["samples"].([]any) {
+		sample := rawSample.(map[string]any)
+		if sample["name"] != name {
+			continue
+		}
+		if !labelsMatch(sample["labels"], labels) {
+			continue
+		}
+		if sample["value"] != value {
+			t.Fatalf("metric %s value=%#v want=%v", name, sample["value"], value)
+		}
+		return
+	}
+	t.Fatalf("metric %s labels=%#v not found in %#v", name, labels, data["samples"])
+}
+
+func labelsMatch(raw any, want map[string]string) bool {
+	if len(want) == 0 {
+		return raw == nil
+	}
+	labels, ok := raw.(map[string]any)
+	if !ok {
+		return false
+	}
+	for key, value := range want {
+		if labels[key] != value {
+			return false
+		}
+	}
+	return true
 }
