@@ -85,6 +85,7 @@ func LoadScenario(root, manifestRel string) (Scenario, error) {
 
 func ValidateScenario(s Scenario) contracts.Report {
 	report := contracts.Report{}
+	knownFixtures := indexScenarioFixtureIDs(s)
 	for _, pkg := range s.Packages {
 		raw, err := os.ReadFile(pkg.AbsPath)
 		if err != nil {
@@ -101,9 +102,36 @@ func ValidateScenario(s Scenario) contracts.Report {
 				Message: fmt.Sprintf("fixture scenario_id %q does not match manifest %q", pkg.File.ScenarioID, s.Manifest.ScenarioID),
 			})
 		}
+		validateScenarioFixtureDependencies(pkg, knownFixtures, &report)
 		validatePackageBinaryFixtures(s.Root, pkg, &report)
 	}
 	return report
+}
+
+func indexScenarioFixtureIDs(s Scenario) map[string]struct{} {
+	known := map[string]struct{}{}
+	for _, pkg := range s.Packages {
+		for _, fixture := range pkg.File.Fixtures {
+			if fixture.ID != "" {
+				known[fixture.ID] = struct{}{}
+			}
+		}
+	}
+	return known
+}
+
+func validateScenarioFixtureDependencies(pkg FixturePackage, known map[string]struct{}, report *contracts.Report) {
+	for _, fixture := range pkg.File.Fixtures {
+		for _, dependency := range fixture.Dependencies {
+			if _, ok := known[dependency]; ok {
+				continue
+			}
+			report.Findings = append(report.Findings, contracts.Finding{
+				File: pkg.Path, Fixture: fixture.ID, Code: "missing_dependency_fixture",
+				Message: fmt.Sprintf("dependency %q is not present in scenario fixtures", dependency),
+			})
+		}
+	}
 }
 
 func FindPackage(s Scenario, owner string) (FixturePackage, bool) {

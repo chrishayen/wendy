@@ -291,6 +291,76 @@ func TestValidateScenarioReportsInvalidBinaryFixture(t *testing.T) {
 	}
 }
 
+func TestValidateScenarioAcceptsKnownDependencyFixture(t *testing.T) {
+	scenario := loadTempScenarioFiles(t, `{
+  "scenario_id": "S999",
+  "latest_source_run": "runs/S999/run-001.md",
+  "status": "fixture-ready",
+  "fixture_sets": [
+    {"owner": "gateway", "path": "gateway/fixtures.json"},
+    {"owner": "policy", "path": "policy/fixtures.json"}
+  ]
+}`, map[string]string{
+		"gateway/fixtures.json": `{
+  "scenario_id": "S999",
+  "component": "gateway",
+  "fixtures": [
+    {
+      "id": "public_tools_list",
+      "dependencies": ["auth_agent_ok"],
+      "request": {"method": "GET", "path": "/v1/tools"},
+      "response": {"status": 200, "body": {"ok": true, "data": {}, "links": {}, "meta": {"request_id": "req_tools", "schema_version": "v1"}}}
+    }
+  ]
+}`,
+		"policy/fixtures.json": `{
+  "scenario_id": "S999",
+  "component": "policy",
+  "fixtures": [
+    {
+      "id": "auth_agent_ok",
+      "request": {"method": "POST", "path": "/v1/auth/verify"},
+      "response": {"status": 200, "body": {"ok": true, "data": {}, "links": {}, "meta": {"request_id": "req_auth", "schema_version": "v1"}}}
+    }
+  ]
+}`,
+	})
+
+	report := ValidateScenario(scenario)
+	if !report.Passed() {
+		t.Fatalf("report = %#v", report)
+	}
+}
+
+func TestValidateScenarioReportsMissingDependencyFixture(t *testing.T) {
+	scenario := loadTempScenarioFiles(t, `{
+  "scenario_id": "S999",
+  "latest_source_run": "runs/S999/run-001.md",
+  "status": "fixture-ready",
+  "fixture_sets": [
+    {"owner": "gateway", "path": "gateway/fixtures.json"}
+  ]
+}`, map[string]string{
+		"gateway/fixtures.json": `{
+  "scenario_id": "S999",
+  "component": "gateway",
+  "fixtures": [
+    {
+      "id": "public_tools_list",
+      "dependencies": ["auth_agent_ok"],
+      "request": {"method": "GET", "path": "/v1/tools"},
+      "response": {"status": 200, "body": {"ok": true, "data": {}, "links": {}, "meta": {"request_id": "req_tools", "schema_version": "v1"}}}
+    }
+  ]
+}`,
+	})
+
+	report := ValidateScenario(scenario)
+	if report.Passed() || !hasFinding(report, "missing_dependency_fixture") {
+		t.Fatalf("report = %#v", report)
+	}
+}
+
 func TestValidateScenarioReportsWireQueryMismatch(t *testing.T) {
 	_, report := contracts.ValidateFixtureFile("provider/fixtures.json", []byte(`{
   "scenario_id": "S999",
@@ -321,15 +391,23 @@ func loadS003(t *testing.T) Scenario {
 
 func loadTempScenario(t *testing.T, manifest, fixtures string) Scenario {
 	t.Helper()
+	return loadTempScenarioFiles(t, manifest, map[string]string{"provider/fixtures.json": fixtures})
+}
+
+func loadTempScenarioFiles(t *testing.T, manifest string, fixtures map[string]string) Scenario {
+	t.Helper()
 	root := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(root, "provider"), 0o700); err != nil {
-		t.Fatalf("mkdir provider: %v", err)
+	for rel, content := range fixtures {
+		abs := filepath.Join(root, rel)
+		if err := os.MkdirAll(filepath.Dir(abs), 0o700); err != nil {
+			t.Fatalf("mkdir fixture dir: %v", err)
+		}
+		if err := os.WriteFile(abs, []byte(content), 0o600); err != nil {
+			t.Fatalf("write fixtures: %v", err)
+		}
 	}
 	if err := os.WriteFile(filepath.Join(root, "manifest.json"), []byte(manifest), 0o600); err != nil {
 		t.Fatalf("write manifest: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(root, "provider", "fixtures.json"), []byte(fixtures), 0o600); err != nil {
-		t.Fatalf("write fixtures: %v", err)
 	}
 	scenario, err := LoadScenario(root, "manifest.json")
 	if err != nil {
