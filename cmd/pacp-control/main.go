@@ -80,6 +80,8 @@ func runCommand(client gatewayClient, args []string, stdout, stderr io.Writer) (
 			return 2, errors.New("usage: pacp-control job <job-id>")
 		}
 		return runJSONCommand(client, http.MethodGet, "/v1/agent/jobs/"+url.PathEscape(args[1]), nil, "", stdout, nil)
+	case "wait":
+		return waitCommand(client, args[1:], stdout, stderr)
 	case "cancel":
 		return cancelCommand(client, args[1:], stdout, stderr)
 	case "logs":
@@ -130,6 +132,65 @@ func invokeCommand(client gatewayClient, args []string, stdout, stderr io.Writer
 	}
 	path := "/v1/tools/" + url.PathEscape(remaining[0]) + "/invoke"
 	return runJSONCommand(client, http.MethodPost, path, body, *idempotencyKey, stdout, nil)
+}
+
+func waitCommand(client gatewayClient, args []string, stdout, stderr io.Writer) (int, error) {
+	flags := flag.NewFlagSet("wait", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	interval := flags.Duration("interval", 2*time.Second, "poll interval")
+	timeout := flags.Duration("timeout", 10*time.Minute, "maximum wait time; zero waits forever")
+	remaining, err := parseCommandFlags(flags, args)
+	if err != nil {
+		return 2, err
+	}
+	if len(remaining) != 1 {
+		return 2, errors.New("usage: pacp-control wait <job-id> [-interval duration] [-timeout duration]")
+	}
+	if *interval <= 0 {
+		return 2, errors.New("interval must be greater than zero")
+	}
+	if *timeout < 0 {
+		return 2, errors.New("timeout must be zero or greater")
+	}
+
+	path := "/v1/agent/jobs/" + url.PathEscape(remaining[0])
+	started := time.Now()
+	for {
+		status, raw, err := getRaw(client, path)
+		if err != nil {
+			return 1, err
+		}
+		if status < 200 || status >= 300 {
+			if err := writePrettyJSON(stdout, raw); err != nil {
+				return 1, err
+			}
+			return 1, fmt.Errorf("gateway returned HTTP %d", status)
+		}
+		state, err := jobStateFromEnvelope(raw)
+		if err != nil {
+			return 1, err
+		}
+		if isTerminalJobState(state) {
+			if err := writePrettyJSON(stdout, raw); err != nil {
+				return 1, err
+			}
+			return 0, nil
+		}
+		if *timeout > 0 && time.Since(started) >= *timeout {
+			return 1, fmt.Errorf("wait timed out after %s; last state=%s", timeout.String(), state)
+		}
+		sleepFor := *interval
+		if *timeout > 0 {
+			remaining := *timeout - time.Since(started)
+			if remaining <= 0 {
+				continue
+			}
+			if remaining < sleepFor {
+				sleepFor = remaining
+			}
+		}
+		time.Sleep(sleepFor)
+	}
 }
 
 func cancelCommand(client gatewayClient, args []string, stdout, stderr io.Writer) (int, error) {
@@ -192,6 +253,19 @@ func contentCommand(client gatewayClient, artifactID string, stdout, stderr io.W
 	return 0, nil
 }
 
+func getRaw(client gatewayClient, path string) (int, []byte, error) {
+	resp, err := client.do(context.Background(), http.MethodGet, path, nil, "")
+	if err != nil {
+		return 0, nil, err
+	}
+	defer resp.Body.Close()
+	raw, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return resp.StatusCode, nil, err
+	}
+	return resp.StatusCode, raw, nil
+}
+
 func runJSONCommand(client gatewayClient, method, path string, body any, idempotencyKey string, stdout io.Writer, stderr io.Writer) (int, error) {
 	resp, err := client.do(context.Background(), method, path, body, idempotencyKey)
 	if err != nil {
@@ -209,6 +283,34 @@ func runJSONCommand(client gatewayClient, method, path string, body any, idempot
 		return 1, fmt.Errorf("gateway returned HTTP %d", resp.StatusCode)
 	}
 	return 0, nil
+}
+
+func jobStateFromEnvelope(raw []byte) (string, error) {
+	var envelope struct {
+		OK   bool `json:"ok"`
+		Data struct {
+			State string `json:"state"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(raw, &envelope); err != nil {
+		return "", fmt.Errorf("decode job response: %w", err)
+	}
+	if !envelope.OK {
+		return "", errors.New("job response was not ok")
+	}
+	if envelope.Data.State == "" {
+		return "", errors.New("job response missing state")
+	}
+	return envelope.Data.State, nil
+}
+
+func isTerminalJobState(state string) bool {
+	switch state {
+	case "succeeded", "failed", "canceled", "expired":
+		return true
+	default:
+		return false
+	}
 }
 
 type gatewayClient struct {
@@ -305,5 +407,5 @@ func commandRequiresToken(command string) bool {
 
 func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "usage: pacp-control -gateway-url URL [-token TOKEN] <command> [args]")
-	fmt.Fprintln(w, "commands: health, tools, tool, invoke, job, cancel, logs, artifacts, artifact-content")
+	fmt.Fprintln(w, "commands: health, tools, tool, invoke, job, wait, cancel, logs, artifacts, artifact-content")
 }

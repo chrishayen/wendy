@@ -150,6 +150,47 @@ func TestArtifactContentStreamsBody(t *testing.T) {
 	}
 }
 
+func TestWaitPollsUntilTerminalJob(t *testing.T) {
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/v1/agent/jobs/job_1" {
+			t.Fatalf("request = %s %s", r.Method, r.URL.Path)
+		}
+		requests++
+		state := "running"
+		if requests >= 2 {
+			state = "succeeded"
+		}
+		writeTestJSON(t, w, http.StatusOK, map[string]any{
+			"ok": true,
+			"data": map[string]any{
+				"job_id": "job_1",
+				"state":  state,
+			},
+		})
+	}))
+	defer server.Close()
+
+	var stdout, stderr bytes.Buffer
+	code := run([]string{
+		"-gateway-url", server.URL,
+		"-token", "token_agent",
+		"wait", "job_1",
+		"-interval", "1ms",
+		"-timeout", "1s",
+	}, &stdout, &stderr, server.Client())
+	if code != 0 {
+		t.Fatalf("code=%d stderr=%s", code, stderr.String())
+	}
+	if requests < 2 {
+		t.Fatalf("requests=%d", requests)
+	}
+	output := stdout.String()
+	if strings.Contains(output, `"state": "running"`) || !strings.Contains(output, `"state": "succeeded"`) {
+		t.Fatalf("stdout = %s", output)
+	}
+}
+
 func writeTestJSON(t *testing.T, w http.ResponseWriter, status int, body any) {
 	t.Helper()
 	w.Header().Set("Content-Type", "application/json")
