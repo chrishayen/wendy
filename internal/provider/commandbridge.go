@@ -92,6 +92,9 @@ func commandBridgeHandler(route CommandBridgeRoute) CapabilityHandler {
 		cmd.Stdout = &stdout
 		cmd.Stderr = &stderr
 		if err := cmd.Run(); err != nil {
+			if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+				return contracts.ProviderInvokeResponse{}, fmt.Errorf("%w: provider invocation timed out", ErrTimeout)
+			}
 			message := strings.TrimSpace(stderr.String())
 			if message == "" {
 				message = err.Error()

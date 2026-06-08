@@ -104,6 +104,24 @@ func TestServerMapsHandlerValidationError(t *testing.T) {
 	}
 }
 
+func TestServerMapsHandlerTimeoutError(t *testing.T) {
+	server, err := NewServer(testManifest(), map[string]CapabilityHandler{
+		"cap_echo": func(ctx context.Context, req contracts.ProviderInvokeRequest) (contracts.ProviderInvokeResponse, error) {
+			return contracts.ProviderInvokeResponse{}, fmt.Errorf("%w: backend exceeded route timeout", ErrTimeout)
+		},
+	})
+	if err != nil {
+		t.Fatalf("new provider: %v", err)
+	}
+	envelope := doJSONEnvelope(t, server, http.MethodPost, "/v1/provider/capabilities/cap_echo/invoke", map[string]any{
+		"input": map[string]any{"message": "hello"},
+	}, http.StatusGatewayTimeout)
+	errObj := envelope["error"].(map[string]any)
+	if errObj["code"] != "provider_timeout" || errObj["message"] != "provider invocation timed out" || errObj["retryable"] != true {
+		t.Fatalf("error = %#v", errObj)
+	}
+}
+
 func newTestProvider(t *testing.T) *Server {
 	t.Helper()
 	server, err := NewServer(testManifest(), map[string]CapabilityHandler{

@@ -114,6 +114,11 @@ func (s *Server) invoke(w http.ResponseWriter, r *http.Request, capabilityID str
 			writeError(w, r, http.StatusNotFound, "not_found", err.Error(), false)
 			return
 		}
+		if errors.Is(err, ErrTimeout) {
+			record("error", "provider_timeout")
+			writeError(w, r, http.StatusGatewayTimeout, "provider_timeout", "provider invocation timed out", true)
+			return
+		}
 		record("error", "provider_unavailable")
 		writeError(w, r, http.StatusInternalServerError, "provider_unavailable", err.Error(), true)
 		return

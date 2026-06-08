@@ -2,10 +2,13 @@ package provider
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"pacp/internal/contracts"
 )
@@ -134,6 +137,19 @@ func TestHTTPBridgeDecodesDirectProviderResponse(t *testing.T) {
 	}
 }
 
+func TestHTTPBridgeReturnsTimeoutForExpiredContext(t *testing.T) {
+	handler := httpBridgeHandler(&http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		return nil, req.Context().Err()
+	})}, HTTPBridgeRoute{URL: "http://backend.invalid/invoke", Method: http.MethodPost})
+	ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+	defer cancel()
+
+	_, err := handler(ctx, contracts.ProviderInvokeRequest{Input: map[string]any{"message": "hello"}})
+	if !errors.Is(err, ErrTimeout) {
+		t.Fatalf("error = %v", err)
+	}
+}
+
 func TestHTTPBridgeRequiresRouteForEachCapability(t *testing.T) {
 	_, err := NewHTTPBridgeServer(bridgeManifest(), HTTPBridgeConfig{Routes: map[string]HTTPBridgeRoute{}})
 	if err == nil {
@@ -167,6 +183,12 @@ func invokeBridge(t *testing.T, server http.Handler, body contracts.ProviderInvo
 
 func bytesReader(raw []byte) *bytes.Reader {
 	return bytes.NewReader(raw)
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (fn roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return fn(req)
 }
 
 func bridgeManifest() contracts.ProviderManifest {

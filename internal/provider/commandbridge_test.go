@@ -2,10 +2,13 @@ package provider
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"os"
 	"testing"
+	"time"
 
 	"pacp/internal/contracts"
 )
@@ -115,6 +118,17 @@ func TestCommandBridgeReportsCommandFailure(t *testing.T) {
 	rec := invokeBridge(t, server, contracts.ProviderInvokeRequest{Input: map[string]any{"message": "hello"}})
 	if rec.Code != http.StatusInternalServerError {
 		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestCommandBridgeReturnsTimeoutForExpiredContext(t *testing.T) {
+	handler := commandBridgeHandler(CommandBridgeRoute{Command: helperCommand(t, "echo")})
+	ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+	defer cancel()
+
+	_, err := handler(ctx, contracts.ProviderInvokeRequest{Input: map[string]any{"message": "hello"}})
+	if !errors.Is(err, ErrTimeout) {
+		t.Fatalf("error = %v", err)
 	}
 }
 

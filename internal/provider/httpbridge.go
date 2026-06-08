@@ -16,7 +16,10 @@ import (
 	"pacp/internal/contracts"
 )
 
-var ErrBackend = errors.New("provider backend error")
+var (
+	ErrBackend = errors.New("provider backend error")
+	ErrTimeout = errors.New("provider timeout")
+)
 
 type HTTPBridgeConfig struct {
 	Routes map[string]HTTPBridgeRoute `json:"routes"`
@@ -117,6 +120,9 @@ func httpBridgeHandler(client *http.Client, route HTTPBridgeRoute) CapabilityHan
 		}
 		resp, err := client.Do(httpReq)
 		if err != nil {
+			if errors.Is(err, context.DeadlineExceeded) || errors.Is(ctx.Err(), context.DeadlineExceeded) {
+				return contracts.ProviderInvokeResponse{}, fmt.Errorf("%w: provider invocation timed out", ErrTimeout)
+			}
 			return contracts.ProviderInvokeResponse{}, fmt.Errorf("%w: %s", ErrBackend, err)
 		}
 		defer resp.Body.Close()
