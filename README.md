@@ -36,7 +36,8 @@ Contract simulation data is kept as test input, not as product behavior.
 - `internal/testkit`: contract-simulation fixture loader, fixture-backed HTTP
   fake server, and fixture replay helpers for live handler contract tests.
 - `cmd/pacp-contract-smoke`: CLI smoke check for contract simulation packages,
-  OpenAPI contracts, and live provider compliance.
+  OpenAPI contracts, live component contracts, distributed component wiring,
+  and live provider compliance.
 - `cmd/pacp-fixture-server`: serves one fixture owner as an HTTP fake.
 - `cmd/pacp-fake-provider`: runnable sample provider using the provider SDK.
 - `cmd/pacp-http-provider`: generic provider bridge for HTTP backends that
@@ -129,6 +130,14 @@ go run ./cmd/pacp-control -gateway-url http://localhost:18086 -token token_agent
 go run ./cmd/pacp-control -gateway-url http://localhost:18086 -token token_agent artifacts job_000001 -out-dir /tmp/pacp-job-output
 go run ./cmd/pacp-control -gateway-url http://localhost:18086 -token token_agent artifact-content art_000001 -out /tmp/pacp-output.png
 ```
+
+The distributed smoke command starts an in-memory primary-plus-node topology and
+checks route auth separation, live component health/metrics, stable read-only
+component list surfaces, gateway invocation, runner execution, artifact
+retrieval, node service lifecycle, lease release audit, and provider invocation.
+The single-component smoke mode checks health and metrics for every component
+kind, and also checks read-only list surfaces for artifacts, catalog, jobs,
+leases, and node components.
 
 Use `pacp-dev -state-dir` when local jobs, catalog entries, leases, artifact
 metadata, policy credentials, and gateway invocation idempotency should survive
