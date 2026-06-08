@@ -40,6 +40,8 @@ func (h Handler) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		h.resourceRoute(w, r, strings.TrimPrefix(path, "/v1/resources/"))
 	case path == "/v1/lease-requests" && r.Method == http.MethodPost:
 		h.createLeaseRequest(w, r)
+	case path == "/v1/lease-requests" && r.Method == http.MethodGet:
+		h.listLeaseRequests(w, r)
 	case strings.HasPrefix(path, "/v1/lease-requests/"):
 		h.leaseRequestRoute(w, r, strings.TrimPrefix(path, "/v1/lease-requests/"))
 	case strings.HasPrefix(path, "/v1/leases/"):
@@ -157,6 +159,15 @@ func (h Handler) createLeaseRequest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeSuccess(w, r, http.StatusCreated, request)
+}
+
+func (h Handler) listLeaseRequests(w http.ResponseWriter, r *http.Request) {
+	requests, err := h.store.ListLeaseRequestsByRequester(r.URL.Query().Get("requester_id"))
+	if err != nil {
+		writeStoreError(w, r, err)
+		return
+	}
+	writeSuccess(w, r, http.StatusOK, map[string]any{"items": requests, "next_cursor": nil})
 }
 
 func (h Handler) getLeaseRequest(w http.ResponseWriter, r *http.Request, requestID string) {

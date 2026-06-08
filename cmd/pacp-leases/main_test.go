@@ -12,6 +12,7 @@ func TestLeaseScopeRulesSeparateComponentAndWorkerRoutes(t *testing.T) {
 	rules := routeauth.LeaseScopeRules()
 	assertRuleScopes(t, rules, http.MethodGet, "/v1/resources", []string{"component", "worker"})
 	assertRuleScopes(t, rules, http.MethodPost, "/v1/resources", []string{"component"})
+	assertRuleScopes(t, rules, http.MethodGet, "/v1/lease-requests", []string{"component", "worker"})
 	assertRuleScopes(t, rules, http.MethodPost, "/v1/lease-requests", []string{"worker"})
 	assertRuleScopes(t, rules, http.MethodPost, "/v1/lease-requests/{request_id}/cancel", []string{"component", "worker"})
 	assertRuleScopes(t, rules, http.MethodPost, "/v1/leases/{lease_id}/heartbeat", []string{"worker"})

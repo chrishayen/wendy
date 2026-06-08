@@ -15,6 +15,7 @@ func main() {
 	catalogURL := flag.String("catalog-url", os.Getenv("PACP_CATALOG_URL"), "catalog service base URL")
 	policyURL := flag.String("policy-url", os.Getenv("PACP_POLICY_URL"), "policy service base URL")
 	jobsURL := flag.String("jobs-url", os.Getenv("PACP_JOBS_URL"), "jobs service base URL")
+	leasesURL := flag.String("leases-url", os.Getenv("PACP_LEASES_URL"), "optional lease service base URL for agent-visible resource queue status")
 	artifactsURL := flag.String("artifacts-url", os.Getenv("PACP_ARTIFACTS_URL"), "artifact service base URL")
 	gatewayCredential := flag.String("gateway-credential", componentCredentialDefault("PACP_GATEWAY_CREDENTIAL"), "component credential for downstream calls; defaults to PACP_GATEWAY_CREDENTIAL or PACP_COMPONENT_TOKEN")
 	idempotencyStateFile := flag.String("idempotency-state-file", "", "optional JSON state file for public invocation idempotency")
@@ -28,6 +29,7 @@ func main() {
 		CatalogURL:        *catalogURL,
 		PolicyURL:         *policyURL,
 		JobsURL:           *jobsURL,
+		LeasesURL:         *leasesURL,
 		ArtifactsURL:      *artifactsURL,
 		GatewayCredential: authorizationHeader(*gatewayCredential),
 	}, *idempotencyStateFile)

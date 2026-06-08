@@ -50,6 +50,7 @@ func LeaseScopeRules() []transportauth.ScopeRule {
 		{Method: http.MethodPost, Path: "/v1/resources", Scopes: []string{"component"}, UnauthorizedMessage: componentMessage, ForbiddenMessage: forbiddenMessage},
 		{Method: http.MethodGet, Path: "/v1/resources/{resource_id}", Scopes: []string{"component", "worker"}, UnauthorizedMessage: mixedMessage, ForbiddenMessage: forbiddenMessage},
 		{Method: http.MethodGet, Path: "/v1/resources/{resource_id}/inspection", Scopes: []string{"component", "worker"}, UnauthorizedMessage: mixedMessage, ForbiddenMessage: forbiddenMessage},
+		{Method: http.MethodGet, Path: "/v1/lease-requests", Scopes: []string{"component", "worker"}, UnauthorizedMessage: mixedMessage, ForbiddenMessage: forbiddenMessage},
 		{Method: http.MethodPost, Path: "/v1/lease-requests", Scopes: []string{"worker"}, UnauthorizedMessage: workerMessage, ForbiddenMessage: forbiddenMessage},
 		{Method: http.MethodGet, Path: "/v1/lease-requests/{request_id}", Scopes: []string{"component", "worker"}, UnauthorizedMessage: mixedMessage, ForbiddenMessage: forbiddenMessage},
 		{Method: http.MethodPost, Path: "/v1/lease-requests/{request_id}/cancel", Scopes: []string{"component", "worker"}, UnauthorizedMessage: mixedMessage, ForbiddenMessage: forbiddenMessage},

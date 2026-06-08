@@ -479,6 +479,18 @@ paths:
         default:
           $ref: "#/components/responses/Error"
   /v1/lease-requests:
+    get:
+      tags: [leases]
+      operationId: listLeaseRequestsByRequester
+      x-operation-audience: [component, worker]
+      x-policy-action: lease.read
+      parameters:
+        - $ref: "#/components/parameters/RequesterID"
+      responses:
+        "200":
+          $ref: "#/components/responses/Success"
+        default:
+          $ref: "#/components/responses/Error"
     post:
       tags: [leases]
       operationId: createLeaseRequest
@@ -1169,6 +1181,12 @@ components:
     RequestID:
       name: request_id
       in: path
+      required: true
+      schema:
+        type: string
+    RequesterID:
+      name: requester_id
+      in: query
       required: true
       schema:
         type: string

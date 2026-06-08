@@ -134,6 +134,7 @@ func runPrimaryStack(ctx context.Context, cfg primaryConfig) error {
 		CatalogURL:        endpoints.CatalogURL,
 		PolicyURL:         endpoints.PolicyURL,
 		JobsURL:           endpoints.JobsURL,
+		LeasesURL:         endpoints.LeasesURL,
 		ArtifactsURL:      endpoints.ArtifactsURL,
 		GatewayCredential: authorizationHeader(cfg.GatewayCredential),
 	}, statePath(cfg, "gateway-idempotency"))

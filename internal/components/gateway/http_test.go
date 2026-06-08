@@ -21,6 +21,7 @@ import (
 	"pacp/internal/components/artifacts"
 	"pacp/internal/components/catalog"
 	"pacp/internal/components/jobs"
+	"pacp/internal/components/leases"
 	"pacp/internal/components/policy"
 	"pacp/internal/contracts"
 	"pacp/internal/provider"
@@ -129,6 +130,53 @@ func TestGatewayDiscoveryInvokeAndJobProjection(t *testing.T) {
 	status := env.doJSON(http.MethodGet, "/v1/agent/jobs/job_000001", nil, map[string]string{"Authorization": "Bearer token_agent"}, http.StatusOK)
 	if status["job_id"] != "job_000001" || status["metadata"] != nil || status["claim"] != nil {
 		t.Fatalf("job status leaked private fields = %#v", status)
+	}
+}
+
+func TestGatewayAgentJobProjectionIncludesLeaseQueueStatus(t *testing.T) {
+	env := newGatewayTestEnv(t)
+
+	invoke := env.doJSON(http.MethodPost, "/v1/tools/cap_image_generate_gpu/invoke", map[string]any{
+		"input": map[string]any{
+			"prompt": "red mug",
+			"width":  1024,
+			"height": 1024,
+		},
+		"preferred_mode": "async",
+	}, map[string]string{"Authorization": "Bearer token_agent", "Idempotency-Key": "invoke-queue"}, http.StatusAccepted)
+	jobID := invoke["job_id"].(string)
+
+	if _, err := env.leaseStore.RegisterResource(contracts.RegisterResourceRequest{
+		ResourceID: "res_gpu_0",
+		Selector:   "gpu",
+		Status:     contracts.ResourceAvailable,
+	}); err != nil {
+		t.Fatalf("register resource: %v", err)
+	}
+	if _, err := env.leaseStore.CreateLeaseRequest(contracts.CreateLeaseRequest{
+		RequesterID:      "job_holder",
+		ResourceSelector: "gpu",
+	}); err != nil {
+		t.Fatalf("create holder lease: %v", err)
+	}
+	queued, err := env.leaseStore.CreateLeaseRequest(contracts.CreateLeaseRequest{
+		RequesterID:      jobID,
+		ResourceSelector: "gpu",
+	})
+	if err != nil {
+		t.Fatalf("create queued lease: %v", err)
+	}
+	if queued.State != contracts.LeaseRequestPending || queued.QueuePosition == nil {
+		t.Fatalf("queued lease = %#v", queued)
+	}
+
+	status := env.doJSON(http.MethodGet, "/v1/agent/jobs/"+jobID, nil, map[string]string{"Authorization": "Bearer token_agent"}, http.StatusOK)
+	queue := status["queue"].(map[string]any)
+	if queue["request_id"] != queued.RequestID || queue["state"] != "pending" || queue["resource_selector"] != "gpu" {
+		t.Fatalf("queue status = %#v", queue)
+	}
+	if queue["queue_position"] != float64(1) {
+		t.Fatalf("queue position = %#v", queue)
 	}
 }
 
@@ -779,6 +827,7 @@ func TestGatewayPersistentIdempotencyReplaysSyncAfterRestart(t *testing.T) {
 type gatewayTestEnv struct {
 	gateway       http.Handler
 	jobStore      *jobs.Store
+	leaseStore    *leases.Store
 	artifactStore *artifacts.Store
 	servers       []*httptest.Server
 	t             *testing.T
@@ -806,6 +855,9 @@ func newGatewayTestEnv(t *testing.T) *gatewayTestEnv {
 	jobStore := jobs.NewStore()
 	jobsServer := httptest.NewServer(jobs.NewHandler(jobStore))
 
+	leaseStore := leases.NewStore()
+	leasesServer := httptest.NewServer(leases.NewHandler(leaseStore))
+
 	artifactStore, err := artifacts.NewStore(t.TempDir())
 	if err != nil {
 		t.Fatalf("new artifact store: %v", err)
@@ -816,6 +868,7 @@ func newGatewayTestEnv(t *testing.T) *gatewayTestEnv {
 		CatalogURL:        catalogServer.URL,
 		PolicyURL:         policyServer.URL,
 		JobsURL:           jobsServer.URL,
+		LeasesURL:         leasesServer.URL,
 		ArtifactsURL:      artifactsServer.URL,
 		GatewayCredential: "Bearer token_gateway",
 		Client:            policyServer.Client(),
@@ -823,8 +876,9 @@ func newGatewayTestEnv(t *testing.T) *gatewayTestEnv {
 	env := &gatewayTestEnv{
 		gateway:       gateway,
 		jobStore:      jobStore,
+		leaseStore:    leaseStore,
 		artifactStore: artifactStore,
-		servers:       []*httptest.Server{policyServer, catalogServer, jobsServer, artifactsServer},
+		servers:       []*httptest.Server{policyServer, catalogServer, jobsServer, leasesServer, artifactsServer},
 		t:             t,
 	}
 	t.Cleanup(func() {

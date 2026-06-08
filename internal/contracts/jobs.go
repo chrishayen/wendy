@@ -38,7 +38,17 @@ type AgentJob struct {
 	ArtifactRefs  []string       `json:"artifact_refs"`
 	LogCursor     *string        `json:"log_cursor"`
 	TerminalError *ErrorObject   `json:"terminal_error"`
+	Queue         *AgentJobQueue `json:"queue,omitempty"`
 	Links         map[string]any `json:"links"`
+}
+
+type AgentJobQueue struct {
+	RequestID        string            `json:"request_id"`
+	State            LeaseRequestState `json:"state"`
+	ResourceSelector string            `json:"resource_selector"`
+	QueuePosition    *int              `json:"queue_position"`
+	LeaseID          string            `json:"lease_id,omitempty"`
+	ResourceID       string            `json:"resource_id,omitempty"`
 }
 
 type JobClaim struct {

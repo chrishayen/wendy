@@ -82,6 +82,42 @@ func TestHandlerLeaseLifecycle(t *testing.T) {
 	}
 }
 
+func TestHandlerListsLeaseRequestsByRequester(t *testing.T) {
+	handler := NewHandler(NewStore())
+
+	_ = doJSON(t, handler, http.MethodPost, "/v1/resources", map[string]any{
+		"resource_id": "res_gpu_0",
+		"selector":    "gpu",
+		"status":      "available",
+	}, nil)
+	_ = doJSON(t, handler, http.MethodPost, "/v1/lease-requests", map[string]any{
+		"requester_id":      "job_holder",
+		"resource_selector": "gpu",
+	}, nil)
+	queued := doJSON(t, handler, http.MethodPost, "/v1/lease-requests", map[string]any{
+		"requester_id":      "job_waiting",
+		"resource_selector": "gpu",
+	}, nil)
+	if queued["state"] != "pending" || queued["queue_position"].(float64) != 1 {
+		t.Fatalf("queued request = %#v", queued)
+	}
+
+	data := doJSON(t, handler, http.MethodGet, "/v1/lease-requests?requester_id=job_waiting", nil, nil)
+	items := data["items"].([]any)
+	if len(items) != 1 {
+		t.Fatalf("lease request list = %#v", data)
+	}
+	item := items[0].(map[string]any)
+	if item["requester_id"] != "job_waiting" || item["state"] != "pending" || item["queue_position"].(float64) != 1 {
+		t.Fatalf("lease request item = %#v", item)
+	}
+
+	missingFilter := doJSONStatus(t, handler, http.MethodGet, "/v1/lease-requests", nil, nil, http.StatusBadRequest)
+	if missingFilter["error"].(map[string]any)["code"] != "validation_failed" {
+		t.Fatalf("missing requester_id error = %#v", missingFilter)
+	}
+}
+
 func TestHandlerErrorsUseStableEnvelopes(t *testing.T) {
 	handler := NewHandler(NewStore())
 	data := doJSONStatus(t, handler, http.MethodPost, "/v1/lease-requests", map[string]any{

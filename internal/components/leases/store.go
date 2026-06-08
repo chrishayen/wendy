@@ -408,6 +408,33 @@ func (s *Store) GetLeaseRequest(requestID string) (contracts.LeaseRequest, error
 	return cloneLeaseRequest(rec.request), nil
 }
 
+func (s *Store) ListLeaseRequestsByRequester(requesterID string) ([]contracts.LeaseRequest, error) {
+	if requesterID == "" {
+		return nil, fmt.Errorf("%w: requester_id is required", ErrValidation)
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.expireLeasesLocked()
+	defer func() { _ = s.saveLocked() }()
+
+	records := make([]*leaseRequestRecord, 0)
+	for _, rec := range s.requests {
+		if rec.requesterID == requesterID {
+			records = append(records, rec)
+		}
+	}
+	sort.Slice(records, func(i, j int) bool {
+		return records[i].sequence < records[j].sequence
+	})
+
+	requests := make([]contracts.LeaseRequest, 0, len(records))
+	for _, rec := range records {
+		requests = append(requests, cloneLeaseRequest(rec.request))
+	}
+	return requests, nil
+}
+
 func (s *Store) CancelLeaseRequest(requestID string, req contracts.CancelRequest) (contracts.LeaseRequest, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

@@ -214,6 +214,7 @@ func Run(ctx context.Context) DistributedSmokeReport {
 		CatalogURL:        catalogHTTP.URL,
 		PolicyURL:         policyHTTP.URL,
 		JobsURL:           jobsHTTP.URL,
+		LeasesURL:         leasesHTTP.URL,
 		ArtifactsURL:      artifactsHTTP.URL,
 		GatewayCredential: policyCredential,
 		Client:            client,

@@ -110,6 +110,7 @@ func runDevStack(ctx context.Context, cfg devConfig) error {
 		CatalogURL:        catalogURL,
 		PolicyURL:         policyURL,
 		JobsURL:           jobsURL,
+		LeasesURL:         leasesURL,
 		ArtifactsURL:      artifactsURL,
 		GatewayCredential: authorizationHeader(cfg.ComponentToken),
 	}, statePath(cfg, "gateway-idempotency"))

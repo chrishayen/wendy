@@ -31,6 +31,7 @@ type Config struct {
 	CatalogURL        string
 	PolicyURL         string
 	JobsURL           string
+	LeasesURL         string
 	ArtifactsURL      string
 	GatewayCredential string
 	Client            *http.Client
@@ -81,6 +82,7 @@ func NewPersistentHandler(cfg Config, idempotencyStatePath string) (http.Handler
 	cfg.CatalogURL = strings.TrimRight(cfg.CatalogURL, "/")
 	cfg.PolicyURL = strings.TrimRight(cfg.PolicyURL, "/")
 	cfg.JobsURL = strings.TrimRight(cfg.JobsURL, "/")
+	cfg.LeasesURL = strings.TrimRight(cfg.LeasesURL, "/")
 	cfg.ArtifactsURL = strings.TrimRight(cfg.ArtifactsURL, "/")
 	idempotency, err := newPersistentIdempotencyStore(idempotencyStatePath)
 	if err != nil {
@@ -123,6 +125,7 @@ func (h *Handler) metrics() contracts.ComponentMetrics {
 		"catalog":   h.cfg.CatalogURL != "",
 		"policy":    h.cfg.PolicyURL != "",
 		"jobs":      h.cfg.JobsURL != "",
+		"leases":    h.cfg.LeasesURL != "",
 		"artifacts": h.cfg.ArtifactsURL != "",
 	}
 	for name, configured := range downstreams {
@@ -143,6 +146,7 @@ func (h *Handler) healthDetails() map[string]any {
 			"catalog":   h.cfg.CatalogURL != "",
 			"policy":    h.cfg.PolicyURL != "",
 			"jobs":      h.cfg.JobsURL != "",
+			"leases":    h.cfg.LeasesURL != "",
 			"artifacts": h.cfg.ArtifactsURL != "",
 		},
 		"idempotency": h.idempotency.healthDetails(),
@@ -334,6 +338,10 @@ func (h *Handler) getAgentJob(w http.ResponseWriter, r *http.Request, jobID stri
 		h.writeGatewayError(w, r, err)
 		return
 	}
+	if err := h.attachQueueStatus(r.Context(), &job); err != nil {
+		h.writeGatewayError(w, r, err)
+		return
+	}
 	job.Links = agentJobLinks(job.JobID, stringToJobState(context.JobState))
 	writeSuccess(w, r, http.StatusOK, job)
 }
@@ -369,6 +377,10 @@ func (h *Handler) cancelAgentJob(w http.ResponseWriter, r *http.Request, jobID s
 		return
 	}
 	projection := projectAgentJob(job)
+	if err := h.attachQueueStatus(r.Context(), &projection); err != nil {
+		h.writeGatewayError(w, r, err)
+		return
+	}
 	projection.Links = agentJobLinks(job.JobID, job.State)
 	writeSuccess(w, r, http.StatusOK, projection)
 }
@@ -593,6 +605,35 @@ func (h *Handler) createJob(ctx context.Context, subjectID string, record contra
 	return job, err
 }
 
+func (h *Handler) attachQueueStatus(ctx context.Context, job *contracts.AgentJob) error {
+	if h.cfg.LeasesURL == "" || job == nil || job.JobID == "" {
+		return nil
+	}
+	var data struct {
+		Items []contracts.LeaseRequest `json:"items"`
+	}
+	target := h.cfg.LeasesURL + "/v1/lease-requests?requester_id=" + url.QueryEscape(job.JobID)
+	if err := h.getJSON(ctx, target, &data); err != nil {
+		return err
+	}
+	if len(data.Items) == 0 {
+		return nil
+	}
+	request := latestLeaseRequest(data.Items)
+	queue := &contracts.AgentJobQueue{
+		RequestID:        request.RequestID,
+		State:            request.State,
+		ResourceSelector: request.ResourceSelector,
+		QueuePosition:    request.QueuePosition,
+	}
+	if request.Lease != nil {
+		queue.LeaseID = request.Lease.LeaseID
+		queue.ResourceID = request.Lease.ResourceID
+	}
+	job.Queue = queue
+	return nil
+}
+
 func (h *Handler) invokeSyncProvider(w http.ResponseWriter, r *http.Request, sub subject, route contracts.CapabilityRoute, req contracts.InvokeToolRequest, idempotencyKey, fingerprint string) {
 	body := map[string]any{
 		"input": req.Input,
@@ -784,6 +825,10 @@ func agentStatusMessagePtr(value string) *string {
 		return nil
 	}
 	return &value
+}
+
+func latestLeaseRequest(requests []contracts.LeaseRequest) contracts.LeaseRequest {
+	return requests[len(requests)-1]
 }
 
 func projectArtifact(artifact contracts.Artifact) contracts.AgentArtifact {

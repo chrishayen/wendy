@@ -542,8 +542,29 @@ components:
           anyOf:
             - $ref: "#/components/schemas/ErrorObject"
             - type: "null"
+        queue:
+          anyOf:
+            - $ref: "#/components/schemas/AgentJobQueue"
+            - type: "null"
         links:
           $ref: "#/components/schemas/Links"
+    AgentJobQueue:
+      type: object
+      required: [request_id, state, resource_selector, queue_position]
+      properties:
+        request_id:
+          type: string
+        state:
+          type: string
+          enum: [pending, granted, canceled, expired]
+        resource_selector:
+          type: string
+        queue_position:
+          type: [integer, "null"]
+        lease_id:
+          type: string
+        resource_id:
+          type: string
     JobLogEntry:
       type: object
       required: [timestamp, level, message, fields]
