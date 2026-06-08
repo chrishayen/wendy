@@ -240,10 +240,14 @@ on catalog, jobs, leases, artifacts, and policy services. `pacp-gateway` uses
 leases, node starts, and artifact uploads. When the policy service is
 transport-protected by a component token, set `PACP_RUNNER_POLICY_CREDENTIAL`
 or `-policy-credential` so runner policy calls use the component credential while
-worker routes still use the worker credential. In `pacp-primary`,
-`-component-token` also becomes the default embedded gateway credential,
-embedded runner credential, and embedded runner policy credential unless the
-more specific gateway or runner credential flags are set. Raw tokens and
+worker routes still use the worker credential. When the node registry is
+transport-protected by a component token, set
+`PACP_RUNNER_NODE_REGISTRY_CREDENTIAL` or `-node-registry-credential` so node
+trust lookups use the component credential while node service calls still use
+the worker credential. In `pacp-primary`, `-component-token` also becomes the
+default embedded gateway credential, embedded runner credential, embedded runner
+policy credential, and embedded runner node-registry credential unless the more
+specific gateway or runner credential flags are set. Raw tokens and
 `Bearer ...` values are both accepted. Leaving the token unset keeps local
 service endpoints open for quick isolated testing. The example policy seed
 creates logical policy credentials for the gateway, runner, and local agent;

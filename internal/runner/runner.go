@@ -30,6 +30,7 @@ type Config struct {
 	NodeURL                   string
 	NodeURLs                  map[string]string
 	NodeRegistryURL           string
+	NodeRegistryCredential    string
 	NodeStartTimeout          time.Duration
 	NodePollInterval          time.Duration
 	LeasePollInterval         time.Duration
@@ -603,7 +604,7 @@ func (r *Runner) nodeURLForRoute(ctx context.Context, route contracts.Capability
 
 func (r *Runner) getNodeRegistryRecord(ctx context.Context, nodeID string) (contracts.NodeRecord, error) {
 	var record contracts.NodeRecord
-	if err := r.getJSON(ctx, r.cfg.NodeRegistryURL+"/v1/node-registry/nodes/"+url.PathEscape(nodeID), &record); err != nil {
+	if err := r.getJSONWithCredential(ctx, r.cfg.NodeRegistryURL+"/v1/node-registry/nodes/"+url.PathEscape(nodeID), r.nodeRegistryCredential(), &record); err != nil {
 		return contracts.NodeRecord{}, err
 	}
 	return record, nil
@@ -1022,11 +1023,15 @@ func firstRequiredResourceSelector(hints []contracts.ResourceHint) string {
 }
 
 func (r *Runner) getJSON(ctx context.Context, target string, out any) error {
+	return r.getJSONWithCredential(ctx, target, r.cfg.ComponentCredential, out)
+}
+
+func (r *Runner) getJSONWithCredential(ctx context.Context, target, credential string, out any) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
 	if err != nil {
 		return err
 	}
-	r.addAuth(req)
+	r.addCredentialAuth(req, credential)
 	resp, err := r.client.Do(req)
 	if err != nil {
 		return err
@@ -1110,6 +1115,13 @@ func (r *Runner) addCredentialAuth(req *http.Request, credential string) {
 func (r *Runner) policyCredential() string {
 	if strings.TrimSpace(r.cfg.PolicyCredential) != "" {
 		return r.cfg.PolicyCredential
+	}
+	return r.cfg.ComponentCredential
+}
+
+func (r *Runner) nodeRegistryCredential() string {
+	if strings.TrimSpace(r.cfg.NodeRegistryCredential) != "" {
+		return r.cfg.NodeRegistryCredential
 	}
 	return r.cfg.ComponentCredential
 }

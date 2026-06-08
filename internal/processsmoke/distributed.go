@@ -61,7 +61,7 @@ type smokePorts struct {
 
 const (
 	processAgentToken     = "token_process_agent"
-	processComponentToken = processRunnerToken
+	processComponentToken = "token_process_component"
 	processRunnerToken    = "token_process_runner"
 	processAgentID        = "sub_process_agent"
 	processComponentID    = "sub_process_component"
@@ -194,6 +194,7 @@ func RunDistributed(ctx context.Context, cfg Config) Report {
 		"-node-registry-url", primaryURLs.nodeRegistry,
 		"-credential", processRunnerToken,
 		"-policy-credential", processComponentToken,
+		"-node-registry-credential", processComponentToken,
 		"-node-start-timeout", "5s",
 		"-node-start-poll", "50ms",
 		"-lease-poll", "50ms",
@@ -277,7 +278,8 @@ func writeInputs(root string, ports smokePorts) (inputFiles, error) {
 	}}}
 	policySeed := map[string]any{"api_keys": []contracts.CreateAPIKeyRequest{
 		{SubjectID: processAgentID, Scopes: []string{"agent"}, Token: processAgentToken},
-		{SubjectID: processRunnerID, Scopes: []string{"worker", "component"}, Token: processRunnerToken},
+		{SubjectID: processRunnerID, Scopes: []string{"worker"}, Token: processRunnerToken},
+		{SubjectID: processComponentID, Scopes: []string{"component"}, Token: processComponentToken},
 	}}
 	nodeConfig := contracts.NodeConfig{
 		NodeID: processNodeID,

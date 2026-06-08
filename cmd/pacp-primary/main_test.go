@@ -26,6 +26,13 @@ type primaryTestEnvelope struct {
 	Error contracts.ErrorObject `json:"error"`
 }
 
+func TestNormalizePrimaryConfigDefaultsRunnerNodeRegistryCredential(t *testing.T) {
+	cfg := normalizePrimaryConfig(primaryConfig{ComponentToken: "component-token"})
+	if cfg.RunnerNodeRegistryCredential != "component-token" {
+		t.Fatalf("runner node registry credential = %q", cfg.RunnerNodeRegistryCredential)
+	}
+}
+
 func TestRunPrimaryStackServesCoreHealth(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

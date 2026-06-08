@@ -30,35 +30,36 @@ import (
 )
 
 type primaryConfig struct {
-	CatalogAddr            string
-	JobsAddr               string
-	LeasesAddr             string
-	ArtifactsAddr          string
-	PolicyAddr             string
-	GatewayAddr            string
-	NodeRegistryAddr       string
-	ArtifactRoot           string
-	StateDir               string
-	ManifestPath           string
-	ResourcesPath          string
-	PolicySeedPath         string
-	ComponentToken         string
-	GatewayCredential      string
-	RunnerCredential       string
-	RunnerPolicyCredential string
-	RunnerSubjectID        string
-	RunnerActorID          string
-	WorkerID               string
-	NodeURL                string
-	NodeURLsRaw            string
-	NodeRegistryURL        string
-	NodeStartTimeout       time.Duration
-	NodeStartPoll          time.Duration
-	PollInterval           time.Duration
-	LeasePoll              time.Duration
-	DisableRunner          bool
-	RouteAwareAuth         bool
-	ready                  chan primaryEndpoints
+	CatalogAddr                  string
+	JobsAddr                     string
+	LeasesAddr                   string
+	ArtifactsAddr                string
+	PolicyAddr                   string
+	GatewayAddr                  string
+	NodeRegistryAddr             string
+	ArtifactRoot                 string
+	StateDir                     string
+	ManifestPath                 string
+	ResourcesPath                string
+	PolicySeedPath               string
+	ComponentToken               string
+	GatewayCredential            string
+	RunnerCredential             string
+	RunnerPolicyCredential       string
+	RunnerNodeRegistryCredential string
+	RunnerSubjectID              string
+	RunnerActorID                string
+	WorkerID                     string
+	NodeURL                      string
+	NodeURLsRaw                  string
+	NodeRegistryURL              string
+	NodeStartTimeout             time.Duration
+	NodeStartPoll                time.Duration
+	PollInterval                 time.Duration
+	LeasePoll                    time.Duration
+	DisableRunner                bool
+	RouteAwareAuth               bool
+	ready                        chan primaryEndpoints
 }
 
 type primaryStores struct {
@@ -104,6 +105,7 @@ func main() {
 	flag.StringVar(&cfg.GatewayCredential, "gateway-credential", componentCredentialDefault("PACP_GATEWAY_CREDENTIAL"), "component credential used by the gateway for downstream calls")
 	flag.StringVar(&cfg.RunnerCredential, "runner-credential", componentCredentialDefault("PACP_RUNNER_CREDENTIAL"), "component credential used by the runner for downstream calls")
 	flag.StringVar(&cfg.RunnerPolicyCredential, "runner-policy-credential", componentCredentialDefault("PACP_RUNNER_POLICY_CREDENTIAL"), "component credential used by the runner for policy service calls")
+	flag.StringVar(&cfg.RunnerNodeRegistryCredential, "runner-node-registry-credential", componentCredentialDefault("PACP_RUNNER_NODE_REGISTRY_CREDENTIAL"), "component credential used by the runner for node registry service calls")
 	flag.StringVar(&cfg.RunnerSubjectID, "runner-subject-id", os.Getenv("PACP_RUNNER_SUBJECT_ID"), "optional runner subject id for policy checks")
 	flag.StringVar(&cfg.RunnerActorID, "runner-actor-subject-id", os.Getenv("PACP_RUNNER_ACTOR_SUBJECT_ID"), "optional runner actor subject id for lease release audit; defaults to runner subject id")
 	flag.StringVar(&cfg.WorkerID, "worker-id", "runner_primary", "runner worker id")
@@ -169,24 +171,25 @@ func runPrimaryStack(ctx context.Context, cfg primaryConfig) error {
 			return err
 		}
 		r := runner.New(runner.Config{
-			WorkerID:            cfg.WorkerID,
-			CatalogURL:          endpoints.CatalogURL,
-			JobsURL:             endpoints.JobsURL,
-			LeasesURL:           endpoints.LeasesURL,
-			ArtifactsURL:        endpoints.ArtifactsURL,
-			PolicyURL:           endpoints.PolicyURL,
-			NodeURL:             strings.TrimRight(cfg.NodeURL, "/"),
-			NodeURLs:            nodeURLs,
-			NodeRegistryURL:     primaryNodeRegistryURL(cfg, endpoints),
-			NodeStartTimeout:    cfg.NodeStartTimeout,
-			NodePollInterval:    cfg.NodeStartPoll,
-			LeasePollInterval:   cfg.LeasePoll,
-			ComponentCredential: authorizationHeader(cfg.RunnerCredential),
-			PolicyCredential:    authorizationHeader(cfg.RunnerPolicyCredential),
-			WorkerSubjectID:     cfg.RunnerSubjectID,
-			ActorSubjectID:      cfg.RunnerActorID,
+			WorkerID:               cfg.WorkerID,
+			CatalogURL:             endpoints.CatalogURL,
+			JobsURL:                endpoints.JobsURL,
+			LeasesURL:              endpoints.LeasesURL,
+			ArtifactsURL:           endpoints.ArtifactsURL,
+			PolicyURL:              endpoints.PolicyURL,
+			NodeURL:                strings.TrimRight(cfg.NodeURL, "/"),
+			NodeURLs:               nodeURLs,
+			NodeRegistryURL:        primaryNodeRegistryURL(cfg, endpoints),
+			NodeRegistryCredential: authorizationHeader(cfg.RunnerNodeRegistryCredential),
+			NodeStartTimeout:       cfg.NodeStartTimeout,
+			NodePollInterval:       cfg.NodeStartPoll,
+			LeasePollInterval:      cfg.LeasePoll,
+			ComponentCredential:    authorizationHeader(cfg.RunnerCredential),
+			PolicyCredential:       authorizationHeader(cfg.RunnerPolicyCredential),
+			WorkerSubjectID:        cfg.RunnerSubjectID,
+			ActorSubjectID:         cfg.RunnerActorID,
 		})
-		go runnerLoop(ctx, r, cfg.PollInterval, cfg.RunnerCredential)
+		go runnerLoop(ctx, r, cfg.PollInterval, cfg.RunnerCredential, cfg.RunnerPolicyCredential, cfg.RunnerNodeRegistryCredential)
 	}
 
 	log.Printf("primary ready gateway=%s state_dir=%s runner_disabled=%t", endpoints.GatewayURL, cfg.StateDir, cfg.DisableRunner)
@@ -560,6 +563,9 @@ func normalizePrimaryConfig(cfg primaryConfig) primaryConfig {
 	}
 	if cfg.RunnerPolicyCredential == "" {
 		cfg.RunnerPolicyCredential = cfg.ComponentToken
+	}
+	if cfg.RunnerNodeRegistryCredential == "" {
+		cfg.RunnerNodeRegistryCredential = cfg.ComponentToken
 	}
 	return cfg
 }

@@ -28,6 +28,15 @@ func TestRunnerPolicyCredentialDefaultPrefersPolicyCredential(t *testing.T) {
 	}
 }
 
+func TestRunnerNodeRegistryCredentialDefaultPrefersNodeRegistryCredential(t *testing.T) {
+	t.Setenv("PACP_RUNNER_NODE_REGISTRY_CREDENTIAL", "runner-node-registry-token")
+	t.Setenv("PACP_COMPONENT_TOKEN", "component-token")
+
+	if got := componentCredentialDefault("PACP_RUNNER_NODE_REGISTRY_CREDENTIAL"); got != "runner-node-registry-token" {
+		t.Fatalf("node registry credential default = %q", got)
+	}
+}
+
 func TestRunnerAuthorizationHeaderNormalizesRawTokens(t *testing.T) {
 	if got := authorizationHeader("component-token"); got != "Bearer component-token" {
 		t.Fatalf("raw header = %q", got)

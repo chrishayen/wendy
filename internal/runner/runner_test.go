@@ -1696,6 +1696,55 @@ func TestRunnerResolvesTrustedNodeFromRegistry(t *testing.T) {
 	}
 }
 
+func TestRunnerUsesNodeRegistryCredentialForRegistryLookup(t *testing.T) {
+	nodeGets := 0
+	nodeServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		nodeGets++
+		if got := r.Header.Get("Authorization"); got != "Bearer token_worker" {
+			t.Fatalf("node authorization = %q", got)
+		}
+		if r.Method != http.MethodGet || r.URL.Path != "/v1/node/services/svc_remote_provider" {
+			t.Fatalf("unexpected node request %s %s", r.Method, r.URL.Path)
+		}
+		writeRunnerTestSuccess(w, http.StatusOK, contracts.NodeService{ServiceID: "svc_remote_provider", Status: "running"})
+	}))
+	defer nodeServer.Close()
+
+	registryStore := noderegistry.NewStore()
+	if _, err := registryStore.Register(contracts.RegisterNodeRequest{
+		NodeID:     "node_linux_gpu",
+		URL:        nodeServer.URL,
+		TrustState: contracts.NodeTrustTrusted,
+		Status:     contracts.NodeStatusRegistered,
+	}); err != nil {
+		t.Fatalf("register node: %v", err)
+	}
+	registryServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("Authorization"); got != "Bearer token_component" {
+			t.Fatalf("registry authorization = %q", got)
+		}
+		noderegistry.NewHandler(registryStore).ServeHTTP(w, r)
+	}))
+	defer registryServer.Close()
+
+	r := New(Config{
+		NodeRegistryURL:        registryServer.URL,
+		NodeRegistryCredential: "Bearer token_component",
+		ComponentCredential:    "Bearer token_worker",
+		NodeStartTimeout:       250 * time.Millisecond,
+		NodePollInterval:       time.Millisecond,
+		Client:                 nodeServer.Client(),
+	})
+	nodeID := "node_linux_gpu"
+	route := contracts.CapabilityRoute{ServiceID: "svc_remote_provider", NodeID: &nodeID, NodeManaged: true}
+	if _, err := r.ensureNodeService(context.Background(), route); err != nil {
+		t.Fatalf("ensureNodeService: %v", err)
+	}
+	if nodeGets != 1 {
+		t.Fatalf("node gets = %d", nodeGets)
+	}
+}
+
 func TestRunnerBlocksDisabledNodeFromRegistry(t *testing.T) {
 	var nodeCalls atomic.Int32
 	nodeServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
