@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -342,6 +343,142 @@ func TestRunnerTimesOutProviderInvocationAndKeepsClaimsAlive(t *testing.T) {
 	if len(events) != 1 || events[0].ReleaseReason != "provider timed out" {
 		t.Fatalf("lease audit events = %#v", events)
 	}
+}
+
+func TestRunnerFailsJobWhenLeaseExpiresDuringProviderInvocation(t *testing.T) {
+	jobStore := jobs.NewStore()
+	jobsServer := httptest.NewServer(jobs.NewHandler(jobStore))
+	defer jobsServer.Close()
+
+	leaseStore := leases.NewStore()
+	baseNow := time.Date(2026, 6, 5, 20, 0, 0, 0, time.UTC)
+	var leaseNow atomic.Int64
+	leaseNow.Store(baseNow.UnixNano())
+	leaseStore.SetClock(func() time.Time {
+		return time.Unix(0, leaseNow.Load()).UTC()
+	})
+	if _, err := leaseStore.RegisterResource(contracts.RegisterResourceRequest{Selector: "gpu", Status: contracts.ResourceAvailable}); err != nil {
+		t.Fatalf("register resource: %v", err)
+	}
+	var leaseHeartbeats atomic.Int32
+	var releaseAttempts atomic.Int32
+	var observedMu sync.Mutex
+	heartbeatLeaseID := ""
+	releaseBody := map[string]any{}
+	leasesHandler := leases.NewHandler(leaseStore)
+	leasesServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/heartbeat") {
+			leaseHeartbeats.Add(1)
+			leaseNow.Store(baseNow.Add(61 * time.Second).UnixNano())
+			observedMu.Lock()
+			heartbeatLeaseID = leaseIDFromRunnerTestPath(r.URL.Path)
+			observedMu.Unlock()
+		}
+		if r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/release") {
+			releaseAttempts.Add(1)
+			leaseNow.Store(baseNow.Add(61 * time.Second).UnixNano())
+			raw, err := io.ReadAll(r.Body)
+			if err != nil {
+				t.Fatalf("read release body: %v", err)
+			}
+			var body map[string]any
+			if err := json.Unmarshal(raw, &body); err != nil {
+				t.Fatalf("decode release body: %v", err)
+			}
+			r.Body = io.NopCloser(bytes.NewReader(raw))
+			observedMu.Lock()
+			releaseBody = body
+			observedMu.Unlock()
+		}
+		leasesHandler.ServeHTTP(w, r)
+	}))
+	defer leasesServer.Close()
+
+	releaseProvider := make(chan struct{})
+	var releaseProviderOnce sync.Once
+	defer releaseProviderOnce.Do(func() { close(releaseProvider) })
+	providerServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/v1/provider/capabilities/cap_lease_expiring/invoke" {
+			t.Fatalf("unexpected provider request %s %s", r.Method, r.URL.Path)
+		}
+		<-releaseProvider
+	}))
+	defer providerServer.Close()
+
+	route := contracts.CapabilityRoute{
+		CapabilityID:       "cap_lease_expiring",
+		ServiceID:          "svc_lease_expiring_provider",
+		ProviderEndpoint:   providerServer.URL,
+		ProviderHealthPath: "/v1/provider/health",
+		ProviderInvokePath: "/v1/provider/capabilities/cap_lease_expiring/invoke",
+		ServiceStartMode:   "manual",
+		ResourceHints:      []contracts.ResourceHint{{Selector: "gpu", Required: true}},
+	}
+	created, _, err := jobStore.Create(contracts.CreateJobRequest{
+		RequesterID:  "sub_agent",
+		CapabilityID: "cap_lease_expiring",
+		InputSummary: map[string]any{"prompt_present": true},
+		Metadata: map[string]any{"execution_plan": map[string]any{
+			"capability_id":     "cap_lease_expiring",
+			"subject_id":        "sub_agent",
+			"input":             map[string]any{"prompt": "red mug"},
+			"route":             route,
+			"resource_selector": "gpu",
+			"timeout_seconds":   30,
+		}},
+	}, "create-lease-expiring-provider-job")
+	if err != nil {
+		t.Fatalf("create job: %v", err)
+	}
+
+	runner := New(Config{
+		WorkerID:                  "runner_test",
+		JobsURL:                   jobsServer.URL,
+		LeasesURL:                 leasesServer.URL,
+		ArtifactsURL:              "http://artifacts.invalid",
+		ActorSubjectID:            "sub_runner_test",
+		ProviderHeartbeatInterval: 10 * time.Millisecond,
+		Client:                    jobsServer.Client(),
+	})
+	jobID, ok, err := runner.RunOnce(context.Background())
+	releaseProviderOnce.Do(func() { close(releaseProvider) })
+	providerServer.CloseClientConnections()
+	if err == nil {
+		t.Fatal("expected lease expiration error")
+	}
+	if !ok || jobID != created.JobID {
+		t.Fatalf("run result jobID=%q ok=%v", jobID, ok)
+	}
+	if leaseHeartbeats.Load() == 0 {
+		t.Fatal("lease heartbeat was not attempted")
+	}
+	failed, err := jobStore.Get(created.JobID)
+	if err != nil {
+		t.Fatalf("get failed job: %v", err)
+	}
+	if failed.State != contracts.JobFailed || failed.TerminalError == nil || failed.TerminalError.Code != "lease_expired" || failed.TerminalError.Message != "resource lease expired before completion" || !failed.TerminalError.Retryable {
+		t.Fatalf("failed job = %#v", failed)
+	}
+	logs, _, err := jobStore.Logs(created.JobID, "", 20)
+	if err != nil {
+		t.Fatalf("read logs: %v", err)
+	}
+	lastLog := logs[len(logs)-1]
+	observedMu.Lock()
+	gotLeaseID := heartbeatLeaseID
+	gotReleaseBody := releaseBody
+	observedMu.Unlock()
+	if lastLog.Level != "error" || lastLog.Message != "resource lease expired" || lastLog.Fields["lease_id"] != gotLeaseID {
+		t.Fatalf("last log = %#v, leaseID=%q", lastLog, gotLeaseID)
+	}
+	if releaseAttempts.Load() == 0 || gotReleaseBody["reason"] != "lease expired" {
+		t.Fatalf("release attempts=%d body=%#v", releaseAttempts.Load(), gotReleaseBody)
+	}
+	if events := leaseStore.AuditEvents(); len(events) != 0 {
+		t.Fatalf("expired lease release should not create audit events: %#v", events)
+	}
+	metrics := runner.Metrics(context.Background())
+	assertContractMetric(t, metrics.Samples, "runner_errors_total", map[string]string{"code": "lease_expired"}, 1)
 }
 
 func TestRunnerMonitorHTTPReportsHealthAndMetrics(t *testing.T) {
@@ -955,6 +1092,14 @@ func writeRunnerTestError(w http.ResponseWriter, status int, errObj contracts.Er
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(contracts.ErrorEnvelope{OK: false, Error: errObj, Links: map[string]any{}, Meta: map[string]string{"request_id": "req_test", "schema_version": "v1"}})
+}
+
+func leaseIDFromRunnerTestPath(path string) string {
+	parts := strings.Split(strings.Trim(path, "/"), "/")
+	if len(parts) >= 4 && parts[0] == "v1" && parts[1] == "leases" {
+		return parts[2]
+	}
+	return ""
 }
 
 func requestRunnerData(t *testing.T, handler http.Handler, method, path string) map[string]any {

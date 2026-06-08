@@ -64,6 +64,24 @@ type providerFailure struct {
 	releaseReason string
 }
 
+type keepaliveFailure struct {
+	contracts.ErrorObject
+	leaseID       string
+	logMessage    string
+	releaseReason string
+	logFields     map[string]any
+}
+
+func (e keepaliveFailure) Error() string {
+	if e.Message != "" {
+		return e.Message
+	}
+	if e.Code != "" {
+		return e.Code
+	}
+	return "provider invocation keepalive failed"
+}
+
 type executionPlan struct {
 	CapabilityID     string                    `json:"capability_id"`
 	SubjectID        string                    `json:"subject_id"`
@@ -186,7 +204,14 @@ func (r *Runner) runJob(ctx context.Context, job contracts.Job) error {
 	}
 	invokeCtx, stopKeepalive := r.providerInvocationContext(ctx, job.JobID, plan, lease)
 	response, err := r.invokeProvider(invokeCtx, job.JobID, plan, lease)
-	stopKeepalive()
+	keepaliveErr := stopKeepalive()
+	if keepaliveErr != nil {
+		failure := normalizeKeepaliveError(keepaliveErr)
+		leaseReleaseReason = failure.releaseReason
+		_ = r.appendLogFields(ctx, job.JobID, "error", failure.logMessage, failure.logFields)
+		_ = r.failJobWithError(ctx, job.JobID, failure.ErrorObject)
+		return failure
+	}
 	if err != nil {
 		providerErr := normalizeProviderError(err)
 		leaseReleaseReason = providerErr.releaseReason
@@ -252,7 +277,7 @@ func (r *Runner) heartbeatJob(ctx context.Context, jobID, transition, statusMess
 	return nil
 }
 
-func (r *Runner) providerInvocationContext(ctx context.Context, jobID string, plan executionPlan, lease *contracts.Lease) (context.Context, func()) {
+func (r *Runner) providerInvocationContext(ctx context.Context, jobID string, plan executionPlan, lease *contracts.Lease) (context.Context, func() error) {
 	invokeCtx := ctx
 	var cancel context.CancelFunc
 	if plan.TimeoutSeconds > 0 {
@@ -261,16 +286,32 @@ func (r *Runner) providerInvocationContext(ctx context.Context, jobID string, pl
 		invokeCtx, cancel = context.WithCancel(ctx)
 	}
 	done := make(chan struct{})
+	keepaliveErrs := make(chan error, 1)
+	var stopped <-chan struct{}
 	if r.cfg.ProviderHeartbeatInterval > 0 {
-		go r.keepProviderInvocationAlive(invokeCtx, done, jobID, lease)
+		stoppedCh := make(chan struct{})
+		stopped = stoppedCh
+		go func() {
+			defer close(stoppedCh)
+			r.keepProviderInvocationAlive(invokeCtx, cancel, done, jobID, lease, keepaliveErrs)
+		}()
 	}
-	return invokeCtx, func() {
+	return invokeCtx, func() error {
 		cancel()
 		close(done)
+		if stopped != nil {
+			<-stopped
+		}
+		select {
+		case err := <-keepaliveErrs:
+			return err
+		default:
+			return nil
+		}
 	}
 }
 
-func (r *Runner) keepProviderInvocationAlive(ctx context.Context, done <-chan struct{}, jobID string, lease *contracts.Lease) {
+func (r *Runner) keepProviderInvocationAlive(ctx context.Context, cancel context.CancelFunc, done <-chan struct{}, jobID string, lease *contracts.Lease, keepaliveErrs chan<- error) {
 	ticker := time.NewTicker(r.cfg.ProviderHeartbeatInterval)
 	defer ticker.Stop()
 	for {
@@ -281,14 +322,31 @@ func (r *Runner) keepProviderInvocationAlive(ctx context.Context, done <-chan st
 			return
 		case <-ticker.C:
 			if err := r.heartbeatJob(ctx, jobID, "", "waiting for provider completion"); err != nil {
+				if ctx.Err() != nil {
+					return
+				}
+				reportKeepaliveError(keepaliveErrs, normalizeJobKeepaliveError(err))
+				cancel()
 				return
 			}
 			if lease != nil {
 				if err := r.heartbeatLease(ctx, lease.LeaseID, jobID); err != nil {
+					if ctx.Err() != nil {
+						return
+					}
+					reportKeepaliveError(keepaliveErrs, normalizeLeaseKeepaliveError(lease.LeaseID, err))
+					cancel()
 					return
 				}
 			}
 		}
+	}
+}
+
+func reportKeepaliveError(keepaliveErrs chan<- error, err error) {
+	select {
+	case keepaliveErrs <- err:
+	default:
 	}
 }
 
@@ -556,6 +614,70 @@ func normalizeProviderError(err error) providerFailure {
 		if failure.Message == "" {
 			failure.Message = "provider is unavailable"
 		}
+	}
+	return failure
+}
+
+func normalizeKeepaliveError(err error) keepaliveFailure {
+	var failure keepaliveFailure
+	if errors.As(err, &failure) {
+		return failure
+	}
+	return normalizeJobKeepaliveError(err)
+}
+
+func normalizeJobKeepaliveError(err error) keepaliveFailure {
+	failure := keepaliveFailure{
+		ErrorObject: contracts.ErrorObject{
+			Code:      "job_heartbeat_failed",
+			Message:   err.Error(),
+			Retryable: true,
+		},
+		logMessage:    "job heartbeat failed",
+		releaseReason: "job heartbeat failed",
+		logFields:     map[string]any{"code": "job_heartbeat_failed"},
+	}
+	var componentErr componentError
+	if errors.As(err, &componentErr) {
+		if componentErr.Code != "" {
+			failure.Code = componentErr.Code
+			failure.logFields["code"] = componentErr.Code
+		}
+		if componentErr.Message != "" {
+			failure.Message = componentErr.Message
+		}
+		failure.Retryable = componentErr.Retryable
+	}
+	return failure
+}
+
+func normalizeLeaseKeepaliveError(leaseID string, err error) keepaliveFailure {
+	failure := keepaliveFailure{
+		ErrorObject: contracts.ErrorObject{
+			Code:      "lease_heartbeat_failed",
+			Message:   err.Error(),
+			Retryable: true,
+		},
+		leaseID:       leaseID,
+		logMessage:    "resource lease heartbeat failed",
+		releaseReason: "lease heartbeat failed",
+		logFields:     map[string]any{"lease_id": leaseID},
+	}
+	var componentErr componentError
+	if errors.As(err, &componentErr) {
+		if componentErr.Code != "" {
+			failure.Code = componentErr.Code
+		}
+		if componentErr.Message != "" {
+			failure.Message = componentErr.Message
+		}
+		failure.Retryable = componentErr.Retryable
+	}
+	if failure.Code == "lease_expired" {
+		failure.Message = "resource lease expired before completion"
+		failure.Retryable = true
+		failure.logMessage = "resource lease expired"
+		failure.releaseReason = "lease expired"
 	}
 	return failure
 }
