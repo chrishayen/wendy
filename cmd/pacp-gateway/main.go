@@ -5,6 +5,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strings"
 
 	"pacp/internal/components/gateway"
 )
@@ -15,7 +16,7 @@ func main() {
 	policyURL := flag.String("policy-url", os.Getenv("PACP_POLICY_URL"), "policy service base URL")
 	jobsURL := flag.String("jobs-url", os.Getenv("PACP_JOBS_URL"), "jobs service base URL")
 	artifactsURL := flag.String("artifacts-url", os.Getenv("PACP_ARTIFACTS_URL"), "artifact service base URL")
-	gatewayCredential := flag.String("gateway-credential", "", "component credential for downstream calls")
+	gatewayCredential := flag.String("gateway-credential", componentCredentialDefault("PACP_GATEWAY_CREDENTIAL"), "component credential for downstream calls; defaults to PACP_GATEWAY_CREDENTIAL or PACP_COMPONENT_TOKEN")
 	idempotencyStateFile := flag.String("idempotency-state-file", "", "optional JSON state file for public invocation idempotency")
 	flag.Parse()
 	requireURL("catalog-url", *catalogURL)
@@ -28,7 +29,7 @@ func main() {
 		PolicyURL:         *policyURL,
 		JobsURL:           *jobsURL,
 		ArtifactsURL:      *artifactsURL,
-		GatewayCredential: *gatewayCredential,
+		GatewayCredential: authorizationHeader(*gatewayCredential),
 	}, *idempotencyStateFile)
 	if err != nil {
 		log.Fatal(err)
@@ -37,6 +38,23 @@ func main() {
 	if err := http.ListenAndServe(*addr, handler); err != nil {
 		log.Fatal(err)
 	}
+}
+
+func componentCredentialDefault(primaryEnv string) string {
+	if value := os.Getenv(primaryEnv); value != "" {
+		return value
+	}
+	return os.Getenv("PACP_COMPONENT_TOKEN")
+}
+
+func authorizationHeader(token string) string {
+	if token == "" {
+		return ""
+	}
+	if strings.HasPrefix(token, "Bearer ") {
+		return token
+	}
+	return "Bearer " + token
 }
 
 func requireURL(name, value string) {

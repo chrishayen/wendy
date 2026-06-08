@@ -19,7 +19,7 @@ func main() {
 	artifactsURL := flag.String("artifacts-url", os.Getenv("PACP_ARTIFACTS_URL"), "artifact service base URL")
 	nodeURL := flag.String("node-url", os.Getenv("PACP_NODE_URL"), "optional node service base URL")
 	nodeURLsRaw := flag.String("node-urls", os.Getenv("PACP_NODE_URLS"), "optional comma-separated node_id=URL mappings for node-managed services")
-	credential := flag.String("credential", "", "component credential for downstream calls")
+	credential := flag.String("credential", componentCredentialDefault("PACP_RUNNER_CREDENTIAL"), "component credential for downstream calls; defaults to PACP_RUNNER_CREDENTIAL or PACP_COMPONENT_TOKEN")
 	nodeStartTimeout := flag.Duration("node-start-timeout", 30*time.Second, "maximum time to wait for node-managed service startup")
 	nodeStartPoll := flag.Duration("node-start-poll", 500*time.Millisecond, "poll interval while waiting for node-managed service startup")
 	once := flag.Bool("once", false, "process at most one queued job and exit")
@@ -42,7 +42,7 @@ func main() {
 		NodeURLs:            nodeURLs,
 		NodeStartTimeout:    *nodeStartTimeout,
 		NodePollInterval:    *nodeStartPoll,
-		ComponentCredential: *credential,
+		ComponentCredential: authorizationHeader(*credential),
 	})
 	for {
 		jobID, ok, err := r.RunOnce(context.Background())
@@ -62,6 +62,23 @@ func main() {
 		}
 		time.Sleep(*poll)
 	}
+}
+
+func componentCredentialDefault(primaryEnv string) string {
+	if value := os.Getenv(primaryEnv); value != "" {
+		return value
+	}
+	return os.Getenv("PACP_COMPONENT_TOKEN")
+}
+
+func authorizationHeader(token string) string {
+	if token == "" {
+		return ""
+	}
+	if strings.HasPrefix(token, "Bearer ") {
+		return token
+	}
+	return "Bearer " + token
 }
 
 func parseNodeURLMap(raw string) (map[string]string, error) {

@@ -98,12 +98,14 @@ go run ./cmd/pacp-node -config testdata/node/linux-gpu-fake.json -export-lease-r
 ```
 
 For distributed deployments, set `PACP_COMPONENT_TOKEN` or `-component-token`
-on catalog, jobs, leases, artifacts, and policy services. Then pass the same
-credential to `pacp-gateway -gateway-credential` and `pacp-runner -credential`.
-Leaving the token unset keeps local service endpoints open for quick isolated
-testing. The example policy seed creates logical policy credentials for the
-gateway, runner, and local agent; component endpoint authentication is a
-separate transport guard.
+on catalog, jobs, leases, artifacts, and policy services. `pacp-gateway` and
+`pacp-runner` use `PACP_COMPONENT_TOKEN` for downstream component calls unless
+overridden by `PACP_GATEWAY_CREDENTIAL`, `PACP_RUNNER_CREDENTIAL`,
+`-gateway-credential`, or `-credential`. Raw tokens and `Bearer ...` values are
+both accepted. Leaving the token unset keeps local service endpoints open for
+quick isolated testing. The example policy seed creates logical policy
+credentials for the gateway, runner, and local agent; component endpoint
+authentication is a separate transport guard.
 
 Use `pacp-runner -node-urls` or `PACP_NODE_URLS` for distributed nodes. The
 format is comma-separated `node_id=URL` entries, for example
