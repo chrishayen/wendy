@@ -43,6 +43,11 @@ func (h Handler) serveHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		writeSuccess(w, r, http.StatusOK, map[string]any{"items": h.store.Resources(), "next_cursor": nil})
+	case path == "/v1/node/events" && r.Method == http.MethodGet:
+		if !h.require(w, r, "node.read") {
+			return
+		}
+		writeSuccess(w, r, http.StatusOK, map[string]any{"items": h.store.LifecycleEvents(), "next_cursor": nil})
 	case path == "/v1/node/services" && r.Method == http.MethodGet:
 		if !h.require(w, r, "node.read") {
 			return

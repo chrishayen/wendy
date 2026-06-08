@@ -33,6 +33,8 @@ type Store struct {
 	authByToken   map[string]contracts.NodeAuthSubject
 	services      map[string]*serviceRecord
 	idempotency   map[string]idempotentLifecycle
+	nextEventID   int
+	events        []contracts.NodeLifecycleEvent
 	startCount    int
 	stopCount     int
 	idleStopCount int
@@ -82,6 +84,7 @@ func NewStore(cfg contracts.NodeConfig) (*Store, error) {
 		authByToken: map[string]contracts.NodeAuthSubject{},
 		services:    map[string]*serviceRecord{},
 		idempotency: map[string]idempotentLifecycle{},
+		nextEventID: 1,
 	}
 	for _, subject := range cfg.Auth {
 		if subject.Token == "" || subject.SubjectID == "" {
@@ -168,6 +171,7 @@ func (s *Store) Metrics() contracts.ComponentMetrics {
 	for adapter, count := range servicesByAdapter {
 		samples = append(samples, contracts.CountMetric("node_services_by_adapter", count, map[string]string{"node_id": s.config.NodeID, "adapter": adapter}))
 	}
+	samples = append(samples, contracts.CountMetric("node_lifecycle_events_total", len(s.events), map[string]string{"node_id": s.config.NodeID}))
 	return contracts.NewComponentMetrics("node", samples)
 }
 
@@ -188,6 +192,12 @@ func (s *Store) ListServices() []contracts.NodeService {
 		services = append(services, serviceProjection(rec))
 	}
 	return services
+}
+
+func (s *Store) LifecycleEvents() []contracts.NodeLifecycleEvent {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return append([]contracts.NodeLifecycleEvent(nil), s.events...)
 }
 
 func (s *Store) GetService(serviceID string) (contracts.NodeService, error) {
@@ -246,6 +256,7 @@ func (s *Store) StartService(serviceID, idempotencyKey string) (contracts.NodeSe
 		default:
 			if err := startDockerRuntime(rec.config); err != nil {
 				rec.status = "failed"
+				s.recordLifecycleEventLocked(serviceID, "start", rec.status, err.Error(), idempotencyKey)
 				return contracts.NodeService{}, 0, err
 			}
 			rec.status = "starting"
@@ -262,6 +273,7 @@ func (s *Store) StartService(serviceID, idempotencyKey string) (contracts.NodeSe
 			process, err := startProcessRuntime(rec.config, s.now())
 			if err != nil {
 				rec.status = "failed"
+				s.recordLifecycleEventLocked(serviceID, "start", rec.status, err.Error(), idempotencyKey)
 				return contracts.NodeService{}, 0, err
 			}
 			rec.process = process
@@ -275,6 +287,7 @@ func (s *Store) StartService(serviceID, idempotencyKey string) (contracts.NodeSe
 		rec.lastUsedAt = s.now()
 	}
 	s.idempotency[idempotencyKey] = idempotentLifecycle{fingerprint: fingerprint, serviceID: serviceID}
+	s.recordLifecycleEventLocked(serviceID, "start", rec.status, lifecycleMessage("start", rec.status), idempotencyKey)
 	return serviceProjection(rec), status, nil
 }
 
@@ -290,6 +303,7 @@ func (s *Store) TouchService(serviceID string) (contracts.NodeService, error) {
 		return contracts.NodeService{}, ErrRuntimeUnavailable
 	}
 	rec.lastUsedAt = s.now()
+	s.recordLifecycleEventLocked(serviceID, "touch", rec.status, "service usage recorded", "")
 	return serviceProjection(rec), nil
 }
 
@@ -324,6 +338,11 @@ func (s *Store) StopService(serviceID, idempotencyKey string) (contracts.NodeSer
 		config := rec.config
 		s.mu.Unlock()
 		if err := stopDockerRuntime(config); err != nil {
+			s.mu.Lock()
+			if failedRec, ok := s.services[serviceID]; ok {
+				s.recordLifecycleEventLocked(serviceID, "stop", failedRec.status, err.Error(), idempotencyKey)
+			}
+			s.mu.Unlock()
 			return contracts.NodeService{}, 0, err
 		}
 		s.mu.Lock()
@@ -332,6 +351,7 @@ func (s *Store) StopService(serviceID, idempotencyKey string) (contracts.NodeSer
 		rec.dockerReadyDeadline = time.Time{}
 		s.stopCount++
 		s.idempotency[idempotencyKey] = idempotentLifecycle{fingerprint: fingerprint, serviceID: serviceID}
+		s.recordLifecycleEventLocked(serviceID, "stop", rec.status, "service stop accepted", idempotencyKey)
 		service := serviceProjection(rec)
 		s.mu.Unlock()
 		return service, http.StatusAccepted, nil
@@ -341,6 +361,7 @@ func (s *Store) StopService(serviceID, idempotencyKey string) (contracts.NodeSer
 	rec.status = "stopped"
 	s.stopCount++
 	s.idempotency[idempotencyKey] = idempotentLifecycle{fingerprint: fingerprint, serviceID: serviceID}
+	s.recordLifecycleEventLocked(serviceID, "stop", rec.status, "service stop accepted", idempotencyKey)
 	service := serviceProjection(rec)
 	timeout := processStopTimeout(rec.config)
 	s.mu.Unlock()
@@ -455,18 +476,21 @@ func (s *Store) applyIdleShutdownLocked(rec *serviceRecord) {
 		rec.status = "stopped"
 		s.stopCount++
 		s.idleStopCount++
+		s.recordLifecycleEventLocked(rec.config.ServiceID, "idle_stop", rec.status, "service stopped after idle timeout", "")
 	case "process":
 		process := rec.process
 		rec.process = nil
 		rec.status = "stopped"
 		s.stopCount++
 		s.idleStopCount++
+		s.recordLifecycleEventLocked(rec.config.ServiceID, "idle_stop", rec.status, "service stopped after idle timeout", "")
 		go stopProcessRuntime(process, processStopTimeout(rec.config))
 	case "docker":
 		rec.status = "stopped"
 		rec.dockerReadyDeadline = time.Time{}
 		s.stopCount++
 		s.idleStopCount++
+		s.recordLifecycleEventLocked(rec.config.ServiceID, "idle_stop", rec.status, "service stopped after idle timeout", "")
 		go func(config contracts.NodeServiceConfig) {
 			_ = stopDockerRuntime(config)
 		}(rec.config)
@@ -482,6 +506,31 @@ func idleTimeout(service contracts.NodeServiceConfig) time.Duration {
 
 func (s *Store) formatNow() string {
 	return s.now().UTC().Format(time.RFC3339)
+}
+
+func (s *Store) recordLifecycleEventLocked(serviceID, action, status, message, idempotencyKey string) {
+	eventID := fmt.Sprintf("node_evt_%06d", s.nextEventID)
+	s.nextEventID++
+	s.events = append(s.events, contracts.NodeLifecycleEvent{
+		EventID:        eventID,
+		ServiceID:      serviceID,
+		Action:         action,
+		Status:         status,
+		Message:        message,
+		OccurredAt:     s.formatNow(),
+		IdempotencyKey: idempotencyKey,
+	})
+}
+
+func lifecycleMessage(action, status string) string {
+	switch {
+	case action == "start" && status == "running":
+		return "service already running"
+	case action == "start":
+		return "service start accepted"
+	default:
+		return "service lifecycle operation recorded"
+	}
 }
 
 func parseBearer(credential string) (string, error) {

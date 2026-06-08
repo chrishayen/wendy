@@ -69,6 +69,16 @@ func TestStoreLifecycleAndAuth(t *testing.T) {
 	if status != 200 || replayedStop.Status != "stopped" {
 		t.Fatalf("stop replay status=%d service=%#v", status, replayedStop)
 	}
+	events := store.LifecycleEvents()
+	if len(events) != 2 {
+		t.Fatalf("lifecycle events = %#v", events)
+	}
+	if events[0].Action != "start" || events[0].ServiceID != "svc_comfyui_gpu" || events[0].Status != "starting" || events[0].IdempotencyKey != "start-1" {
+		t.Fatalf("start event = %#v", events[0])
+	}
+	if events[1].Action != "stop" || events[1].ServiceID != "svc_comfyui_gpu" || events[1].Status != "stopped" || events[1].IdempotencyKey != "stop-1" {
+		t.Fatalf("stop event = %#v", events[1])
+	}
 }
 
 func TestStoreResources(t *testing.T) {
@@ -107,9 +117,14 @@ func TestStoreIdleShutdownStopsFakeService(t *testing.T) {
 	if stopped.Status != "stopped" {
 		t.Fatalf("idle-stopped service = %#v", stopped)
 	}
+	events := store.LifecycleEvents()
+	if len(events) != 2 || events[1].Action != "idle_stop" || events[1].Status != "stopped" {
+		t.Fatalf("idle lifecycle events = %#v", events)
+	}
 	metrics := store.Metrics()
 	assertStoreMetric(t, metrics, "node_service_idle_stop_total", 1)
 	assertStoreMetric(t, metrics, "node_service_stop_total", 1)
+	assertStoreMetric(t, metrics, "node_lifecycle_events_total", 2)
 }
 
 func TestStoreTouchRefreshesIdleDeadline(t *testing.T) {

@@ -33,7 +33,8 @@ Contract simulation data is kept as test input, not as product behavior.
   and durable sensitive state snapshots.
 - `internal/components/node`: runtime node agent with local auth, resource
   advertisement, fake, process, and Docker service lifecycle adapters, idle
-  shutdown accounting, health, lease resource export, and service status APIs.
+  shutdown accounting, lifecycle event log, health, lease resource export, and
+  service status APIs.
 - `internal/testkit`: contract-simulation fixture loader, fixture-backed HTTP
   fake server, reusable public component/provider fakes, and fixture replay
   helpers for live handler contract tests. The reusable provider fake includes

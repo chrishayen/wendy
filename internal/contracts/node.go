@@ -66,3 +66,13 @@ type NodeService struct {
 	Manifest         *ProviderManifest `json:"manifest"`
 	Links            map[string]any    `json:"links"`
 }
+
+type NodeLifecycleEvent struct {
+	EventID        string `json:"event_id"`
+	ServiceID      string `json:"service_id"`
+	Action         string `json:"action"`
+	Status         string `json:"status"`
+	Message        string `json:"message,omitempty"`
+	OccurredAt     string `json:"occurred_at"`
+	IdempotencyKey string `json:"idempotency_key,omitempty"`
+}

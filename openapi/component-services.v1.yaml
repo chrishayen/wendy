@@ -1053,6 +1053,19 @@ paths:
           $ref: "#/components/responses/Success"
         default:
           $ref: "#/components/responses/Error"
+  /v1/node/events:
+    get:
+      tags: [node]
+      operationId: listNodeLifecycleEvents
+      x-operation-audience: [component, worker]
+      x-policy-action: node.read
+      security:
+        - nodeBearer: []
+      responses:
+        "200":
+          $ref: "#/components/responses/Success"
+        default:
+          $ref: "#/components/responses/Error"
   /v1/node/services:
     get:
       tags: [node]
@@ -1838,6 +1851,27 @@ components:
           type: integer
         deleted_artifact_files:
           type: integer
+
+    NodeLifecycleEvent:
+      type: object
+      required: [event_id, service_id, action, status, occurred_at]
+      properties:
+        event_id:
+          type: string
+        service_id:
+          type: string
+        action:
+          type: string
+          enum: [start, stop, touch, idle_stop]
+        status:
+          type: string
+        message:
+          type: string
+        occurred_at:
+          type: string
+          format: date-time
+        idempotency_key:
+          type: string
 
     CreateAPIKeyRequest:
       type: object

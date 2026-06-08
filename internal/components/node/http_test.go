@@ -114,12 +114,23 @@ func TestHandlerNodeLifecycle(t *testing.T) {
 	if replayedStop["status"] != "stopped" {
 		t.Fatalf("replayed stop = %#v", replayedStop)
 	}
+	events := doJSON(t, handler, http.MethodGet, "/v1/node/events", headers, http.StatusOK)
+	eventItems := events["items"].([]any)
+	if len(eventItems) != 3 {
+		t.Fatalf("events = %#v", events)
+	}
+	if eventItems[0].(map[string]any)["action"] != "start" ||
+		eventItems[1].(map[string]any)["action"] != "touch" ||
+		eventItems[2].(map[string]any)["action"] != "stop" {
+		t.Fatalf("event actions = %#v", eventItems)
+	}
 	metrics := doJSON(t, handler, http.MethodGet, "/v1/node/metrics", headers, http.StatusOK)
 	if metrics["component"] != "node" {
 		t.Fatalf("metrics = %#v", metrics)
 	}
 	assertMetric(t, metrics, "node_service_start_total", map[string]string{"node_id": "node_linux_gpu"}, 1)
 	assertMetric(t, metrics, "node_service_stop_total", map[string]string{"node_id": "node_linux_gpu"}, 1)
+	assertMetric(t, metrics, "node_lifecycle_events_total", map[string]string{"node_id": "node_linux_gpu"}, 3)
 	assertMetric(t, metrics, "http_requests_total", map[string]string{"method": "POST", "route_group": "/v1/node/services/{service_id}/start", "status_class": "2xx"}, 1)
 	assertMetric(t, metrics, "http_requests_total", map[string]string{"method": "POST", "route_group": "/v1/node/services/{service_id}/touch", "status_class": "2xx"}, 1)
 }
