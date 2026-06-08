@@ -94,7 +94,7 @@ Contract simulation data is kept as test input, not as product behavior.
   node config, lease resource seed, and optional policy seed files.
 - `cmd/pacp-admin`: JSON-first operator CLI for component, gateway, node,
   runner, and provider health, inspection, job cancellation through the gateway,
-  and node lifecycle actions.
+  node registry trust operations, and node lifecycle actions.
 - `cmd/pacp-control`: JSON-first CLI for gateway health and agent-facing
   gateway operations.
 - `cmd/pacp-dev`: one-command local development stack using the real service
@@ -130,6 +130,10 @@ go run ./cmd/pacp-speech-provider -addr localhost:18091 -dry-run -voice-catalog 
 go run ./cmd/pacp-ai-toolkit-provider -addr localhost:18092 -dry-run -workspace testdata/ai-toolkit
 go run ./cmd/pacp-admin health
 go run ./cmd/pacp-admin -node-urls node_mac=http://mac:18087,node_linux_gpu=http://linux-box:18087 health -providers
+go run ./cmd/pacp-admin node-registry list
+go run ./cmd/pacp-admin node-registry register node_linux_gpu -url http://linux-box:18087 -trust-state trusted -status reachable -tags gpu,linux
+go run ./cmd/pacp-admin node-registry trust node_linux_gpu -trust-state disabled -reason "maintenance"
+go run ./cmd/pacp-admin node-registry heartbeat node_linux_gpu -status reachable
 go run ./cmd/pacp-admin catalog capabilities
 go run ./cmd/pacp-admin catalog import /tmp/pacp-bundle/catalog
 go run ./cmd/pacp-admin jobs list

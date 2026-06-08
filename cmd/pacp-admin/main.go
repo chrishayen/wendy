@@ -21,21 +21,22 @@ import (
 )
 
 type adminConfig struct {
-	CatalogURL     string
-	JobsURL        string
-	LeasesURL      string
-	ArtifactsURL   string
-	PolicyURL      string
-	GatewayURL     string
-	NodeURL        string
-	NodeURLs       string
-	RunnerURL      string
-	ComponentToken string
-	GatewayToken   string
-	NodeToken      string
-	RunnerToken    string
-	RequestID      string
-	Timeout        time.Duration
+	CatalogURL      string
+	JobsURL         string
+	LeasesURL       string
+	ArtifactsURL    string
+	PolicyURL       string
+	GatewayURL      string
+	NodeRegistryURL string
+	NodeURL         string
+	NodeURLs        string
+	RunnerURL       string
+	ComponentToken  string
+	GatewayToken    string
+	NodeToken       string
+	RunnerToken     string
+	RequestID       string
+	Timeout         time.Duration
 }
 
 type serviceTarget struct {
@@ -149,6 +150,7 @@ func run(args []string, stdout, stderr io.Writer, httpClient *http.Client) int {
 	flags.StringVar(&cfg.ArtifactsURL, "artifacts-url", envOrDefault("PACP_ARTIFACTS_URL", "http://localhost:18084"), "artifact service base URL")
 	flags.StringVar(&cfg.PolicyURL, "policy-url", envOrDefault("PACP_POLICY_URL", "http://localhost:18085"), "policy service base URL")
 	flags.StringVar(&cfg.GatewayURL, "gateway-url", envOrDefault("PACP_GATEWAY_URL", "http://localhost:18086"), "gateway service base URL")
+	flags.StringVar(&cfg.NodeRegistryURL, "node-registry-url", envOrDefault("PACP_NODE_REGISTRY_URL", "http://localhost:18080"), "node registry service base URL")
 	flags.StringVar(&cfg.NodeURL, "node-url", os.Getenv("PACP_NODE_URL"), "optional node service base URL")
 	flags.StringVar(&cfg.NodeURLs, "node-urls", os.Getenv("PACP_NODE_URLS"), "optional comma-separated node_id=URL entries")
 	flags.StringVar(&cfg.RunnerURL, "runner-url", os.Getenv("PACP_RUNNER_URL"), "optional runner monitor base URL")
@@ -190,6 +192,8 @@ func run(args []string, stdout, stderr io.Writer, httpClient *http.Client) int {
 		return artifactsCommand(cfg, httpClient, remaining[1:], stdout, stderr)
 	case "policy":
 		return policyCommand(cfg, httpClient, remaining[1:], stdout, stderr)
+	case "node-registry":
+		return nodeRegistryCommand(cfg, httpClient, remaining[1:], stdout, stderr)
 	case "node":
 		return nodeCommand(cfg, httpClient, remaining[1:], stdout, stderr)
 	case "diagnose":
@@ -1060,6 +1064,136 @@ func policyRedactCommand(cfg adminConfig, httpClient *http.Client, args []string
 	}
 	req := contracts.RedactRequest{Text: *text}
 	return postJSONBody(cfg, httpClient, cfg.PolicyURL, "/v1/redact", authorizationHeader(cfg.ComponentToken), "", req, stdout, stderr)
+}
+
+func nodeRegistryCommand(cfg adminConfig, httpClient *http.Client, args []string, stdout, stderr io.Writer) int {
+	if len(args) == 0 {
+		return usage(stderr, "usage: pacp-admin [flags] node-registry <list|get|register|trust|heartbeat> [id]")
+	}
+	switch args[0] {
+	case "list":
+		return nodeRegistryListCommand(cfg, httpClient, args[1:], stdout, stderr)
+	case "get":
+		if len(args) != 2 {
+			return usage(stderr, "usage: pacp-admin [flags] node-registry get <node-id>")
+		}
+		return getJSON(cfg, httpClient, cfg.NodeRegistryURL, "/v1/node-registry/nodes/"+url.PathEscape(args[1]), authorizationHeader(cfg.ComponentToken), stdout, stderr)
+	case "register":
+		return nodeRegistryRegisterCommand(cfg, httpClient, args[1:], stdout, stderr)
+	case "trust":
+		return nodeRegistryTrustCommand(cfg, httpClient, args[1:], stdout, stderr)
+	case "heartbeat":
+		return nodeRegistryHeartbeatCommand(cfg, httpClient, args[1:], stdout, stderr)
+	default:
+		return usage(stderr, "usage: pacp-admin [flags] node-registry <list|get|register|trust|heartbeat> [id]")
+	}
+}
+
+func nodeRegistryListCommand(cfg adminConfig, httpClient *http.Client, args []string, stdout, stderr io.Writer) int {
+	flags := flag.NewFlagSet("node-registry list", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	limit := flags.Int("limit", 0, "maximum number of node records to return")
+	cursor := flags.String("cursor", "", "pagination cursor")
+	remaining, err := parseSubcommandFlags(flags, args)
+	if err != nil {
+		return 2
+	}
+	if len(remaining) != 0 {
+		return usage(stderr, "usage: pacp-admin [flags] node-registry list [-limit n] [-cursor cursor]")
+	}
+	query := url.Values{}
+	if *limit > 0 {
+		query.Set("limit", strconv.Itoa(*limit))
+	}
+	if strings.TrimSpace(*cursor) != "" {
+		query.Set("cursor", strings.TrimSpace(*cursor))
+	}
+	path := "/v1/node-registry/nodes"
+	if encoded := query.Encode(); encoded != "" {
+		path += "?" + encoded
+	}
+	return getJSON(cfg, httpClient, cfg.NodeRegistryURL, path, authorizationHeader(cfg.ComponentToken), stdout, stderr)
+}
+
+func nodeRegistryRegisterCommand(cfg adminConfig, httpClient *http.Client, args []string, stdout, stderr io.Writer) int {
+	flags := flag.NewFlagSet("node-registry register", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	nodeURL := flags.String("url", "", "node service base URL")
+	displayName := flags.String("display-name", "", "optional node display name")
+	trustState := flags.String("trust-state", "", "optional trust state: trusted, untrusted, or disabled")
+	status := flags.String("status", "", "optional node status: registered, reachable, unreachable, or stale")
+	tags := flags.String("tags", "", "comma-separated node tags")
+	metadataRaw := flags.String("metadata", "", "optional JSON object metadata")
+	remaining, err := parseSubcommandFlags(flags, args)
+	if err != nil {
+		return 2
+	}
+	if len(remaining) != 1 {
+		return usage(stderr, "usage: pacp-admin [flags] node-registry register <node-id> -url <url> [-display-name name] [-trust-state state] [-status status] [-tags a,b] [-metadata JSON]")
+	}
+	if strings.TrimSpace(*nodeURL) == "" {
+		return usage(stderr, "url is required for node-registry register")
+	}
+	metadata, err := optionalJSONObject(*metadataRaw)
+	if err != nil {
+		fmt.Fprintf(stderr, "metadata must be a JSON object: %v\n", err)
+		return 2
+	}
+	req := contracts.RegisterNodeRequest{
+		NodeID:      remaining[0],
+		URL:         *nodeURL,
+		DisplayName: *displayName,
+		TrustState:  *trustState,
+		Status:      *status,
+		Tags:        splitCSV(*tags),
+		Metadata:    metadata,
+	}
+	return postJSONBody(cfg, httpClient, cfg.NodeRegistryURL, "/v1/node-registry/nodes", authorizationHeader(cfg.ComponentToken), "", req, stdout, stderr)
+}
+
+func nodeRegistryTrustCommand(cfg adminConfig, httpClient *http.Client, args []string, stdout, stderr io.Writer) int {
+	flags := flag.NewFlagSet("node-registry trust", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	trustState := flags.String("trust-state", "", "trust state: trusted, untrusted, or disabled")
+	reason := flags.String("reason", "", "optional reason for trust change")
+	remaining, err := parseSubcommandFlags(flags, args)
+	if err != nil {
+		return 2
+	}
+	if len(remaining) != 1 {
+		return usage(stderr, "usage: pacp-admin [flags] node-registry trust <node-id> -trust-state <trusted|untrusted|disabled> [-reason text]")
+	}
+	if strings.TrimSpace(*trustState) == "" {
+		return usage(stderr, "trust-state is required for node-registry trust")
+	}
+	req := contracts.UpdateNodeTrustRequest{TrustState: *trustState, Reason: *reason}
+	path := "/v1/node-registry/nodes/" + url.PathEscape(remaining[0]) + "/trust"
+	return postJSONBody(cfg, httpClient, cfg.NodeRegistryURL, path, authorizationHeader(cfg.ComponentToken), "", req, stdout, stderr)
+}
+
+func nodeRegistryHeartbeatCommand(cfg adminConfig, httpClient *http.Client, args []string, stdout, stderr io.Writer) int {
+	flags := flag.NewFlagSet("node-registry heartbeat", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	status := flags.String("status", "", "node status: registered, reachable, or unreachable")
+	metadataRaw := flags.String("metadata", "", "optional JSON object metadata")
+	remaining, err := parseSubcommandFlags(flags, args)
+	if err != nil {
+		return 2
+	}
+	if len(remaining) != 1 {
+		return usage(stderr, "usage: pacp-admin [flags] node-registry heartbeat <node-id> -status <registered|reachable|unreachable> [-metadata JSON]")
+	}
+	if strings.TrimSpace(*status) == "" {
+		return usage(stderr, "status is required for node-registry heartbeat")
+	}
+	metadata, err := optionalJSONObject(*metadataRaw)
+	if err != nil {
+		fmt.Fprintf(stderr, "metadata must be a JSON object: %v\n", err)
+		return 2
+	}
+	req := contracts.NodeHeartbeatRequest{Status: *status, Metadata: metadata}
+	path := "/v1/node-registry/nodes/" + url.PathEscape(remaining[0]) + "/heartbeat"
+	return postJSONBody(cfg, httpClient, cfg.NodeRegistryURL, path, authorizationHeader(cfg.ComponentToken), "", req, stdout, stderr)
 }
 
 func nodeCommand(cfg adminConfig, httpClient *http.Client, args []string, stdout, stderr io.Writer) int {
@@ -2823,7 +2957,7 @@ func writePrettyJSON(w io.Writer, raw []byte) error {
 
 func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "usage: pacp-admin [flags] <command>")
-	fmt.Fprintln(w, "commands: health, metrics, alerts, catalog, jobs, leases, artifacts, policy, node, diagnose")
+	fmt.Fprintln(w, "commands: health, metrics, alerts, catalog, jobs, leases, artifacts, policy, node-registry, node, diagnose")
 }
 
 func loadManifestInputs(path string) ([]contracts.ProviderManifest, error) {

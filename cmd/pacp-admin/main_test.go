@@ -1886,6 +1886,158 @@ func TestPolicyRedactCommandPostsText(t *testing.T) {
 	}
 }
 
+func TestNodeRegistryListCommandUsesComponentToken(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/v1/node-registry/nodes" {
+			t.Fatalf("request = %s %s", r.Method, r.URL.Path)
+		}
+		if r.URL.Query().Get("limit") != "2" || r.URL.Query().Get("cursor") != "cursor_node_registry_000002" {
+			t.Fatalf("query = %s", r.URL.RawQuery)
+		}
+		if r.Header.Get("Authorization") != "Bearer component-token" {
+			t.Fatalf("Authorization = %q", r.Header.Get("Authorization"))
+		}
+		if r.Header.Get("X-Request-ID") != "req_admin_registry" {
+			t.Fatalf("X-Request-ID = %q", r.Header.Get("X-Request-ID"))
+		}
+		writeEnvelope(t, w, http.StatusOK, map[string]any{
+			"items":       []map[string]any{{"node_id": "node_linux_gpu", "trust_state": "trusted"}},
+			"next_cursor": nil,
+		})
+	}))
+	defer server.Close()
+
+	var stdout, stderr bytes.Buffer
+	code := run([]string{
+		"-node-registry-url", server.URL,
+		"-component-token", "component-token",
+		"-request-id", "req_admin_registry",
+		"node-registry", "list", "-limit", "2", "-cursor", "cursor_node_registry_000002",
+	}, &stdout, &stderr, server.Client())
+	if code != 0 {
+		t.Fatalf("code=%d stderr=%s stdout=%s", code, stderr.String(), stdout.String())
+	}
+	if !strings.Contains(stdout.String(), `"node_id": "node_linux_gpu"`) {
+		t.Fatalf("stdout = %s", stdout.String())
+	}
+}
+
+func TestNodeRegistryRegisterCommandPostsRecord(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/v1/node-registry/nodes" {
+			t.Fatalf("request = %s %s", r.Method, r.URL.Path)
+		}
+		if r.Header.Get("Authorization") != "Bearer component-token" {
+			t.Fatalf("Authorization = %q", r.Header.Get("Authorization"))
+		}
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatalf("decode body: %v", err)
+		}
+		if body["node_id"] != "node_linux_gpu" || body["url"] != "http://linux.local:18087" {
+			t.Fatalf("body = %#v", body)
+		}
+		if body["trust_state"] != "trusted" || body["status"] != "reachable" {
+			t.Fatalf("body = %#v", body)
+		}
+		tags, ok := body["tags"].([]any)
+		if !ok || len(tags) != 2 || tags[0] != "gpu" || tags[1] != "linux" {
+			t.Fatalf("tags = %#v", body["tags"])
+		}
+		metadata, ok := body["metadata"].(map[string]any)
+		if !ok || metadata["kind"] != "gpu" {
+			t.Fatalf("metadata = %#v", body["metadata"])
+		}
+		writeEnvelope(t, w, http.StatusOK, map[string]any{"node_id": "node_linux_gpu", "trust_state": "trusted"})
+	}))
+	defer server.Close()
+
+	var stdout, stderr bytes.Buffer
+	code := run([]string{
+		"-node-registry-url", server.URL,
+		"-component-token", "component-token",
+		"node-registry", "register", "node_linux_gpu",
+		"-url", "http://linux.local:18087",
+		"-display-name", "Linux GPU",
+		"-trust-state", "trusted",
+		"-status", "reachable",
+		"-tags", "gpu,linux",
+		"-metadata", `{"kind":"gpu"}`,
+	}, &stdout, &stderr, server.Client())
+	if code != 0 {
+		t.Fatalf("code=%d stderr=%s stdout=%s", code, stderr.String(), stdout.String())
+	}
+	if !strings.Contains(stdout.String(), `"trust_state": "trusted"`) {
+		t.Fatalf("stdout = %s", stdout.String())
+	}
+}
+
+func TestNodeRegistryTrustCommandPostsTrustState(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/v1/node-registry/nodes/node_linux_gpu/trust" {
+			t.Fatalf("request = %s %s", r.Method, r.URL.Path)
+		}
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatalf("decode body: %v", err)
+		}
+		if body["trust_state"] != "disabled" || body["reason"] != "maintenance" {
+			t.Fatalf("body = %#v", body)
+		}
+		writeEnvelope(t, w, http.StatusOK, map[string]any{"node_id": "node_linux_gpu", "trust_state": "disabled"})
+	}))
+	defer server.Close()
+
+	var stdout, stderr bytes.Buffer
+	code := run([]string{
+		"-node-registry-url", server.URL,
+		"node-registry", "trust", "node_linux_gpu",
+		"-trust-state", "disabled",
+		"-reason", "maintenance",
+	}, &stdout, &stderr, server.Client())
+	if code != 0 {
+		t.Fatalf("code=%d stderr=%s stdout=%s", code, stderr.String(), stdout.String())
+	}
+	if !strings.Contains(stdout.String(), `"trust_state": "disabled"`) {
+		t.Fatalf("stdout = %s", stdout.String())
+	}
+}
+
+func TestNodeRegistryHeartbeatCommandPostsStatus(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/v1/node-registry/nodes/node_linux_gpu/heartbeat" {
+			t.Fatalf("request = %s %s", r.Method, r.URL.Path)
+		}
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatalf("decode body: %v", err)
+		}
+		if body["status"] != "reachable" {
+			t.Fatalf("body = %#v", body)
+		}
+		metadata, ok := body["metadata"].(map[string]any)
+		if !ok || metadata["checked_by"] != "admin" {
+			t.Fatalf("metadata = %#v", body["metadata"])
+		}
+		writeEnvelope(t, w, http.StatusOK, map[string]any{"node_id": "node_linux_gpu", "status": "reachable"})
+	}))
+	defer server.Close()
+
+	var stdout, stderr bytes.Buffer
+	code := run([]string{
+		"-node-registry-url", server.URL,
+		"node-registry", "heartbeat", "node_linux_gpu",
+		"-status", "reachable",
+		"-metadata", `{"checked_by":"admin"}`,
+	}, &stdout, &stderr, server.Client())
+	if code != 0 {
+		t.Fatalf("code=%d stderr=%s stdout=%s", code, stderr.String(), stdout.String())
+	}
+	if !strings.Contains(stdout.String(), `"status": "reachable"`) {
+		t.Fatalf("stdout = %s", stdout.String())
+	}
+}
+
 func TestNodeCommandRequiresNodeURL(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	code := run([]string{"-node-url", "", "node", "services"}, &stdout, &stderr, http.DefaultClient)
