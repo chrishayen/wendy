@@ -49,6 +49,7 @@ type HTTPRequest struct {
 	Query       map[string]any    `json:"query,omitempty"`
 	Body        any               `json:"body,omitempty"`
 	BodyFixture string            `json:"body_fixture,omitempty"`
+	BodyBase64  string            `json:"body_base64,omitempty"`
 }
 
 type HTTPResponse struct {

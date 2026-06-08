@@ -2,6 +2,7 @@ package testkit
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -42,7 +43,7 @@ func ReplayHTTPFixture(handler http.Handler, pkg FixturePackage, fixtureID strin
 		return ReplayResult{}, err
 	}
 	result := ReplayResult{FixtureID: fixtureID, Status: rec.Code, RawBody: raw}
-	if err := compareReplayResponse(pkg, fixtureID, *fixture.Response, result.Status, raw); err != nil {
+	if err := compareReplayResponse(pkg, fixtureID, *fixture.Response, result.Status, resp.Header, raw); err != nil {
 		return result, err
 	}
 	if fixture.Response.Body != nil {
@@ -96,6 +97,13 @@ func requestBodyFromFixture(pkg FixturePackage, req contracts.HTTPRequest) ([]by
 	if req.BodyFixture != "" {
 		return readBase64Fixture(filepath.Join(filepath.Dir(pkg.AbsPath), req.BodyFixture))
 	}
+	if req.BodyBase64 != "" {
+		body, err := base64.StdEncoding.DecodeString(req.BodyBase64)
+		if err != nil {
+			return nil, fmt.Errorf("request body_base64 is invalid: %w", err)
+		}
+		return body, nil
+	}
 	if req.Body == nil {
 		return nil, nil
 	}
@@ -111,12 +119,17 @@ func expectedRequestID(resp *contracts.HTTPResponse) string {
 	return value
 }
 
-func compareReplayResponse(pkg FixturePackage, fixtureID string, expected contracts.HTTPResponse, status int, raw []byte) error {
+func compareReplayResponse(pkg FixturePackage, fixtureID string, expected contracts.HTTPResponse, status int, headers http.Header, raw []byte) error {
 	if expected.Status == nil {
 		return fmt.Errorf("%s: expected fixture has no status", fixtureID)
 	}
 	if status != *expected.Status {
 		return fmt.Errorf("%s: status %d, want %d: %s", fixtureID, status, *expected.Status, string(raw))
+	}
+	for key, value := range expected.Headers {
+		if got := headers.Get(key); got != value {
+			return fmt.Errorf("%s: header %s = %q, want %q", fixtureID, key, got, value)
+		}
 	}
 	if expected.BodyFixture != "" {
 		expectedBytes, err := readBase64Fixture(filepath.Join(filepath.Dir(pkg.AbsPath), expected.BodyFixture))

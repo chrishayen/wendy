@@ -228,11 +228,13 @@ func decodeBody(w http.ResponseWriter, r *http.Request, out any) bool {
 func writeStoreError(w http.ResponseWriter, r *http.Request, err error) {
 	switch {
 	case errors.Is(err, ErrNotFound):
-		writeError(w, r, http.StatusNotFound, "not_found", "artifact resource not found", false)
+		writeError(w, r, http.StatusNotFound, "not_found", "artifact not found", false)
 	case errors.Is(err, ErrValidation):
-		writeError(w, r, http.StatusBadRequest, "validation_failed", err.Error(), false)
+		writeError(w, r, http.StatusBadRequest, "validation_failed", validationMessage(err), false)
 	case errors.Is(err, ErrMissingIdempotencyKey):
 		writeError(w, r, http.StatusBadRequest, "missing_idempotency_key", "Idempotency-Key header is required for artifact upload operations", false)
+	case errors.Is(err, ErrRequestConflict):
+		writeError(w, r, http.StatusConflict, "idempotency_conflict", "idempotency key was reused with different request content", false)
 	case errors.Is(err, ErrIdempotencyConflict):
 		writeError(w, r, http.StatusConflict, "idempotency_conflict", "idempotency key was reused with different upload content", false)
 	case errors.Is(err, ErrExpired):
@@ -248,6 +250,10 @@ func writeStoreError(w http.ResponseWriter, r *http.Request, err error) {
 	default:
 		writeError(w, r, http.StatusInternalServerError, "internal_error", "artifact operation failed", false)
 	}
+}
+
+func validationMessage(err error) string {
+	return strings.TrimPrefix(err.Error(), ErrValidation.Error()+": ")
 }
 
 func writeSuccess(w http.ResponseWriter, r *http.Request, status int, data any) {

@@ -2,10 +2,17 @@ package artifacts
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"testing"
+	"time"
+
+	"pacp/internal/contracts"
+	"pacp/internal/testkit"
 )
 
 func TestHandlerUploadLifecycleAndContentRead(t *testing.T) {
@@ -105,6 +112,61 @@ func TestHandlerHealth(t *testing.T) {
 	}
 }
 
+func TestHandlerReplaysS003ArtifactStoreFixtures(t *testing.T) {
+	scenario, err := testkit.LoadScenario(filepath.Join("..", "..", "..", "testdata", "contract-sim"), filepath.Join("fixtures", "S003", "manifest.json"))
+	if err != nil {
+		t.Fatalf("load scenario: %v", err)
+	}
+	pkg, ok := testkit.FindPackage(scenario, "c07-artifact-store")
+	if !ok {
+		t.Fatalf("c07 fixture package not found")
+	}
+
+	tests := []struct {
+		fixtureID string
+		seed      func(*testing.T, *Store, testkit.FixturePackage)
+	}{
+		{"artifact_upload_content_ok", seedS003CreatedUpload},
+		{"artifact_policy_context_ok", seedS003CompletedArtifact},
+		{"artifact_metadata_ok", seedS003CompletedArtifact},
+		{"artifact_list_by_producer_ok", seedS003CompletedArtifact},
+		{"artifact_content_ok", seedS003CompletedArtifact},
+		{"artifact_upload_content_missing_headers", seedS003CreatedUpload},
+		{"artifact_upload_content_bad_digest", seedS003CreatedUpload},
+		{"artifact_upload_content_length_mismatch", seedS003CreatedUpload},
+		{"artifact_upload_session_completed", seedS003CompletedArtifact},
+		{"artifact_upload_missing_idempotency", nil},
+		{"artifact_upload_create_idempotency_replay", seedS003CreateIdempotency},
+		{"artifact_upload_create_idempotency_conflict", seedS003CreateIdempotency},
+		{"artifact_expired_upload", seedS003ExpiredUpload},
+		{"artifact_checksum_mismatch", seedS003ReceivedUpload},
+		{"artifact_size_mismatch", seedS003ReceivedUpload},
+		{"artifact_policy_context_missing", nil},
+		{"artifact_metadata_missing", nil},
+		{"artifact_content_missing", nil},
+		{"artifact_list_empty", nil},
+		{"artifact_upload_content_missing_idempotency", seedS003CreatedUpload},
+		{"artifact_upload_complete_missing_idempotency", seedS003ReceivedUpload},
+		{"artifact_upload_content_idempotency_replay", seedS003ContentIdempotency},
+		{"artifact_upload_content_idempotency_conflict", seedS003ContentIdempotency},
+		{"artifact_upload_complete_idempotency_replay", seedS003CompleteIdempotency},
+		{"artifact_upload_complete_idempotency_conflict", seedS003CompleteIdempotency},
+		{"artifact_upload_complete_duplicate_without_matching_key", seedS003CompletedArtifact},
+	}
+	for _, test := range tests {
+		t.Run(test.fixtureID, func(t *testing.T) {
+			store := newTestStore(t)
+			store.SetClock(fixedS003Time("2026-06-05T20:00:00Z"))
+			if test.seed != nil {
+				test.seed(t, store, pkg)
+			}
+			if _, err := testkit.ReplayHTTPFixture(NewHandler(store), pkg, test.fixtureID); err != nil {
+				t.Fatalf("replay %s: %v", test.fixtureID, err)
+			}
+		})
+	}
+}
+
 func doJSON(t *testing.T, handler http.Handler, method, path string, body any, headers map[string]string, wantStatus int) map[string]any {
 	t.Helper()
 	envelope := doJSONEnvelope(t, handler, method, path, body, headers, wantStatus)
@@ -194,4 +256,236 @@ func labelsMatch(raw any, want map[string]string) bool {
 		}
 	}
 	return true
+}
+
+const (
+	s003UploadID   = "upload_s003_0001"
+	s003ArtifactID = "art_s003_0001"
+	s003Checksum   = "sha256:4b5c5c92cec3b23e6a294fc0eea43234ef5126c5a64f4c6c531ac8430ab0b844"
+	s003Digest     = "sha-256=S1xcks7Dsj5qKU/A7qQyNO9RJsWmT0xsUxrIQwqwuEQ="
+	s003Size       = int64(68)
+)
+
+func seedS003CreatedUpload(t *testing.T, store *Store, _ testkit.FixturePackage) {
+	t.Helper()
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	store.uploads[s003UploadID] = &uploadRecord{
+		session:  s003CreatedUpload(),
+		metadata: s003Metadata(),
+	}
+}
+
+func seedS003ReceivedUpload(t *testing.T, store *Store, pkg testkit.FixturePackage) {
+	t.Helper()
+	body := readS003Body(t, pkg)
+	path, err := store.safeUploadPath(s003UploadID)
+	if err != nil {
+		t.Fatalf("upload path: %v", err)
+	}
+	if err := os.WriteFile(path, body, 0o600); err != nil {
+		t.Fatalf("write upload body: %v", err)
+	}
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	store.uploads[s003UploadID] = &uploadRecord{
+		session:               s003ReceivedUpload(),
+		metadata:              s003Metadata(),
+		receivedChecksum:      s003Checksum,
+		receivedDigest:        s003Digest,
+		receivedPath:          path,
+		contentIdempotencyKey: "idem_s003_artifact_upload_content",
+	}
+}
+
+func seedS003CompletedArtifact(t *testing.T, store *Store, pkg testkit.FixturePackage) {
+	t.Helper()
+	body := readS003Body(t, pkg)
+	path, err := store.safeBlobPath(s003ArtifactID)
+	if err != nil {
+		t.Fatalf("blob path: %v", err)
+	}
+	if err := os.WriteFile(path, body, 0o600); err != nil {
+		t.Fatalf("write artifact body: %v", err)
+	}
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	store.uploads[s003UploadID] = &uploadRecord{
+		session:                s003CompletedUpload(),
+		metadata:               s003Metadata(),
+		receivedChecksum:       s003Checksum,
+		receivedDigest:         s003Digest,
+		contentIdempotencyKey:  "idem_s003_artifact_upload_content",
+		completeIdempotencyKey: "idem_s003_artifact_upload_complete",
+	}
+	store.artifacts[s003ArtifactID] = &artifactRecord{
+		artifact: s003Artifact(),
+		path:     path,
+		digest:   s003Digest,
+	}
+}
+
+func seedS003ExpiredUpload(t *testing.T, store *Store, _ testkit.FixturePackage) {
+	t.Helper()
+	store.SetClock(fixedS003Time("2026-06-05T20:15:01Z"))
+	session := s003CreatedUpload()
+	session.UploadID = "upload_s003_expired"
+	session.Name = "expired.png"
+	session.ProducerRef = "job_s003_expired"
+	session.Links = uploadLinks(session.UploadID, contracts.ArtifactUploadCreated)
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	store.uploads[session.UploadID] = &uploadRecord{
+		session:  session,
+		metadata: map[string]any{},
+	}
+}
+
+func seedS003CreateIdempotency(t *testing.T, store *Store, _ testkit.FixturePackage) {
+	t.Helper()
+	fp := mustFingerprint(t, s003CreateUploadRequest())
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	store.idempotency["idem_s003_artifact_upload_create"] = idempotentRecord{
+		operation:   "upload:create",
+		fingerprint: fp,
+		response:    s003CreatedUpload(),
+		created:     true,
+	}
+}
+
+func seedS003ContentIdempotency(t *testing.T, store *Store, _ testkit.FixturePackage) {
+	t.Helper()
+	fp := mustFingerprint(t, map[string]any{
+		"upload_id":      s003UploadID,
+		"content_type":   "image/png",
+		"content_length": "68",
+		"digest":         s003Digest,
+		"checksum":       s003Checksum,
+	})
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	store.idempotency["idem_s003_artifact_upload_content"] = idempotentRecord{
+		operation:   "upload:content:" + s003UploadID,
+		fingerprint: fp,
+		response:    s003ReceivedUpload(),
+	}
+}
+
+func seedS003CompleteIdempotency(t *testing.T, store *Store, _ testkit.FixturePackage) {
+	t.Helper()
+	fp := mustFingerprint(t, map[string]any{
+		"upload_id": s003UploadID,
+		"request": contracts.CompleteArtifactUploadRequest{
+			Checksum: s003Checksum,
+			Size:     s003Size,
+		},
+	})
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	store.idempotency["idem_s003_artifact_upload_complete"] = idempotentRecord{
+		operation:   "upload:complete:" + s003UploadID,
+		fingerprint: fp,
+		response:    s003Artifact(),
+		created:     true,
+	}
+}
+
+func s003CreateUploadRequest() contracts.CreateArtifactUploadRequest {
+	size := s003Size
+	return contracts.CreateArtifactUploadRequest{
+		Name:             "job_s003_0001.png",
+		MediaType:        "image/png",
+		ProducerRef:      "job_s003_0001",
+		OwnerSubjectID:   "sub_agent_s003",
+		ExpectedSize:     &size,
+		ExpectedChecksum: s003Checksum,
+		Metadata:         s003Metadata(),
+	}
+}
+
+func s003CreatedUpload() contracts.ArtifactUploadSession {
+	size := s003Size
+	return contracts.ArtifactUploadSession{
+		UploadID:         s003UploadID,
+		State:            contracts.ArtifactUploadCreated,
+		Name:             "job_s003_0001.png",
+		MediaType:        "image/png",
+		ProducerRef:      "job_s003_0001",
+		OwnerSubjectID:   "sub_agent_s003",
+		ExpectedSize:     &size,
+		ExpectedChecksum: s003Checksum,
+		ExpiresAt:        "2026-06-05T20:15:00Z",
+		Links:            uploadLinks(s003UploadID, contracts.ArtifactUploadCreated),
+	}
+}
+
+func s003ReceivedUpload() contracts.ArtifactUploadSession {
+	session := s003CreatedUpload()
+	size := s003Size
+	session.State = contracts.ArtifactUploadReceived
+	session.ReceivedSize = &size
+	session.Links = uploadLinks(s003UploadID, contracts.ArtifactUploadReceived)
+	return session
+}
+
+func s003CompletedUpload() contracts.ArtifactUploadSession {
+	session := s003ReceivedUpload()
+	artifactID := s003ArtifactID
+	session.State = contracts.ArtifactUploadCompleted
+	session.ArtifactID = &artifactID
+	session.CompletedAt = "2026-06-05T20:00:45Z"
+	session.Links = map[string]any{}
+	return session
+}
+
+func s003Artifact() contracts.Artifact {
+	return contracts.Artifact{
+		ArtifactID:     s003ArtifactID,
+		Name:           "job_s003_0001.png",
+		MediaType:      "image/png",
+		Size:           s003Size,
+		Checksum:       s003Checksum,
+		CreatedAt:      "2026-06-05T20:00:45Z",
+		ProducerRef:    "job_s003_0001",
+		OwnerSubjectID: "sub_agent_s003",
+		Metadata:       s003Metadata(),
+		Links:          artifactLinks(s003ArtifactID),
+	}
+}
+
+func s003Metadata() map[string]any {
+	return map[string]any{"capability_id": "cap_image_generate_gpu"}
+}
+
+func readS003Body(t *testing.T, pkg testkit.FixturePackage) []byte {
+	t.Helper()
+	raw, err := os.ReadFile(filepath.Join(filepath.Dir(pkg.AbsPath), "provider_png_s003_0001.base64"))
+	if err != nil {
+		t.Fatalf("read body fixture: %v", err)
+	}
+	body, err := base64.StdEncoding.DecodeString(string(bytes.TrimSpace(raw)))
+	if err != nil {
+		t.Fatalf("decode body fixture: %v", err)
+	}
+	return body
+}
+
+func fixedS003Time(value string) func() time.Time {
+	return func() time.Time {
+		parsed, err := time.Parse(time.RFC3339, value)
+		if err != nil {
+			panic(err)
+		}
+		return parsed
+	}
+}
+
+func mustFingerprint(t *testing.T, value any) string {
+	t.Helper()
+	fp, err := fingerprint(value)
+	if err != nil {
+		t.Fatalf("fingerprint: %v", err)
+	}
+	return fp
 }

@@ -25,6 +25,7 @@ var (
 	ErrValidation             = errors.New("validation failed")
 	ErrMissingIdempotencyKey  = errors.New("missing idempotency key")
 	ErrIdempotencyConflict    = errors.New("idempotency conflict")
+	ErrRequestConflict        = fmt.Errorf("%w: request idempotency conflict", ErrIdempotencyConflict)
 	ErrExpired                = errors.New("artifact expired")
 	ErrInvalidTransition      = errors.New("invalid artifact transition")
 	ErrDisallowedPath         = errors.New("artifact path is outside the configured root")
@@ -260,6 +261,9 @@ func (s *Store) CreateUpload(req contracts.CreateArtifactUploadRequest, idempote
 	defer s.mu.Unlock()
 	if replay, ok, err := s.checkIdempotencyLocked("upload:create", idempotencyKey, fp); ok || err != nil {
 		if err != nil {
+			if errors.Is(err, ErrIdempotencyConflict) {
+				return contracts.ArtifactUploadSession{}, false, ErrRequestConflict
+			}
 			return contracts.ArtifactUploadSession{}, false, err
 		}
 		return cloneUpload(replay.response.(contracts.ArtifactUploadSession)), false, nil
@@ -315,9 +319,6 @@ func (s *Store) PutContent(uploadID string, upload ContentUpload, idempotencyKey
 	}
 
 	checksum, digest := checksumAndDigest(upload.Body)
-	if upload.Digest != digest {
-		return contracts.ArtifactUploadSession{}, fmt.Errorf("%w: Digest does not match uploaded content", ErrValidation)
-	}
 	fp, err := fingerprint(map[string]any{
 		"upload_id":      uploadID,
 		"content_type":   upload.ContentType,
@@ -336,6 +337,9 @@ func (s *Store) PutContent(uploadID string, upload ContentUpload, idempotencyKey
 			return contracts.ArtifactUploadSession{}, err
 		}
 		return cloneUpload(replay.response.(contracts.ArtifactUploadSession)), nil
+	}
+	if upload.Digest != digest {
+		return contracts.ArtifactUploadSession{}, fmt.Errorf("%w: Digest does not match uploaded content", ErrValidation)
 	}
 
 	rec, ok := s.uploads[uploadID]

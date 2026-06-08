@@ -1,6 +1,7 @@
 package contracts
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -84,6 +85,14 @@ func validateHTTPRequest(path, id string, req *HTTPRequest, report *Report) {
 	}
 	if req.Path == "" || !strings.HasPrefix(req.Path, "/") {
 		report.add(path, id, "invalid_http_path", "request path must be absolute")
+	}
+	if req.BodyFixture != "" && req.BodyBase64 != "" {
+		report.add(path, id, "duplicate_request_body_source", "request must not include both body_fixture and body_base64")
+	}
+	if req.BodyBase64 != "" {
+		if _, err := base64.StdEncoding.DecodeString(req.BodyBase64); err != nil {
+			report.add(path, id, "request_body_base64_invalid", "request body_base64 must be valid standard base64")
+		}
 	}
 }
 
