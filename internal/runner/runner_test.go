@@ -694,6 +694,8 @@ func TestRunnerFailsJobWithProviderContentFetchStage(t *testing.T) {
 	jobsServer := httptest.NewServer(jobs.NewHandler(jobStore))
 	defer jobsServer.Close()
 
+	missingBody := []byte("missing provider content")
+	missingChecksum, _ := checksumAndDigest(missingBody)
 	providerServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.Method == http.MethodPost && r.URL.Path == "/v1/provider/capabilities/cap_ref_image/invoke":
@@ -703,6 +705,9 @@ func TestRunnerFailsJobWithProviderContentFetchStage(t *testing.T) {
 					ContentRef: "pcr_missing",
 					Name:       "provider-image.png",
 					MediaType:  "image/png",
+					Size:       int64(len(missingBody)),
+					Checksum:   missingChecksum,
+					ExpiresAt:  "2030-01-01T00:00:00Z",
 				}},
 			})
 		case r.Method == http.MethodGet && r.URL.Path == "/v1/provider/artifacts/pcr_missing/content":
@@ -767,6 +772,92 @@ func TestRunnerFailsJobWithProviderContentFetchStage(t *testing.T) {
 		t.Fatalf("failed job = %#v", failed)
 	}
 	if !strings.Contains(failed.TerminalError.Message, "provider content fetch \"pcr_missing\" failed") || !strings.Contains(failed.TerminalError.Message, "provider content ref expired") {
+		t.Fatalf("terminal error = %#v", failed.TerminalError)
+	}
+}
+
+func TestRunnerFailsJobWhenProviderContentDigestMissing(t *testing.T) {
+	jobStore := jobs.NewStore()
+	jobsServer := httptest.NewServer(jobs.NewHandler(jobStore))
+	defer jobsServer.Close()
+
+	providerBody := []byte("provider content bytes")
+	checksum, _ := checksumAndDigest(providerBody)
+	providerServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/v1/provider/capabilities/cap_ref_image/invoke":
+			writeRunnerTestSuccess(w, http.StatusOK, contracts.ProviderInvokeResponse{
+				Output: map[string]any{"result": "image_generated"},
+				ContentRefs: []contracts.ProviderContentRef{{
+					ContentRef: "pcr_no_digest",
+					Name:       "provider-image.png",
+					MediaType:  "image/png",
+					Size:       int64(len(providerBody)),
+					Checksum:   checksum,
+					ExpiresAt:  "2030-01-01T00:00:00Z",
+				}},
+			})
+		case r.Method == http.MethodGet && r.URL.Path == "/v1/provider/artifacts/pcr_no_digest/content":
+			w.Header().Set("Content-Type", "image/png")
+			w.Header().Set("Content-Length", strconv.Itoa(len(providerBody)))
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write(providerBody)
+		default:
+			t.Fatalf("unexpected provider request %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer providerServer.Close()
+
+	route := contracts.CapabilityRoute{
+		CapabilityID:       "cap_ref_image",
+		ServiceID:          "svc_ref_provider",
+		ProviderEndpoint:   providerServer.URL,
+		ProviderHealthPath: "/v1/provider/health",
+		ProviderInvokePath: "/v1/provider/capabilities/cap_ref_image/invoke",
+		ServiceStartMode:   "manual",
+		ArtifactHints:      []contracts.ArtifactHint{{MediaType: "image/png", Count: "one"}},
+	}
+	created, _, err := jobStore.Create(contracts.CreateJobRequest{
+		RequesterID:  "sub_agent",
+		CapabilityID: "cap_ref_image",
+		InputSummary: map[string]any{"prompt_present": true},
+		Metadata: map[string]any{"execution_plan": map[string]any{
+			"capability_id":   "cap_ref_image",
+			"subject_id":      "sub_agent",
+			"input":           map[string]any{"prompt": "red mug"},
+			"route":           route,
+			"timeout_seconds": 30,
+		}},
+	}, "create-ref-missing-digest-job")
+	if err != nil {
+		t.Fatalf("create job: %v", err)
+	}
+
+	r := New(Config{
+		WorkerID:       "runner_test",
+		JobsURL:        jobsServer.URL,
+		ArtifactsURL:   "http://artifacts.invalid",
+		Client:         jobsServer.Client(),
+		ActorSubjectID: "sub_runner_test",
+	})
+	jobID, ok, err := r.RunOnce(context.Background())
+	if err == nil {
+		t.Fatal("expected provider content digest error")
+	}
+	if !strings.Contains(err.Error(), "provider content Digest is required") {
+		t.Fatalf("error = %v", err)
+	}
+	if !ok || jobID != created.JobID {
+		t.Fatalf("run result jobID=%q ok=%v", jobID, ok)
+	}
+	failed, err := jobStore.Get(created.JobID)
+	if err != nil {
+		t.Fatalf("get failed job: %v", err)
+	}
+	if failed.State != contracts.JobFailed || failed.TerminalError == nil || failed.TerminalError.Code != "artifact_upload_failed" {
+		t.Fatalf("failed job = %#v", failed)
+	}
+	if !strings.Contains(failed.TerminalError.Message, "provider content Digest is required") {
 		t.Fatalf("terminal error = %#v", failed.TerminalError)
 	}
 }

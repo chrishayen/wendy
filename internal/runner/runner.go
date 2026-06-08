@@ -913,9 +913,24 @@ func (r *Runner) uploadArtifacts(ctx context.Context, jobID, ownerSubjectID, cap
 func (r *Runner) fetchProviderContentRefs(ctx context.Context, providerEndpoint string, refs []contracts.ProviderContentRef) ([]contracts.ProviderArtifact, error) {
 	providerEndpoint = strings.TrimRight(providerEndpoint, "/")
 	artifacts := make([]contracts.ProviderArtifact, 0, len(refs))
-	for index, ref := range refs {
+	for _, ref := range refs {
 		if ref.ContentRef == "" {
 			return nil, errors.New("provider content_ref is required")
+		}
+		if strings.TrimSpace(ref.Name) == "" {
+			return nil, fmt.Errorf("provider content name is required for %q", ref.ContentRef)
+		}
+		if strings.TrimSpace(ref.MediaType) == "" {
+			return nil, fmt.Errorf("provider content media_type is required for %q", ref.ContentRef)
+		}
+		if ref.Size <= 0 {
+			return nil, fmt.Errorf("provider content size is required for %q", ref.ContentRef)
+		}
+		if strings.TrimSpace(ref.Checksum) == "" {
+			return nil, fmt.Errorf("provider content checksum is required for %q", ref.ContentRef)
+		}
+		if strings.TrimSpace(ref.ExpiresAt) == "" {
+			return nil, fmt.Errorf("provider content expires_at is required for %q", ref.ContentRef)
 		}
 		target := providerEndpoint + "/v1/provider/artifacts/" + url.PathEscape(ref.ContentRef) + "/content"
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
@@ -932,34 +947,42 @@ func (r *Runner) fetchProviderContentRefs(ctx context.Context, providerEndpoint 
 			return nil, fmt.Errorf("provider content fetch %q failed: %w", ref.ContentRef, readErr)
 		}
 		checksum, digest := checksumAndDigest(body)
-		if ref.Checksum != "" && ref.Checksum != checksum {
+		if ref.Checksum != checksum {
 			return nil, fmt.Errorf("provider content checksum mismatch for %q", ref.ContentRef)
 		}
-		if ref.Size > 0 && int64(len(body)) != ref.Size {
+		if int64(len(body)) != ref.Size {
 			return nil, fmt.Errorf("provider content size mismatch for %q", ref.ContentRef)
 		}
-		if got := resp.Header.Get("Digest"); got != "" && got != digest {
+		if !providerContentTypeMatches(resp.Header.Get("Content-Type"), ref.MediaType) {
+			return nil, fmt.Errorf("provider content media type mismatch for %q", ref.ContentRef)
+		}
+		gotDigest := strings.TrimSpace(resp.Header.Get("Digest"))
+		if gotDigest == "" {
+			return nil, fmt.Errorf("provider content Digest is required for %q", ref.ContentRef)
+		}
+		if gotDigest != digest {
 			return nil, fmt.Errorf("provider content digest mismatch for %q", ref.ContentRef)
 		}
-		name := ref.Name
-		if name == "" {
-			name = "provider-content-" + strconv.Itoa(index+1)
-		}
-		mediaType := ref.MediaType
-		if mediaType == "" {
-			mediaType = resp.Header.Get("Content-Type")
-		}
-		if mediaType == "" {
-			mediaType = "application/octet-stream"
-		}
 		artifacts = append(artifacts, contracts.ProviderArtifact{
-			Name:          name,
-			MediaType:     mediaType,
+			Name:          ref.Name,
+			MediaType:     ref.MediaType,
 			ContentBase64: base64.StdEncoding.EncodeToString(body),
 			Checksum:      checksum,
 		})
 	}
 	return artifacts, nil
+}
+
+func providerContentTypeMatches(got, want string) bool {
+	want = strings.TrimSpace(want)
+	if want == "" {
+		return true
+	}
+	got = strings.TrimSpace(got)
+	if i := strings.Index(got, ";"); i >= 0 {
+		got = strings.TrimSpace(got[:i])
+	}
+	return got == want
 }
 
 func (r *Runner) executionPlan(ctx context.Context, job contracts.Job) (executionPlan, error) {
