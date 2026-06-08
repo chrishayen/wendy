@@ -18,6 +18,8 @@ servers:
     description: Node service
   - url: http://localhost:18088
     description: Provider service
+  - url: http://localhost:18089
+    description: Runner monitor service
 security:
   - componentBearer: []
 tags:
@@ -28,6 +30,7 @@ tags:
   - name: policy
   - name: node
   - name: provider
+  - name: runner
 paths:
   /v1/catalog/health:
     get:
@@ -990,6 +993,29 @@ paths:
         default:
           $ref: "#/components/responses/Error"
 
+  /v1/runner/health:
+    get:
+      tags: [runner]
+      operationId: getRunnerHealth
+      security:
+        - runnerMonitorBearer: []
+      responses:
+        "200":
+          $ref: "#/components/responses/Health"
+        default:
+          $ref: "#/components/responses/Error"
+  /v1/runner/metrics:
+    get:
+      tags: [runner]
+      operationId: getRunnerMetrics
+      security:
+        - runnerMonitorBearer: []
+      responses:
+        "200":
+          $ref: "#/components/responses/Metrics"
+        default:
+          $ref: "#/components/responses/Error"
+
 components:
   securitySchemes:
     componentBearer:
@@ -1000,6 +1026,10 @@ components:
       type: http
       scheme: bearer
       description: Node-local bearer credential configured in the node config file.
+    runnerMonitorBearer:
+      type: http
+      scheme: bearer
+      description: Optional bearer credential configured with pacp-runner -monitor-token.
   parameters:
     ActorSubjectID:
       name: X-Actor-Subject-ID

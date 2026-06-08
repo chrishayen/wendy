@@ -5,11 +5,13 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"net/http"
 	"os"
 	"strings"
 	"time"
 
 	"pacp/internal/runner"
+	"pacp/internal/transportauth"
 )
 
 func main() {
@@ -22,6 +24,8 @@ func main() {
 	nodeURLsRaw := flag.String("node-urls", os.Getenv("PACP_NODE_URLS"), "optional comma-separated node_id=URL mappings for node-managed services")
 	credential := flag.String("credential", componentCredentialDefault("PACP_RUNNER_CREDENTIAL"), "component credential for downstream calls; defaults to PACP_RUNNER_CREDENTIAL or PACP_COMPONENT_TOKEN")
 	workerSubjectID := flag.String("worker-subject-id", os.Getenv("PACP_RUNNER_SUBJECT_ID"), "optional worker subject id for policy checks; defaults to verifying the runner credential")
+	addr := flag.String("addr", "", "optional HTTP listen address for runner health and metrics")
+	monitorToken := flag.String("monitor-token", os.Getenv("PACP_RUNNER_MONITOR_TOKEN"), "optional bearer token required for runner health and metrics")
 	nodeStartTimeout := flag.Duration("node-start-timeout", 30*time.Second, "maximum time to wait for node-managed service startup")
 	nodeStartPoll := flag.Duration("node-start-poll", 500*time.Millisecond, "poll interval while waiting for node-managed service startup")
 	once := flag.Bool("once", false, "process at most one queued job and exit")
@@ -48,6 +52,12 @@ func main() {
 		ComponentCredential: authorizationHeader(*credential),
 		WorkerSubjectID:     *workerSubjectID,
 	})
+	if strings.TrimSpace(*addr) != "" {
+		go func() {
+			log.Printf("serving runner monitor addr=%s", *addr)
+			log.Fatal(http.ListenAndServe(*addr, transportauth.RequireBearer(runner.NewHandler(r), *monitorToken)))
+		}()
+	}
 	for {
 		jobID, ok, err := r.RunOnce(context.Background())
 		if err != nil {

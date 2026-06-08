@@ -60,7 +60,8 @@ Contract simulation data is kept as test input, not as product behavior.
 - `cmd/pacp-artifacts`: runnable artifact store.
 - `cmd/pacp-policy`: runnable access policy and secrets service.
 - `cmd/pacp-node`: runnable runtime node agent for one configured service node.
-- `cmd/pacp-runner`: runnable composition runner.
+- `cmd/pacp-runner`: runnable composition runner with optional health and
+  metrics monitor endpoints.
 - `cmd/pacp-primary`: primary-host process for C03, C04, C05, C06, C07, C08,
   and an optional runner using arbitrary manifests, resources, and policy
   seed files.
@@ -139,7 +140,7 @@ go run ./cmd/pacp-artifacts -addr localhost:18084 -root /tmp/pacp-artifacts -sta
 go run ./cmd/pacp-policy -addr localhost:18085 -state-file /tmp/pacp-policy-state.json -seed testdata/policy/local-seed.json
 go run ./cmd/pacp-gateway -addr localhost:18086 -catalog-url http://localhost:18081 -jobs-url http://localhost:18082 -artifacts-url http://localhost:18084 -policy-url http://localhost:18085 -idempotency-state-file /tmp/pacp-gateway-idempotency-state.json
 go run ./cmd/pacp-node -addr localhost:18087 -config testdata/node/linux-gpu-fake.json
-go run ./cmd/pacp-runner -once -worker-id runner_local -jobs-url http://localhost:18082 -leases-url http://localhost:18083 -artifacts-url http://localhost:18084 -policy-url http://localhost:18085 -credential token_worker -node-urls node_linux_gpu=http://localhost:18087 -node-start-timeout 30s
+go run ./cmd/pacp-runner -once -worker-id runner_local -jobs-url http://localhost:18082 -leases-url http://localhost:18083 -artifacts-url http://localhost:18084 -policy-url http://localhost:18085 -credential token_worker -node-urls node_linux_gpu=http://localhost:18087 -node-start-timeout 30s -addr localhost:18089
 ```
 
 Deployment bundles are offline packaging inputs for distributed nodes. Render a
@@ -178,6 +179,9 @@ authentication is a separate transport guard.
 When `pacp-runner` is given `-policy-url`, or when the primary embedded runner
 uses the co-hosted policy service, the runner credential should identify a
 subject with `worker` scope so `provider.invoke` is allowed intentionally.
+Set `-addr` to expose `/v1/runner/health` and `/v1/runner/metrics`; set
+`-monitor-token` or `PACP_RUNNER_MONITOR_TOKEN` when those endpoints should
+require a bearer token.
 
 Use `pacp-runner -node-urls` or `PACP_NODE_URLS` for distributed nodes. The
 format is comma-separated `node_id=URL` entries, for example
@@ -211,10 +215,12 @@ curl http://localhost:18083/v1/leases/health
 curl http://localhost:18084/v1/artifacts/health
 curl http://localhost:18085/v1/policy/health
 curl http://localhost:18086/v1/gateway/health
+curl http://localhost:18089/v1/runner/health
 curl http://localhost:18082/v1/jobs/metrics
 curl http://localhost:18083/v1/leases/metrics
 curl http://localhost:18086/v1/gateway/metrics
 curl http://localhost:18088/v1/provider/metrics
+curl http://localhost:18089/v1/runner/metrics
 go run ./cmd/pacp-admin -node-url http://localhost:18087 -node-token token_agent_smoke health
 go run ./cmd/pacp-admin -node-urls node_linux_gpu=http://localhost:18087 -node-token token_agent_smoke health -providers
 go run ./cmd/pacp-admin -node-urls node_linux_gpu=http://localhost:18087 -node-token token_agent_smoke metrics
@@ -230,6 +236,8 @@ Component metrics include component-specific state samples plus HTTP request
 count, error count, and average latency by method and normalized route group.
 Provider metrics additionally expose invocation count, error count, and average
 duration by service id, capability id, status, and error code.
+Runner metrics expose active job count, run loop results, successful heartbeat
+timestamps, and dependency reachability for configured primary APIs and nodes.
 Gateway and runner requests propagate `X-Request-ID` to downstream component,
 node, artifact, and provider calls so logs and response metadata can be
 correlated across the distributed flow.

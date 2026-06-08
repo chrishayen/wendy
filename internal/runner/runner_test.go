@@ -97,6 +97,56 @@ func TestRunnerCompletesJobAndUploadsArtifact(t *testing.T) {
 	if artifact.ProducerRef != created.JobID || artifact.OwnerSubjectID != "sub_agent" {
 		t.Fatalf("artifact = %#v", artifact)
 	}
+
+	metrics := r.Metrics(context.Background())
+	assertContractMetric(t, metrics.Samples, "runner_run_once_total", map[string]string{"result": "success"}, 1)
+	assertContractMetric(t, metrics.Samples, "runner_job_heartbeats_total", nil, 1)
+	assertContractMetric(t, metrics.Samples, "runner_dependency_reachable", map[string]string{"dependency": "jobs", "required": "true", "status": "healthy"}, 1)
+	assertContractMetricExists(t, metrics.Samples, "runner_last_successful_heartbeat_unix_seconds", nil)
+}
+
+func TestRunnerMonitorHTTPReportsHealthAndMetrics(t *testing.T) {
+	jobStore := jobs.NewStore()
+	jobsServer := httptest.NewServer(jobs.NewHandler(jobStore))
+	defer jobsServer.Close()
+
+	leasesServer := httptest.NewServer(leases.NewHandler(leases.NewStore()))
+	defer leasesServer.Close()
+
+	artifactStore, err := artifacts.NewStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("artifact store: %v", err)
+	}
+	artifactsServer := httptest.NewServer(artifacts.NewHandler(artifactStore))
+	defer artifactsServer.Close()
+
+	r := New(Config{
+		WorkerID:     "runner_test",
+		JobsURL:      jobsServer.URL,
+		LeasesURL:    leasesServer.URL,
+		ArtifactsURL: artifactsServer.URL,
+		Client:       jobsServer.Client(),
+	})
+	handler := NewHandler(r)
+
+	health := requestRunnerData(t, handler, http.MethodGet, "/v1/runner/health")
+	if health["status"] != "healthy" {
+		t.Fatalf("health = %#v", health)
+	}
+	details := health["details"].(map[string]any)
+	if details["worker_id"] != "runner_test" || int(details["active_jobs"].(float64)) != 0 {
+		t.Fatalf("health details = %#v", details)
+	}
+	if len(details["dependencies"].([]any)) != 3 {
+		t.Fatalf("dependencies = %#v", details["dependencies"])
+	}
+
+	metrics := requestRunnerData(t, handler, http.MethodGet, "/v1/runner/metrics")
+	if metrics["component"] != "runner" {
+		t.Fatalf("metrics = %#v", metrics)
+	}
+	assertDecodedMetric(t, metrics, "runner_dependency_reachable", map[string]string{"dependency": "jobs", "required": "true", "status": "healthy"}, 1)
+	assertDecodedMetric(t, metrics, "http_requests_total", map[string]string{"method": "GET", "route_group": "/v1/runner/health", "status_class": "2xx"}, 1)
 }
 
 func TestRunnerPropagatesRequestIDToComponentRequests(t *testing.T) {
@@ -561,4 +611,82 @@ func writeRunnerTestSuccess(w http.ResponseWriter, status int, data any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(contracts.SuccessEnvelope{OK: true, Data: data, Links: map[string]any{}, Meta: map[string]string{"request_id": "req_test", "schema_version": "v1"}})
+}
+
+func requestRunnerData(t *testing.T, handler http.Handler, method, path string) map[string]any {
+	t.Helper()
+	req := httptest.NewRequest(method, path, nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("%s %s status=%d body=%s", method, path, rec.Code, rec.Body.String())
+	}
+	var envelope map[string]any
+	if err := json.NewDecoder(rec.Body).Decode(&envelope); err != nil {
+		t.Fatalf("decode envelope: %v", err)
+	}
+	if !envelope["ok"].(bool) {
+		t.Fatalf("envelope = %#v", envelope)
+	}
+	return envelope["data"].(map[string]any)
+}
+
+func assertContractMetric(t *testing.T, samples []contracts.MetricSample, name string, labels map[string]string, want float64) {
+	t.Helper()
+	for _, sample := range samples {
+		if sample.Name != name || !contractLabelsMatch(sample.Labels, labels) {
+			continue
+		}
+		if sample.Value != want {
+			t.Fatalf("%s value=%v want=%v labels=%#v", name, sample.Value, want, labels)
+		}
+		return
+	}
+	t.Fatalf("missing metric %s labels=%#v in %#v", name, labels, samples)
+}
+
+func assertContractMetricExists(t *testing.T, samples []contracts.MetricSample, name string, labels map[string]string) {
+	t.Helper()
+	for _, sample := range samples {
+		if sample.Name == name && contractLabelsMatch(sample.Labels, labels) {
+			return
+		}
+	}
+	t.Fatalf("missing metric %s labels=%#v in %#v", name, labels, samples)
+}
+
+func contractLabelsMatch(actual, want map[string]string) bool {
+	for key, value := range want {
+		if actual[key] != value {
+			return false
+		}
+	}
+	return true
+}
+
+func assertDecodedMetric(t *testing.T, data map[string]any, name string, labels map[string]string, want float64) {
+	t.Helper()
+	samples := data["samples"].([]any)
+	for _, rawSample := range samples {
+		sample, ok := rawSample.(map[string]any)
+		if !ok || sample["name"] != name {
+			continue
+		}
+		rawLabels, _ := sample["labels"].(map[string]any)
+		matched := true
+		for key, value := range labels {
+			if rawLabels[key] != value {
+				matched = false
+				break
+			}
+		}
+		if !matched {
+			continue
+		}
+		if sample["value"].(float64) != want {
+			t.Fatalf("%s value=%v want=%v labels=%#v", name, sample["value"], want, labels)
+		}
+		return
+	}
+	t.Fatalf("missing metric %s labels=%#v in %#v", name, labels, samples)
 }

@@ -38,6 +38,7 @@ type Config struct {
 type Runner struct {
 	cfg    Config
 	client *http.Client
+	stats  *runnerStats
 }
 
 type executionPlan struct {
@@ -66,7 +67,7 @@ func New(cfg Config) *Runner {
 	cfg.PolicyURL = strings.TrimRight(cfg.PolicyURL, "/")
 	cfg.NodeURL = strings.TrimRight(cfg.NodeURL, "/")
 	cfg.NodeURLs = normalizeNodeURLs(cfg.NodeURLs)
-	return &Runner{cfg: cfg, client: client}
+	return &Runner{cfg: cfg, client: client, stats: newRunnerStats()}
 }
 
 func normalizeNodeURLs(raw map[string]string) map[string]string {
@@ -86,13 +87,23 @@ func normalizeNodeURLs(raw map[string]string) map[string]string {
 
 func (r *Runner) RunOnce(ctx context.Context) (string, bool, error) {
 	ctx = observability.EnsureContextRequestID(ctx, "req_runner")
+	r.stats.RecordRunStart()
 	job, ok, err := r.nextQueuedJob(ctx)
 	if err != nil || !ok {
+		if err != nil {
+			r.stats.RecordRunResult("error", classifyRunnerError(err), err)
+		} else {
+			r.stats.RecordRunResult("idle", "", nil)
+		}
 		return "", ok, err
 	}
+	r.stats.BeginJob(job.JobID)
+	defer r.stats.EndJob(job.JobID)
 	if err := r.runJob(ctx, job); err != nil {
+		r.stats.RecordRunResult("error", classifyRunnerError(err), err)
 		return job.JobID, true, err
 	}
+	r.stats.RecordRunResult("success", "", nil)
 	return job.JobID, true, nil
 }
 
@@ -186,7 +197,11 @@ func (r *Runner) claimJob(ctx context.Context, jobID string) (contracts.Job, err
 
 func (r *Runner) heartbeatRunning(ctx context.Context, jobID string) error {
 	var job contracts.Job
-	return r.postJSON(ctx, r.cfg.JobsURL+"/v1/jobs/"+url.PathEscape(jobID)+"/heartbeat", contracts.JobHeartbeatRequest{WorkerID: r.cfg.WorkerID, TransitionTo: "running", StatusMessage: "running"}, "", &job)
+	if err := r.postJSON(ctx, r.cfg.JobsURL+"/v1/jobs/"+url.PathEscape(jobID)+"/heartbeat", contracts.JobHeartbeatRequest{WorkerID: r.cfg.WorkerID, TransitionTo: "running", StatusMessage: "running"}, "", &job); err != nil {
+		return err
+	}
+	r.stats.RecordHeartbeat(jobID)
+	return nil
 }
 
 func (r *Runner) completeJob(ctx context.Context, jobID string, artifactIDs []string) error {
