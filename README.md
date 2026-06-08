@@ -107,6 +107,7 @@ go run ./cmd/pacp-admin -gateway-token token_agent jobs cancel job_000001 -idemp
 go run ./cmd/pacp-admin leases resources
 go run ./cmd/pacp-admin leases register-resource -resource-id res_gpu_0 -selector gpu -node-id node_linux_gpu -tags gpu,gpu:0
 go run ./cmd/pacp-admin leases create-request -requester-id job_manual -selector gpu
+go run ./cmd/pacp-admin leases requests -requester-id job_manual
 go run ./cmd/pacp-admin leases cancel-request lease_req_000001 -reason "operator cleanup"
 go run ./cmd/pacp-admin leases release lease_000001 -holder-id job_manual -idempotency-key release-1 -actor-subject-id sub_admin -reason "operator release"
 go run ./cmd/pacp-admin artifacts list

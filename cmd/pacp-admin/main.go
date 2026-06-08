@@ -430,7 +430,7 @@ func jobsCancelCommand(cfg adminConfig, httpClient *http.Client, args []string, 
 
 func leasesCommand(cfg adminConfig, httpClient *http.Client, args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
-		return usage(stderr, "usage: pacp-admin [flags] leases <resources|resource|register-resource|inspect|request|create-request|cancel-request|lease|release> [id]")
+		return usage(stderr, "usage: pacp-admin [flags] leases <resources|resource|register-resource|inspect|requests|request|create-request|cancel-request|lease|release> [id]")
 	}
 	switch args[0] {
 	case "resources":
@@ -450,6 +450,8 @@ func leasesCommand(cfg adminConfig, httpClient *http.Client, args []string, stdo
 			return usage(stderr, "usage: pacp-admin [flags] leases inspect <resource-id>")
 		}
 		return getJSON(cfg, httpClient, cfg.LeasesURL, "/v1/resources/"+url.PathEscape(args[1])+"/inspection", authorizationHeader(cfg.ComponentToken), stdout, stderr)
+	case "requests":
+		return leasesRequestsCommand(cfg, httpClient, args[1:], stdout, stderr)
 	case "request":
 		if len(args) != 2 {
 			return usage(stderr, "usage: pacp-admin [flags] leases request <request-id>")
@@ -467,7 +469,7 @@ func leasesCommand(cfg adminConfig, httpClient *http.Client, args []string, stdo
 	case "release":
 		return leasesReleaseCommand(cfg, httpClient, args[1:], stdout, stderr)
 	default:
-		return usage(stderr, "usage: pacp-admin [flags] leases <resources|resource|register-resource|inspect|request|create-request|cancel-request|lease|release> [id]")
+		return usage(stderr, "usage: pacp-admin [flags] leases <resources|resource|register-resource|inspect|requests|request|create-request|cancel-request|lease|release> [id]")
 	}
 }
 
@@ -508,6 +510,24 @@ func leasesRegisterResourceCommand(cfg adminConfig, httpClient *http.Client, arg
 		req.Status = contracts.ResourceStatus(*status)
 	}
 	return postJSONBody(cfg, httpClient, cfg.LeasesURL, "/v1/resources", authorizationHeader(cfg.ComponentToken), "", req, stdout, stderr)
+}
+
+func leasesRequestsCommand(cfg adminConfig, httpClient *http.Client, args []string, stdout, stderr io.Writer) int {
+	flags := flag.NewFlagSet("leases requests", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	requesterID := flags.String("requester-id", "", "requester or job id")
+	remaining, err := parseSubcommandFlags(flags, args)
+	if err != nil {
+		return 2
+	}
+	if len(remaining) != 0 {
+		return usage(stderr, "usage: pacp-admin [flags] leases requests -requester-id <id>")
+	}
+	if *requesterID == "" {
+		return usage(stderr, "requester-id is required for leases requests")
+	}
+	path := "/v1/lease-requests?requester_id=" + url.QueryEscape(*requesterID)
+	return getJSON(cfg, httpClient, cfg.LeasesURL, path, authorizationHeader(cfg.ComponentToken), stdout, stderr)
 }
 
 func leasesCreateRequestCommand(cfg adminConfig, httpClient *http.Client, args []string, stdout, stderr io.Writer) int {

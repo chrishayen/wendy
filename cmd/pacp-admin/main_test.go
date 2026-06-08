@@ -896,6 +896,36 @@ func TestLeasesCreateRequestCommandPostsRequest(t *testing.T) {
 	}
 }
 
+func TestLeasesRequestsCommandListsByRequester(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/v1/lease-requests" {
+			t.Fatalf("request = %s %s", r.Method, r.URL.Path)
+		}
+		if r.URL.Query().Get("requester_id") != "job_1" {
+			t.Fatalf("query = %s", r.URL.RawQuery)
+		}
+		if r.Header.Get("Authorization") != "Bearer component-token" {
+			t.Fatalf("authorization = %q", r.Header.Get("Authorization"))
+		}
+		writeEnvelope(t, w, http.StatusOK, map[string]any{"items": []any{map[string]any{"request_id": "lease_req_1", "state": "pending"}}})
+	}))
+	defer server.Close()
+
+	var stdout, stderr bytes.Buffer
+	code := run([]string{
+		"-leases-url", server.URL,
+		"-component-token", "component-token",
+		"leases", "requests",
+		"-requester-id", "job_1",
+	}, &stdout, &stderr, server.Client())
+	if code != 0 {
+		t.Fatalf("code=%d stderr=%s stdout=%s", code, stderr.String(), stdout.String())
+	}
+	if !strings.Contains(stdout.String(), `"request_id": "lease_req_1"`) {
+		t.Fatalf("stdout = %s", stdout.String())
+	}
+}
+
 func TestLeasesCancelRequestCommandPostsCancel(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost || r.URL.Path != "/v1/lease-requests/lease_req_1/cancel" {
