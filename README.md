@@ -50,6 +50,8 @@ Contract simulation data is kept as test input, not as product behavior.
 - `cmd/pacp-speech-provider`: purpose-specific text-to-speech and
   speech-to-text provider with voice/format validation and command-backed
   engine adapters.
+- `cmd/pacp-ai-toolkit-provider`: purpose-specific dataset registry and LoRA
+  training provider with a provider-owned workspace and dry-run mode.
 - `cmd/pacp-catalog`: runnable catalog server that loads provider manifests.
 - `cmd/pacp-gateway`: runnable agent tool gateway.
 - `cmd/pacp-jobs`: runnable async job service.
@@ -88,6 +90,7 @@ go run ./cmd/pacp-command-provider -addr localhost:18088 -manifest provider-mani
 go run ./cmd/pacp-browser-search-provider -addr localhost:18089 -search-index testdata/browser-search/index.json -allowed-hosts localhost,127.0.0.1
 go run ./cmd/pacp-comfyui-provider -addr localhost:18090 -dry-run -workflow testdata/comfyui/workflow-template.json -lora-catalog testdata/comfyui/loras.json
 go run ./cmd/pacp-speech-provider -addr localhost:18091 -dry-run -voice-catalog testdata/speech/catalog.json
+go run ./cmd/pacp-ai-toolkit-provider -addr localhost:18092 -dry-run -workspace testdata/ai-toolkit
 go run ./cmd/pacp-admin health
 go run ./cmd/pacp-admin catalog capabilities
 go run ./cmd/pacp-admin catalog import /tmp/pacp-bundle/catalog
