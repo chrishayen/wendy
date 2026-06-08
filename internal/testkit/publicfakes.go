@@ -98,6 +98,17 @@ type FakeArtifactsConfig struct {
 	Samples            []contracts.MetricSample
 }
 
+type FakeCatalogConfig struct {
+	Credential               string
+	Behavior                 FakeComponentBehavior
+	HealthStatus             string
+	Records                  []contracts.CatalogCapabilityRecord
+	DeniedCapabilityIDs      map[string]bool
+	UnavailableCapabilityIDs map[string]bool
+	Now                      func() time.Time
+	Samples                  []contracts.MetricSample
+}
+
 func NewFakeComponentHandler(cfg FakeComponentConfig) (http.Handler, error) {
 	contract, ok := componentContractFor(strings.TrimSpace(cfg.Kind))
 	if !ok {
@@ -344,6 +355,38 @@ func NewFakeArtifactsHandler(cfg FakeArtifactsConfig) (http.Handler, error) {
 	return handler, nil
 }
 
+func NewFakeCatalogHandler(cfg FakeCatalogConfig) (http.Handler, error) {
+	if cfg.Now == nil {
+		cfg.Now = time.Now
+	}
+	if cfg.HealthStatus == "" {
+		cfg.HealthStatus = "healthy"
+	}
+	if cfg.Behavior == "" {
+		cfg.Behavior = FakeComponentSuccess
+	}
+	switch cfg.Behavior {
+	case FakeComponentSuccess, FakeComponentDenied, FakeComponentUnavailable:
+	default:
+		return nil, errors.New("unsupported fake catalog behavior: " + string(cfg.Behavior))
+	}
+	records := cfg.Records
+	if records == nil {
+		records = fakeCatalogRecords()
+	}
+	if cfg.DeniedCapabilityIDs == nil {
+		cfg.DeniedCapabilityIDs = map[string]bool{"cap_fake_denied": true}
+	}
+	if cfg.UnavailableCapabilityIDs == nil {
+		cfg.UnavailableCapabilityIDs = map[string]bool{"cap_fake_unavailable": true}
+	}
+	handler := newFakeCatalogHandler(cfg, records)
+	if cfg.Credential != "" {
+		return requireFakeCredential(cfg.Credential, handler), nil
+	}
+	return handler, nil
+}
+
 type fakeComponentHandler struct {
 	cfg      FakeComponentConfig
 	contract componentContract
@@ -421,6 +464,14 @@ type fakeArtifactIdempotency struct {
 	operation   string
 	id          string
 	fingerprint string
+}
+
+type fakeCatalogHandler struct {
+	mu       sync.Mutex
+	cfg      FakeCatalogConfig
+	records  map[string]contracts.CatalogCapabilityRecord
+	order    []string
+	services map[string]contracts.Service
 }
 
 func newFakeNodeHandler(cfg FakeNodeConfig, resources []contracts.NodeResource, services []contracts.NodeService) *fakeNodeHandler {
@@ -560,6 +611,24 @@ func newFakeArtifactsHandler(cfg FakeArtifactsConfig, artifacts []contracts.Arti
 		nextUpload:   len(uploadIDs) + 1,
 		nextArtifact: len(artifactIDs) + 1,
 	}
+}
+
+func newFakeCatalogHandler(cfg FakeCatalogConfig, records []contracts.CatalogCapabilityRecord) *fakeCatalogHandler {
+	recordMap := make(map[string]contracts.CatalogCapabilityRecord, len(records))
+	order := make([]string, 0, len(records))
+	services := map[string]contracts.Service{}
+	for _, record := range records {
+		record = cloneFakeCatalogRecord(record)
+		if record.Capability.ID == "" {
+			continue
+		}
+		recordMap[record.Capability.ID] = record
+		order = append(order, record.Capability.ID)
+		if record.Service.ID != "" {
+			services[record.Service.ID] = record.Service
+		}
+	}
+	return &fakeCatalogHandler{cfg: cfg, records: recordMap, order: order, services: services}
 }
 
 func (h *fakeComponentHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -2166,6 +2235,222 @@ func (h *fakeArtifactsHandler) writeBlocked(w http.ResponseWriter, r *http.Reque
 	}
 }
 
+func (h *fakeCatalogHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if h.writeBlocked(w, r) {
+		return
+	}
+	path := strings.TrimSuffix(r.URL.Path, "/")
+	switch {
+	case r.Method == http.MethodGet && path == "/v1/catalog/health":
+		health := contracts.NewComponentHealth("catalog", map[string]any{"fake": true})
+		health.Status = h.cfg.HealthStatus
+		health.CheckedAt = h.cfg.Now().UTC().Format(time.RFC3339)
+		writeFakeSuccess(w, r, http.StatusOK, health)
+	case r.Method == http.MethodGet && path == "/v1/catalog/metrics":
+		samples := h.cfg.Samples
+		if samples == nil {
+			samples = h.metricsSamples()
+		}
+		metrics := contracts.NewComponentMetrics("catalog", samples)
+		metrics.CollectedAt = h.cfg.Now().UTC().Format(time.RFC3339)
+		writeFakeSuccess(w, r, http.StatusOK, metrics)
+	case r.Method == http.MethodPost && path == "/v1/catalog/manifests":
+		h.registerManifest(w, r)
+	case r.Method == http.MethodGet && path == "/v1/catalog/services":
+		h.listServices(w, r)
+	case r.Method == http.MethodGet && strings.HasPrefix(path, "/v1/catalog/services/"):
+		h.getService(w, r, strings.TrimPrefix(path, "/v1/catalog/services/"))
+	case r.Method == http.MethodGet && path == "/v1/catalog/capabilities":
+		writeFakeSuccess(w, r, http.StatusOK, map[string]any{"items": h.listCapabilities(r.URL.Query()), "next_cursor": nil})
+	case r.Method == http.MethodGet && strings.HasPrefix(path, "/v1/catalog/capabilities/") && strings.HasSuffix(path, "/route"):
+		capabilityID := strings.TrimSuffix(strings.TrimPrefix(path, "/v1/catalog/capabilities/"), "/route")
+		h.getCapabilityRoute(w, r, capabilityID)
+	case r.Method == http.MethodGet && strings.HasPrefix(path, "/v1/catalog/capabilities/"):
+		h.getCapability(w, r, strings.TrimPrefix(path, "/v1/catalog/capabilities/"))
+	case r.Method == http.MethodGet && path == "/v1/catalog/tags":
+		h.listTags(w, r)
+	default:
+		writeFakeError(w, r, http.StatusNotFound, "not_found", "fake catalog route not found", false)
+	}
+}
+
+func (h *fakeCatalogHandler) registerManifest(w http.ResponseWriter, r *http.Request) {
+	var manifest contracts.ProviderManifest
+	if !decodeFakeBody(w, r, &manifest) {
+		return
+	}
+	if manifest.Service.ID == "" || manifest.Provider.Endpoint == "" || len(manifest.Capabilities) == 0 {
+		writeFakeError(w, r, http.StatusBadRequest, "validation_failed", "manifest service, provider endpoint, and capabilities are required", false)
+		return
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if _, exists := h.services[manifest.Service.ID]; exists {
+		writeFakeError(w, r, http.StatusConflict, "duplicate_id", "service already exists", false)
+		return
+	}
+	ids := make([]string, 0, len(manifest.Capabilities))
+	for _, capability := range manifest.Capabilities {
+		if capability.ID == "" || capability.Name == "" || capability.ExecutionMode == "" {
+			writeFakeError(w, r, http.StatusBadRequest, "validation_failed", "capability id, name, and execution_mode are required", false)
+			return
+		}
+		if _, exists := h.records[capability.ID]; exists {
+			writeFakeError(w, r, http.StatusConflict, "duplicate_id", "capability already exists", false)
+			return
+		}
+	}
+	h.services[manifest.Service.ID] = manifest.Service
+	for _, capability := range manifest.Capabilities {
+		capability.ServiceID = manifest.Service.ID
+		record := contracts.CatalogCapabilityRecord{
+			Capability: capability,
+			Route:      fakeCapabilityRoute(capability, manifest.Service.ID, manifest.Provider),
+			Service:    manifest.Service,
+		}
+		h.records[capability.ID] = cloneFakeCatalogRecord(record)
+		h.order = append(h.order, capability.ID)
+		ids = append(ids, capability.ID)
+	}
+	writeFakeSuccess(w, r, http.StatusCreated, map[string]any{"service_id": manifest.Service.ID, "capability_ids": ids})
+}
+
+func (h *fakeCatalogHandler) listServices(w http.ResponseWriter, r *http.Request) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	services := make([]contracts.Service, 0, len(h.services))
+	for _, service := range h.services {
+		services = append(services, service)
+	}
+	writeFakeSuccess(w, r, http.StatusOK, map[string]any{"items": services, "next_cursor": nil})
+}
+
+func (h *fakeCatalogHandler) getService(w http.ResponseWriter, r *http.Request, serviceID string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	service, ok := h.services[serviceID]
+	if !ok {
+		writeFakeError(w, r, http.StatusNotFound, "not_found", "fake service not found", false)
+		return
+	}
+	writeFakeSuccess(w, r, http.StatusOK, service)
+}
+
+func (h *fakeCatalogHandler) getCapability(w http.ResponseWriter, r *http.Request, capabilityID string) {
+	if h.writeCapabilityUnavailable(w, r, capabilityID) {
+		return
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	record, ok := h.records[capabilityID]
+	if !ok {
+		writeFakeError(w, r, http.StatusNotFound, "not_found", "fake capability not found", false)
+		return
+	}
+	writeFakeSuccess(w, r, http.StatusOK, cloneFakeCatalogRecord(record))
+}
+
+func (h *fakeCatalogHandler) getCapabilityRoute(w http.ResponseWriter, r *http.Request, capabilityID string) {
+	if h.writeCapabilityUnavailable(w, r, capabilityID) {
+		return
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	record, ok := h.records[capabilityID]
+	if !ok {
+		writeFakeError(w, r, http.StatusNotFound, "not_found", "fake capability not found", false)
+		return
+	}
+	writeFakeSuccess(w, r, http.StatusOK, cloneFakeRoute(record.Route))
+}
+
+func (h *fakeCatalogHandler) listTags(w http.ResponseWriter, r *http.Request) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	seen := map[string]bool{}
+	items := []string{}
+	for _, record := range h.records {
+		for _, tag := range record.Capability.Tags {
+			if !seen[tag] {
+				seen[tag] = true
+				items = append(items, tag)
+			}
+		}
+		for _, tag := range record.Service.Tags {
+			if !seen[tag] {
+				seen[tag] = true
+				items = append(items, tag)
+			}
+		}
+	}
+	writeFakeSuccess(w, r, http.StatusOK, map[string]any{"items": items, "next_cursor": nil})
+}
+
+func (h *fakeCatalogHandler) listCapabilities(query url.Values) []contracts.CatalogCapabilityRecord {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	items := []contracts.CatalogCapabilityRecord{}
+	for _, capabilityID := range h.order {
+		record, ok := h.records[capabilityID]
+		if !ok || h.cfg.DeniedCapabilityIDs[capabilityID] {
+			continue
+		}
+		if value := query.Get("capability_id"); value != "" && record.Capability.ID != value {
+			continue
+		}
+		if value := query.Get("service_id"); value != "" && record.Capability.ServiceID != value {
+			continue
+		}
+		if value := query.Get("execution_mode"); value != "" && record.Capability.ExecutionMode != value {
+			continue
+		}
+		if value := query.Get("tag"); value != "" && !containsString(record.Capability.Tags, value) && !containsString(record.Service.Tags, value) {
+			continue
+		}
+		items = append(items, cloneFakeCatalogRecord(record))
+	}
+	return items
+}
+
+func (h *fakeCatalogHandler) metricsSamples() []contracts.MetricSample {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return []contracts.MetricSample{
+		contracts.CountMetric("catalog_services_total", len(h.services), nil),
+		contracts.CountMetric("catalog_capabilities_total", len(h.records), nil),
+	}
+}
+
+func (h *fakeCatalogHandler) writeCapabilityUnavailable(w http.ResponseWriter, r *http.Request, capabilityID string) bool {
+	h.mu.Lock()
+	denied := h.cfg.DeniedCapabilityIDs[capabilityID]
+	unavailable := h.cfg.UnavailableCapabilityIDs[capabilityID]
+	h.mu.Unlock()
+	switch {
+	case denied:
+		writeFakeError(w, r, http.StatusForbidden, "forbidden", "fake capability access denied", false)
+		return true
+	case unavailable:
+		writeFakeError(w, r, http.StatusServiceUnavailable, "provider_unavailable", "fake capability provider unavailable", true)
+		return true
+	default:
+		return false
+	}
+}
+
+func (h *fakeCatalogHandler) writeBlocked(w http.ResponseWriter, r *http.Request) bool {
+	switch h.cfg.Behavior {
+	case FakeComponentDenied:
+		writeFakeError(w, r, http.StatusForbidden, "forbidden", "fake catalog access denied", false)
+		return true
+	case FakeComponentUnavailable:
+		writeFakeError(w, r, http.StatusServiceUnavailable, "component_unavailable", "fake catalog unavailable", true)
+		return true
+	default:
+		return false
+	}
+}
+
 func (h *fakeComponentHandler) writeBlocked(w http.ResponseWriter, r *http.Request) bool {
 	switch h.cfg.Behavior {
 	case FakeComponentDenied:
@@ -2203,6 +2488,68 @@ func fakeNodeService(serviceID, status string) contracts.NodeService {
 		RuntimeAdapter:   "fake",
 		ProviderEndpoint: "http://node.fake/providers/" + serviceID,
 		Links:            map[string]any{},
+	}
+}
+
+func fakeCatalogRecords() []contracts.CatalogCapabilityRecord {
+	service := contracts.Service{
+		ID:           "svc_fake_catalog",
+		Name:         "Fake Catalog Service",
+		Description:  "Fake catalog service for contract tests.",
+		Version:      "v1",
+		ProviderKind: "fake",
+		Tags:         []string{"fake", "testkit"},
+	}
+	provider := contracts.Provider{Endpoint: "http://provider.fake", HealthPath: "/v1/provider/health"}
+	valid := fakeCatalogCapability("cap_fake_valid", "Valid Capability", "sync", []string{"valid", "fake"})
+	denied := fakeCatalogCapability("cap_fake_denied", "Denied Capability", "sync", []string{"denied", "fake"})
+	unavailable := fakeCatalogCapability("cap_fake_unavailable", "Unavailable Capability", "async", []string{"unavailable", "fake"})
+	capabilities := []contracts.Capability{valid, denied, unavailable}
+	records := make([]contracts.CatalogCapabilityRecord, 0, len(capabilities))
+	for _, capability := range capabilities {
+		capability.ServiceID = service.ID
+		records = append(records, contracts.CatalogCapabilityRecord{
+			Capability: capability,
+			Route:      fakeCapabilityRoute(capability, service.ID, provider),
+			Service:    service,
+		})
+	}
+	return records
+}
+
+func fakeCatalogCapability(id, name, executionMode string, tags []string) contracts.Capability {
+	return contracts.Capability{
+		ID:            id,
+		Name:          name,
+		Description:   "Fake catalog capability for contract tests.",
+		Tags:          append([]string(nil), tags...),
+		ExecutionMode: executionMode,
+		InputSchema: map[string]any{
+			"type":       "object",
+			"properties": map[string]any{},
+		},
+		OutputSchema: map[string]any{
+			"type":       "object",
+			"properties": map[string]any{},
+		},
+		Examples:    []map[string]any{},
+		SideEffects: "none",
+		TimeoutHint: "30s",
+	}
+}
+
+func fakeCapabilityRoute(capability contracts.Capability, serviceID string, provider contracts.Provider) contracts.CapabilityRoute {
+	return contracts.CapabilityRoute{
+		CapabilityID:       capability.ID,
+		ServiceID:          serviceID,
+		ProviderEndpoint:   provider.Endpoint,
+		ProviderHealthPath: provider.HealthPath,
+		ProviderInvokePath: "/v1/provider/capabilities/" + capability.ID + "/invoke",
+		NodeID:             nil,
+		NodeManaged:        provider.NodeID != "",
+		ServiceStartMode:   "already_running",
+		ResourceHints:      append([]contracts.ResourceHint(nil), capability.ResourceHints...),
+		ArtifactHints:      append([]contracts.ArtifactHint(nil), capability.ArtifactHints...),
 	}
 }
 
@@ -2428,6 +2775,30 @@ func cloneFakeNodeService(service contracts.NodeService) contracts.NodeService {
 	return service
 }
 
+func cloneFakeCatalogRecord(record contracts.CatalogCapabilityRecord) contracts.CatalogCapabilityRecord {
+	raw, err := json.Marshal(record)
+	if err != nil {
+		return record
+	}
+	var cloned contracts.CatalogCapabilityRecord
+	if err := json.Unmarshal(raw, &cloned); err != nil {
+		return record
+	}
+	return cloned
+}
+
+func cloneFakeRoute(route contracts.CapabilityRoute) contracts.CapabilityRoute {
+	raw, err := json.Marshal(route)
+	if err != nil {
+		return route
+	}
+	var cloned contracts.CapabilityRoute
+	if err := json.Unmarshal(raw, &cloned); err != nil {
+		return route
+	}
+	return cloned
+}
+
 func cloneFakeArtifact(artifact contracts.Artifact) contracts.Artifact {
 	artifact.Metadata = cloneMap(artifact.Metadata)
 	artifact.Links = cloneMap(artifact.Links)
@@ -2570,6 +2941,15 @@ func fakeJobWorkerMatches(job contracts.Job, workerID string) bool {
 	return job.Claim.WorkerID == workerID
 }
 
+func containsString(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
+}
+
 func cloneFakeJob(job contracts.Job) contracts.Job {
 	job.InputSummary = cloneMap(job.InputSummary)
 	job.Metadata = cloneMap(job.Metadata)
@@ -2647,19 +3027,12 @@ func fakeListItems(kind string) []any {
 		}
 		return items
 	case "catalog":
-		capability := fakeProviderManifest("http://provider.fake").Capabilities[0]
-		capability.ServiceID = "svc_fake_provider"
-		return []any{contracts.CatalogCapabilityRecord{
-			Capability: capability,
-			Route: contracts.CapabilityRoute{
-				CapabilityID:       capability.ID,
-				ServiceID:          "svc_fake_provider",
-				ProviderEndpoint:   "http://provider.fake",
-				ProviderHealthPath: "/v1/provider/health",
-				ProviderInvokePath: "/v1/provider/capabilities/cap_echo/invoke",
-			},
-			Service: fakeProviderManifest("http://provider.fake").Service,
-		}}
+		records := fakeCatalogRecords()
+		items := make([]any, 0, len(records))
+		for _, record := range records {
+			items = append(items, record)
+		}
+		return items
 	case "jobs":
 		jobs := fakeJobs()
 		items := make([]any, 0, len(jobs))

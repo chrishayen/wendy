@@ -50,7 +50,8 @@ Contract simulation data is kept as test input, not as product behavior.
   heartbeat, release promotion, and unavailable behavior. The reusable
   artifacts fake covers available, expired, denied, and missing artifacts,
   upload lifecycle, raw content reads, local registration, and unavailable
-  behavior.
+  behavior. The reusable catalog fake covers valid, invalid, denied, missing,
+  and unavailable capability outcomes plus manifest registration.
 - `cmd/pacp-contract-smoke`: CLI smoke check for contract simulation packages,
   OpenAPI contracts, live component contracts, distributed component wiring,
   and live provider compliance.

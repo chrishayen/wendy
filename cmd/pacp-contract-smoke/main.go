@@ -153,6 +153,7 @@ func runFakePublicAPISmoke(timeout time.Duration, stdout, stderr io.Writer) int 
 	}
 
 	appendFakeArtifactsChecks(ctx, &checks)
+	appendFakeCatalogChecks(ctx, &checks)
 	appendFakeJobsChecks(ctx, &checks)
 	appendFakeLeasesChecks(ctx, &checks)
 
@@ -447,6 +448,119 @@ func requestFakeArtifactsExpectedError(ctx context.Context, client *http.Client,
 func checksumStringForSmoke(body []byte) string {
 	sum := sha256.Sum256(body)
 	return fmt.Sprintf("sha256:%x", sum)
+}
+
+func appendFakeCatalogChecks(ctx context.Context, checks *[]fakePublicAPICheck) {
+	handler, err := testkit.NewFakeCatalogHandler(testkit.FakeCatalogConfig{})
+	if err != nil {
+		*checks = append(*checks, fakePublicAPICheck{Name: "fake.catalog.create", Error: err.Error()})
+		return
+	}
+	server := httptest.NewServer(handler)
+	defer server.Close()
+	*checks = append(*checks,
+		checkFakeCatalogValidCapability(ctx, server.Client(), server.URL),
+		requestFakeCatalogExpectedError(ctx, server.Client(), server.URL, http.MethodPost, "/v1/catalog/manifests", "fake.catalog.manifest.invalid", http.StatusBadRequest, "validation_failed", contracts.ProviderManifest{}),
+		requestFakeCatalogExpectedError(ctx, server.Client(), server.URL, http.MethodGet, "/v1/catalog/capabilities/cap_fake_denied", "fake.catalog.capability.denied", http.StatusForbidden, "forbidden", nil),
+		requestFakeCatalogExpectedError(ctx, server.Client(), server.URL, http.MethodGet, "/v1/catalog/capabilities/cap_fake_unavailable", "fake.catalog.capability.unavailable", http.StatusServiceUnavailable, "provider_unavailable", nil),
+		requestFakeCatalogExpectedError(ctx, server.Client(), server.URL, http.MethodGet, "/v1/catalog/capabilities/cap_missing", "fake.catalog.capability.missing", http.StatusNotFound, "not_found", nil),
+	)
+
+	unavailable, err := testkit.NewFakeCatalogHandler(testkit.FakeCatalogConfig{Behavior: testkit.FakeComponentUnavailable})
+	if err != nil {
+		*checks = append(*checks, fakePublicAPICheck{Name: "fake.catalog.unavailable.create", Error: err.Error()})
+		return
+	}
+	unavailableServer := httptest.NewServer(unavailable)
+	defer unavailableServer.Close()
+	*checks = append(*checks, requestFakeCatalogExpectedError(ctx, unavailableServer.Client(), unavailableServer.URL, http.MethodGet, "/v1/catalog/health", "fake.catalog.unavailable.component_unavailable", http.StatusServiceUnavailable, "component_unavailable", nil))
+}
+
+func checkFakeCatalogValidCapability(ctx context.Context, client *http.Client, baseURL string) fakePublicAPICheck {
+	var list struct {
+		Items []contracts.CatalogCapabilityRecord `json:"items"`
+	}
+	check := requestFakeCatalogJSON(ctx, client, baseURL, http.MethodGet, "/v1/catalog/capabilities?tag=valid", "fake.catalog.capability.valid", nil, &list)
+	if !check.OK {
+		return check
+	}
+	if len(list.Items) != 1 || list.Items[0].Capability.ID != "cap_fake_valid" {
+		check.OK = false
+		check.Error = fmt.Sprintf("list = %#v", list.Items)
+		return check
+	}
+	var route contracts.CapabilityRoute
+	check = requestFakeCatalogJSON(ctx, client, baseURL, http.MethodGet, "/v1/catalog/capabilities/cap_fake_valid/route", "fake.catalog.capability.valid", nil, &route)
+	if !check.OK {
+		return check
+	}
+	if route.ProviderInvokePath == "" {
+		check.OK = false
+		check.Error = fmt.Sprintf("route = %#v", route)
+	}
+	return check
+}
+
+func requestFakeCatalogJSON(ctx context.Context, client *http.Client, baseURL, method, path, name string, body any, out any) fakePublicAPICheck {
+	req, err := newFakeJSONRequest(ctx, method, baseURL+path, body)
+	if err != nil {
+		return fakePublicAPICheck{Name: name, Error: err.Error()}
+	}
+	req.Header.Set("X-Request-ID", "req_contract_fake_catalog")
+	resp, err := client.Do(req)
+	if err != nil {
+		return fakePublicAPICheck{Name: name, Error: err.Error()}
+	}
+	defer resp.Body.Close()
+	check := fakePublicAPICheck{Name: name, HTTPStatus: resp.StatusCode}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		check.Error = fmt.Sprintf("HTTP %d", resp.StatusCode)
+		return check
+	}
+	var envelope fakePolicyEnvelope
+	if err := json.NewDecoder(resp.Body).Decode(&envelope); err != nil {
+		check.Error = err.Error()
+		return check
+	}
+	if !envelope.OK {
+		check.Error = envelope.Error.Message
+		return check
+	}
+	if err := json.Unmarshal(envelope.Data, out); err != nil {
+		check.Error = err.Error()
+		return check
+	}
+	check.OK = true
+	return check
+}
+
+func requestFakeCatalogExpectedError(ctx context.Context, client *http.Client, baseURL, method, path, name string, wantStatus int, wantCode string, body any) fakePublicAPICheck {
+	req, err := newFakeJSONRequest(ctx, method, baseURL+path, body)
+	if err != nil {
+		return fakePublicAPICheck{Name: name, Error: err.Error()}
+	}
+	req.Header.Set("X-Request-ID", "req_contract_fake_catalog")
+	resp, err := client.Do(req)
+	if err != nil {
+		return fakePublicAPICheck{Name: name, Error: err.Error()}
+	}
+	defer resp.Body.Close()
+	check := fakePublicAPICheck{Name: name, HTTPStatus: resp.StatusCode}
+	var envelope fakePolicyEnvelope
+	if err := json.NewDecoder(resp.Body).Decode(&envelope); err != nil {
+		check.Error = err.Error()
+		return check
+	}
+	if resp.StatusCode != wantStatus {
+		check.Error = fmt.Sprintf("HTTP %d, want %d", resp.StatusCode, wantStatus)
+		return check
+	}
+	if envelope.OK || envelope.Error.Code != wantCode {
+		check.Error = fmt.Sprintf("error code = %q, want %q", envelope.Error.Code, wantCode)
+		return check
+	}
+	check.OK = true
+	return check
 }
 
 func appendFakeJobsChecks(ctx context.Context, checks *[]fakePublicAPICheck) {

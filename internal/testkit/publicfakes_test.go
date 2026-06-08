@@ -200,6 +200,111 @@ func TestFakeComponentHandlerRejectsUnknownBehavior(t *testing.T) {
 	}
 }
 
+func TestFakeCatalogHandlerSupportsCapabilityOutcomes(t *testing.T) {
+	handler, err := NewFakeCatalogHandler(FakeCatalogConfig{Now: fixedFakeClock})
+	if err != nil {
+		t.Fatalf("new fake catalog: %v", err)
+	}
+	server := httptest.NewServer(handler)
+	defer server.Close()
+
+	listEnvelope := doFakeCatalogEnvelope(t, server, http.MethodGet, "/v1/catalog/capabilities?tag=valid", nil, http.StatusOK)
+	var list struct {
+		Items []contracts.CatalogCapabilityRecord `json:"items"`
+	}
+	decodeEnvelopeData(t, listEnvelope, &list)
+	if len(list.Items) != 1 || list.Items[0].Capability.ID != "cap_fake_valid" {
+		t.Fatalf("list = %#v", list.Items)
+	}
+
+	recordEnvelope := doFakeCatalogEnvelope(t, server, http.MethodGet, "/v1/catalog/capabilities/cap_fake_valid", nil, http.StatusOK)
+	var record contracts.CatalogCapabilityRecord
+	decodeEnvelopeData(t, recordEnvelope, &record)
+	if record.Route.ProviderInvokePath == "" || record.Service.ID == "" {
+		t.Fatalf("record = %#v", record)
+	}
+
+	routeEnvelope := doFakeCatalogEnvelope(t, server, http.MethodGet, "/v1/catalog/capabilities/cap_fake_valid/route", nil, http.StatusOK)
+	var route contracts.CapabilityRoute
+	decodeEnvelopeData(t, routeEnvelope, &route)
+	if route.CapabilityID != "cap_fake_valid" {
+		t.Fatalf("route = %#v", route)
+	}
+
+	tagsEnvelope := doFakeCatalogEnvelope(t, server, http.MethodGet, "/v1/catalog/tags", nil, http.StatusOK)
+	var tags struct {
+		Items []string `json:"items"`
+	}
+	decodeEnvelopeData(t, tagsEnvelope, &tags)
+	if !containsString(tags.Items, "valid") {
+		t.Fatalf("tags = %#v", tags.Items)
+	}
+
+	denied := doFakeCatalogEnvelope(t, server, http.MethodGet, "/v1/catalog/capabilities/cap_fake_denied", nil, http.StatusForbidden)
+	if denied.OK || denied.Error.Code != "forbidden" {
+		t.Fatalf("denied = %#v", denied)
+	}
+	unavailable := doFakeCatalogEnvelope(t, server, http.MethodGet, "/v1/catalog/capabilities/cap_fake_unavailable", nil, http.StatusServiceUnavailable)
+	if unavailable.OK || unavailable.Error.Code != "provider_unavailable" || !unavailable.Error.Retryable {
+		t.Fatalf("unavailable = %#v", unavailable)
+	}
+	missing := doFakeCatalogEnvelope(t, server, http.MethodGet, "/v1/catalog/capabilities/cap_missing", nil, http.StatusNotFound)
+	if missing.OK || missing.Error.Code != "not_found" {
+		t.Fatalf("missing = %#v", missing)
+	}
+}
+
+func TestFakeCatalogHandlerRejectsInvalidManifestAndRegistersValidManifest(t *testing.T) {
+	handler, err := NewFakeCatalogHandler(FakeCatalogConfig{Now: fixedFakeClock})
+	if err != nil {
+		t.Fatalf("new fake catalog: %v", err)
+	}
+	server := httptest.NewServer(handler)
+	defer server.Close()
+
+	invalid := doFakeCatalogEnvelope(t, server, http.MethodPost, "/v1/catalog/manifests", contracts.ProviderManifest{}, http.StatusBadRequest)
+	if invalid.OK || invalid.Error.Code != "validation_failed" {
+		t.Fatalf("invalid = %#v", invalid)
+	}
+
+	manifest := fakeProviderManifest("http://provider.new")
+	manifest.Service.ID = "svc_fake_new"
+	manifest.Capabilities[0].ID = "cap_fake_new"
+	created := doFakeCatalogEnvelope(t, server, http.MethodPost, "/v1/catalog/manifests", manifest, http.StatusCreated)
+	var result struct {
+		ServiceID     string   `json:"service_id"`
+		CapabilityIDs []string `json:"capability_ids"`
+	}
+	decodeEnvelopeData(t, created, &result)
+	if result.ServiceID != "svc_fake_new" || !containsString(result.CapabilityIDs, "cap_fake_new") {
+		t.Fatalf("created = %#v", result)
+	}
+
+	registered := doFakeCatalogEnvelope(t, server, http.MethodGet, "/v1/catalog/capabilities/cap_fake_new", nil, http.StatusOK)
+	var record contracts.CatalogCapabilityRecord
+	decodeEnvelopeData(t, registered, &record)
+	if record.Capability.ServiceID != "svc_fake_new" {
+		t.Fatalf("registered = %#v", record)
+	}
+}
+
+func TestFakeCatalogHandlerSupportsUnavailableBehavior(t *testing.T) {
+	handler, err := NewFakeCatalogHandler(FakeCatalogConfig{
+		Behavior: FakeComponentUnavailable,
+		Now:      fixedFakeClock,
+	})
+	if err != nil {
+		t.Fatalf("new fake catalog: %v", err)
+	}
+	server := httptest.NewServer(handler)
+	defer server.Close()
+
+	envelope := doFakeCatalogEnvelope(t, server, http.MethodGet, "/v1/catalog/health", nil, http.StatusServiceUnavailable)
+	if envelope.OK || envelope.Error.Code != "component_unavailable" || !envelope.Error.Retryable {
+		t.Fatalf("envelope = %#v", envelope)
+	}
+}
+
 func TestFakeJobsHandlerExposesRequiredStates(t *testing.T) {
 	handler, err := NewFakeJobsHandler(FakeJobsConfig{Now: fixedFakeClock})
 	if err != nil {
@@ -1045,6 +1150,41 @@ func doFakeNodeEnvelope(t *testing.T, server *httptest.Server, method, path stri
 	req.Header.Set("X-Request-ID", "req_fake_node")
 	for key, value := range headers {
 		req.Header.Set(key, value)
+	}
+	resp, err := server.Client().Do(req)
+	if err != nil {
+		t.Fatalf("%s %s: %v", method, path, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != wantStatus {
+		t.Fatalf("%s %s status = %d, want %d", method, path, resp.StatusCode, wantStatus)
+	}
+	var envelope fakePolicyEnvelope
+	if err := json.NewDecoder(resp.Body).Decode(&envelope); err != nil {
+		t.Fatalf("decode envelope: %v", err)
+	}
+	return envelope
+}
+
+func doFakeCatalogEnvelope(t *testing.T, server *httptest.Server, method, path string, body any, wantStatus int) fakePolicyEnvelope {
+	t.Helper()
+	var req *http.Request
+	var err error
+	if body != nil {
+		raw, err := json.Marshal(body)
+		if err != nil {
+			t.Fatalf("marshal body: %v", err)
+		}
+		req, err = http.NewRequest(method, server.URL+path, bytes.NewReader(raw))
+	} else {
+		req, err = http.NewRequest(method, server.URL+path, nil)
+	}
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	req.Header.Set("X-Request-ID", "req_fake_catalog")
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
 	}
 	resp, err := server.Client().Do(req)
 	if err != nil {
