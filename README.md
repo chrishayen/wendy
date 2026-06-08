@@ -35,7 +35,8 @@ Contract simulation data is kept as test input, not as product behavior.
   lease resource export, and service status APIs.
 - `internal/testkit`: contract-simulation fixture loader and fixture-backed
   HTTP fake server.
-- `cmd/pacp-contract-smoke`: CLI smoke check for a contract simulation package.
+- `cmd/pacp-contract-smoke`: CLI smoke check for contract simulation packages,
+  OpenAPI contracts, and live provider compliance.
 - `cmd/pacp-fixture-server`: serves one fixture owner as an HTTP fake.
 - `cmd/pacp-fake-provider`: runnable sample provider using the provider SDK.
 - `cmd/pacp-http-provider`: generic provider bridge for HTTP backends that
@@ -84,6 +85,7 @@ Contract simulation data is kept as test input, not as product behavior.
 ```sh
 go test ./...
 go run ./cmd/pacp-contract-smoke
+go run ./cmd/pacp-contract-smoke -openapi openapi/public-gateway.v1.yaml,openapi/component-services.v1.yaml
 go run ./cmd/pacp-contract-smoke -provider-url http://localhost:18088 -capability-id cap_dev_echo -input '{"message":"hello"}'
 go run ./cmd/pacp-dev
 go run ./cmd/pacp-dev -state-dir /tmp/pacp-dev-state

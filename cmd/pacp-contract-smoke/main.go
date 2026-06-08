@@ -8,8 +8,10 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
+	"pacp/internal/openapicheck"
 	"pacp/internal/testkit"
 )
 
@@ -25,9 +27,13 @@ func run(args []string, stdout, stderr io.Writer, httpClient *http.Client) int {
 	providerURL := flags.String("provider-url", "", "optional live provider base URL to check instead of fixture simulation")
 	capabilityID := flags.String("capability-id", "", "optional provider capability id to invoke")
 	inputRaw := flags.String("input", "{}", "JSON object input for provider invocation")
+	openAPIPaths := flags.String("openapi", "", "optional comma-separated OpenAPI files to validate")
 	timeout := flags.Duration("timeout", 5*time.Second, "smoke check timeout")
 	if err := flags.Parse(args); err != nil {
 		return 2
+	}
+	if *openAPIPaths != "" {
+		return runOpenAPICheck(*openAPIPaths, stdout, stderr)
 	}
 	if *providerURL != "" {
 		return runProviderSmoke(*providerURL, *capabilityID, *inputRaw, *timeout, stdout, stderr, httpClient)
@@ -51,6 +57,31 @@ func run(args []string, stdout, stderr io.Writer, httpClient *http.Client) int {
 			continue
 		}
 		fmt.Fprintf(stderr, "%s:%s: %s: %s\n", finding.File, finding.Fixture, finding.Code, finding.Message)
+	}
+	return 1
+}
+
+func runOpenAPICheck(pathsRaw string, stdout, stderr io.Writer) int {
+	paths := splitCSV(pathsRaw)
+	if len(paths) == 0 {
+		fmt.Fprintln(stderr, "openapi requires at least one file path")
+		return 2
+	}
+	report := openapicheck.ValidateFiles(paths)
+	fmt.Fprintf(stdout, "openapi=checked files=%d operations=%d schemas=%d refs=%d\n", len(report.Files), report.Operations, report.Schemas, report.References)
+	for _, fileReport := range report.Files {
+		fmt.Fprintf(stdout, "file=%s operations=%d schemas=%d refs=%d\n", fileReport.Path, fileReport.Operations, fileReport.Schemas, fileReport.References)
+	}
+	if report.Passed() {
+		fmt.Fprintln(stdout, "openapi=pass")
+		return 0
+	}
+	for _, finding := range report.Findings {
+		location := finding.Location
+		if location == "" {
+			location = "/"
+		}
+		fmt.Fprintf(stderr, "%s:%s: %s: %s\n", finding.File, location, finding.Code, finding.Message)
 	}
 	return 1
 }
@@ -106,4 +137,16 @@ func parseInput(raw string) (map[string]any, error) {
 		return nil, fmt.Errorf("must be a JSON object")
 	}
 	return input, nil
+}
+
+func splitCSV(raw string) []string {
+	parts := strings.Split(raw, ",")
+	values := make([]string, 0, len(parts))
+	for _, part := range parts {
+		value := strings.TrimSpace(part)
+		if value != "" {
+			values = append(values, value)
+		}
+	}
+	return values
 }

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -82,6 +83,56 @@ func TestRunProviderSmokeRejectsInvalidInputJSON(t *testing.T) {
 		t.Fatalf("code=%d stderr=%s stdout=%s", code, stderr.String(), stdout.String())
 	}
 	if !strings.Contains(stderr.String(), "must be a JSON object") {
+		t.Fatalf("stderr = %s", stderr.String())
+	}
+}
+
+func TestRunOpenAPICheckPassesRepositoryContracts(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := run([]string{
+		"-openapi", strings.Join([]string{
+			filepath.Join("..", "..", "openapi", "public-gateway.v1.yaml"),
+			filepath.Join("..", "..", "openapi", "component-services.v1.yaml"),
+		}, ","),
+	}, &stdout, &stderr, http.DefaultClient)
+	if code != 0 {
+		t.Fatalf("code=%d stderr=%s stdout=%s", code, stderr.String(), stdout.String())
+	}
+	if !strings.Contains(stdout.String(), "openapi=pass") {
+		t.Fatalf("stdout = %s", stdout.String())
+	}
+}
+
+func TestRunOpenAPICheckReportsFailures(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "bad-openapi.yaml")
+	if err := os.WriteFile(path, []byte(`
+openapi: 3.1.0
+info:
+  title: Bad
+  version: v1
+paths:
+  /bad:
+    get:
+      operationId: bad
+      responses:
+        "200":
+          description: Raw response.
+          content:
+            application/json:
+              schema:
+                type: object
+components:
+  schemas: {}
+`), 0o600); err != nil {
+		t.Fatalf("write bad openapi: %v", err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	code := run([]string{"-openapi", path}, &stdout, &stderr, http.DefaultClient)
+	if code != 1 {
+		t.Fatalf("code=%d stderr=%s stdout=%s", code, stderr.String(), stdout.String())
+	}
+	if !strings.Contains(stderr.String(), "success_response_not_enveloped") {
 		t.Fatalf("stderr = %s", stderr.String())
 	}
 }
