@@ -22,13 +22,23 @@ type NodeAuthSubject struct {
 }
 
 type NodeServiceConfig struct {
-	ServiceID        string            `json:"service_id"`
-	DisplayName      string            `json:"display_name,omitempty"`
-	RuntimeAdapter   string            `json:"runtime_adapter"`
-	ProviderEndpoint string            `json:"provider_endpoint"`
-	InitialStatus    string            `json:"initial_status,omitempty"`
-	Manifest         *ProviderManifest `json:"manifest,omitempty"`
-	Metadata         map[string]any    `json:"metadata,omitempty"`
+	ServiceID        string                `json:"service_id"`
+	DisplayName      string                `json:"display_name,omitempty"`
+	RuntimeAdapter   string                `json:"runtime_adapter"`
+	ProviderEndpoint string                `json:"provider_endpoint"`
+	InitialStatus    string                `json:"initial_status,omitempty"`
+	Manifest         *ProviderManifest     `json:"manifest,omitempty"`
+	Process          *ProcessRuntimeConfig `json:"process,omitempty"`
+	Metadata         map[string]any        `json:"metadata,omitempty"`
+}
+
+type ProcessRuntimeConfig struct {
+	Command             []string          `json:"command"`
+	WorkingDirectory    string            `json:"working_directory,omitempty"`
+	Environment         map[string]string `json:"environment,omitempty"`
+	ReadyURL            string            `json:"ready_url,omitempty"`
+	ReadyTimeoutSeconds int               `json:"ready_timeout_seconds,omitempty"`
+	StopTimeoutSeconds  int               `json:"stop_timeout_seconds,omitempty"`
 }
 
 type NodeHealth struct {

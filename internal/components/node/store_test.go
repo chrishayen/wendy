@@ -2,6 +2,7 @@ package node
 
 import (
 	"errors"
+	"os/exec"
 	"testing"
 
 	"pacp/internal/contracts"
@@ -61,6 +62,77 @@ func TestStoreResources(t *testing.T) {
 	resources := store.Resources()
 	if len(resources) != 1 || resources[0].ResourceID != "res_gpu_0" {
 		t.Fatalf("resources = %#v", resources)
+	}
+}
+
+func TestStoreProcessRuntimeLifecycle(t *testing.T) {
+	sleepPath, err := exec.LookPath("sleep")
+	if err != nil {
+		t.Skip("sleep command is not available")
+	}
+	cfg := testConfig()
+	cfg.Services = []contracts.NodeServiceConfig{{
+		ServiceID:        "svc_process_provider",
+		RuntimeAdapter:   "process",
+		ProviderEndpoint: "http://localhost:18088",
+		InitialStatus:    "stopped",
+		Process: &contracts.ProcessRuntimeConfig{
+			Command:            []string{sleepPath, "60"},
+			StopTimeoutSeconds: 1,
+		},
+	}}
+	store, err := NewStore(cfg)
+	if err != nil {
+		t.Fatalf("new process store: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = store.StopService("svc_process_provider")
+	})
+
+	starting, status, err := store.StartService("svc_process_provider", "start-process-1")
+	if err != nil {
+		t.Fatalf("start process service: %v", err)
+	}
+	if status != 202 || starting.Status != "starting" {
+		t.Fatalf("start response status=%d service=%#v", status, starting)
+	}
+	running, err := store.GetService("svc_process_provider")
+	if err != nil {
+		t.Fatalf("poll process service: %v", err)
+	}
+	if running.Status != "running" {
+		t.Fatalf("running process service = %#v", running)
+	}
+	replay, status, err := store.StartService("svc_process_provider", "start-process-1")
+	if err != nil {
+		t.Fatalf("replay process start: %v", err)
+	}
+	if status != 200 || replay.Status != "running" {
+		t.Fatalf("replay status=%d service=%#v", status, replay)
+	}
+	stopped, err := store.StopService("svc_process_provider")
+	if err != nil {
+		t.Fatalf("stop process service: %v", err)
+	}
+	if stopped.Status != "stopped" {
+		t.Fatalf("stopped process service = %#v", stopped)
+	}
+	record := store.services["svc_process_provider"]
+	if record.process != nil {
+		t.Fatalf("process runtime was not cleared")
+	}
+}
+
+func TestStoreRejectsInvalidProcessRuntimeConfig(t *testing.T) {
+	cfg := testConfig()
+	cfg.Services = []contracts.NodeServiceConfig{{
+		ServiceID:        "svc_process_provider",
+		RuntimeAdapter:   "process",
+		ProviderEndpoint: "http://localhost:18088",
+		Process:          &contracts.ProcessRuntimeConfig{},
+	}}
+	if _, err := NewStore(cfg); !errors.Is(err, ErrValidation) {
+		t.Fatalf("expected validation error, got %v", err)
 	}
 }
 
