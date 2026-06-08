@@ -45,6 +45,7 @@ type Store struct {
 	uploads        map[string]*uploadRecord
 	artifacts      map[string]*artifactRecord
 	idempotency    map[string]idempotentRecord
+	snapshotPath   string
 }
 
 type uploadRecord struct {
@@ -70,6 +71,39 @@ type idempotentRecord struct {
 	created     bool
 }
 
+type snapshotFile struct {
+	Version        int                           `json:"version"`
+	NextUploadID   int                           `json:"next_upload_id"`
+	NextArtifactID int                           `json:"next_artifact_id"`
+	Uploads        map[string]uploadSnapshot     `json:"uploads"`
+	Artifacts      map[string]artifactSnapshot   `json:"artifacts"`
+	Idempotency    map[string]idempotentSnapshot `json:"idempotency"`
+}
+
+type uploadSnapshot struct {
+	Session                contracts.ArtifactUploadSession `json:"session"`
+	Metadata               map[string]any                  `json:"metadata,omitempty"`
+	ReceivedChecksum       string                          `json:"received_checksum,omitempty"`
+	ReceivedDigest         string                          `json:"received_digest,omitempty"`
+	ReceivedPath           string                          `json:"received_path,omitempty"`
+	ContentIdempotencyKey  string                          `json:"content_idempotency_key,omitempty"`
+	CompleteIdempotencyKey string                          `json:"complete_idempotency_key,omitempty"`
+}
+
+type artifactSnapshot struct {
+	Artifact contracts.Artifact `json:"artifact"`
+	Path     string             `json:"path"`
+	Digest   string             `json:"digest"`
+}
+
+type idempotentSnapshot struct {
+	Operation   string                           `json:"operation"`
+	Fingerprint string                           `json:"fingerprint"`
+	Created     bool                             `json:"created"`
+	Upload      *contracts.ArtifactUploadSession `json:"upload,omitempty"`
+	Artifact    *contracts.Artifact              `json:"artifact,omitempty"`
+}
+
 type ContentUpload struct {
 	Body          []byte
 	ContentType   string
@@ -87,6 +121,21 @@ type ArtifactContent struct {
 type ListFilter struct {
 	ProducerRef    string
 	OwnerSubjectID string
+}
+
+func NewPersistentStore(root, statePath string) (*Store, error) {
+	store, err := NewStore(root)
+	if err != nil {
+		return nil, err
+	}
+	store.snapshotPath = statePath
+	if statePath == "" {
+		return store, nil
+	}
+	if err := store.loadSnapshot(statePath); err != nil {
+		return nil, err
+	}
+	return store, nil
 }
 
 func NewStore(root string) (*Store, error) {
@@ -185,6 +234,9 @@ func (s *Store) CreateUpload(req contracts.CreateArtifactUploadRequest, idempote
 		response:    cloneUpload(session),
 		created:     true,
 	}
+	if err := s.saveLocked(); err != nil {
+		return contracts.ArtifactUploadSession{}, false, err
+	}
 	return cloneUpload(session), true, nil
 }
 
@@ -265,6 +317,9 @@ func (s *Store) PutContent(uploadID string, upload ContentUpload, idempotencyKey
 		operation:   "upload:content:" + uploadID,
 		fingerprint: fp,
 		response:    cloneUpload(rec.session),
+	}
+	if err := s.saveLocked(); err != nil {
+		return contracts.ArtifactUploadSession{}, err
 	}
 	return cloneUpload(rec.session), nil
 }
@@ -353,6 +408,9 @@ func (s *Store) CompleteUpload(uploadID string, req contracts.CompleteArtifactUp
 		response:    cloneArtifact(artifact),
 		created:     true,
 	}
+	if err := s.saveLocked(); err != nil {
+		return contracts.Artifact{}, false, err
+	}
 	return cloneArtifact(artifact), true, nil
 }
 
@@ -404,6 +462,9 @@ func (s *Store) RegisterLocalArtifact(req contracts.RegisterLocalArtifactRequest
 		Links:          artifactLinks(artifactID),
 	}
 	s.artifacts[artifactID] = &artifactRecord{artifact: artifact, path: blobPath, digest: digest}
+	if err := s.saveLocked(); err != nil {
+		return contracts.Artifact{}, err
+	}
 	return cloneArtifact(artifact), nil
 }
 
@@ -665,6 +726,154 @@ func fingerprint(value any) (string, error) {
 		return "", err
 	}
 	return string(raw), nil
+}
+
+func (s *Store) loadSnapshot(path string) error {
+	raw, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	var snapshot snapshotFile
+	if err := json.Unmarshal(raw, &snapshot); err != nil {
+		return fmt.Errorf("%w: invalid artifact snapshot: %v", ErrValidation, err)
+	}
+	s.nextUploadID = positiveOrDefault(snapshot.NextUploadID, 1)
+	s.nextArtifactID = positiveOrDefault(snapshot.NextArtifactID, 1)
+	s.uploads = map[string]*uploadRecord{}
+	for uploadID, rec := range snapshot.Uploads {
+		session := cloneUpload(rec.Session)
+		if session.UploadID == "" {
+			session.UploadID = uploadID
+		}
+		session.Links = uploadLinks(session.UploadID, session.State)
+		receivedPath, err := s.restoreStoredPath(rec.ReceivedPath)
+		if err != nil {
+			return err
+		}
+		s.uploads[session.UploadID] = &uploadRecord{
+			session:                session,
+			metadata:               cloneMap(rec.Metadata),
+			receivedChecksum:       rec.ReceivedChecksum,
+			receivedDigest:         rec.ReceivedDigest,
+			receivedPath:           receivedPath,
+			contentIdempotencyKey:  rec.ContentIdempotencyKey,
+			completeIdempotencyKey: rec.CompleteIdempotencyKey,
+		}
+	}
+	s.artifacts = map[string]*artifactRecord{}
+	for artifactID, rec := range snapshot.Artifacts {
+		artifact := cloneArtifact(rec.Artifact)
+		if artifact.ArtifactID == "" {
+			artifact.ArtifactID = artifactID
+		}
+		artifact.Links = artifactLinks(artifact.ArtifactID)
+		storedPath, err := s.restoreStoredPath(rec.Path)
+		if err != nil {
+			return err
+		}
+		s.artifacts[artifact.ArtifactID] = &artifactRecord{artifact: artifact, path: storedPath, digest: rec.Digest}
+	}
+	s.idempotency = map[string]idempotentRecord{}
+	for key, rec := range snapshot.Idempotency {
+		record := idempotentRecord{operation: rec.Operation, fingerprint: rec.Fingerprint, created: rec.Created}
+		switch {
+		case rec.Upload != nil:
+			record.response = cloneUpload(*rec.Upload)
+		case rec.Artifact != nil:
+			record.response = cloneArtifact(*rec.Artifact)
+		default:
+			continue
+		}
+		s.idempotency[key] = record
+	}
+	return nil
+}
+
+func (s *Store) saveLocked() error {
+	if s.snapshotPath == "" {
+		return nil
+	}
+	snapshot := snapshotFile{
+		Version:        1,
+		NextUploadID:   s.nextUploadID,
+		NextArtifactID: s.nextArtifactID,
+		Uploads:        map[string]uploadSnapshot{},
+		Artifacts:      map[string]artifactSnapshot{},
+		Idempotency:    map[string]idempotentSnapshot{},
+	}
+	for uploadID, rec := range s.uploads {
+		snapshot.Uploads[uploadID] = uploadSnapshot{
+			Session:                cloneUpload(rec.session),
+			Metadata:               cloneMap(rec.metadata),
+			ReceivedChecksum:       rec.receivedChecksum,
+			ReceivedDigest:         rec.receivedDigest,
+			ReceivedPath:           s.storePath(rec.receivedPath),
+			ContentIdempotencyKey:  rec.contentIdempotencyKey,
+			CompleteIdempotencyKey: rec.completeIdempotencyKey,
+		}
+	}
+	for artifactID, rec := range s.artifacts {
+		snapshot.Artifacts[artifactID] = artifactSnapshot{
+			Artifact: cloneArtifact(rec.artifact),
+			Path:     s.storePath(rec.path),
+			Digest:   rec.digest,
+		}
+	}
+	for key, rec := range s.idempotency {
+		snap := idempotentSnapshot{Operation: rec.operation, Fingerprint: rec.fingerprint, Created: rec.created}
+		switch typed := rec.response.(type) {
+		case contracts.ArtifactUploadSession:
+			value := cloneUpload(typed)
+			snap.Upload = &value
+		case contracts.Artifact:
+			value := cloneArtifact(typed)
+			snap.Artifact = &value
+		}
+		snapshot.Idempotency[key] = snap
+	}
+	raw, err := json.MarshalIndent(snapshot, "", "  ")
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(s.snapshotPath), 0o755); err != nil {
+		return err
+	}
+	tmpPath := s.snapshotPath + ".tmp"
+	if err := os.WriteFile(tmpPath, raw, 0o600); err != nil {
+		return err
+	}
+	return os.Rename(tmpPath, s.snapshotPath)
+}
+
+func (s *Store) storePath(path string) string {
+	if path == "" {
+		return ""
+	}
+	rel, err := filepath.Rel(s.root, path)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) || filepath.IsAbs(rel) {
+		return path
+	}
+	return rel
+}
+
+func (s *Store) restoreStoredPath(path string) (string, error) {
+	if path == "" {
+		return "", nil
+	}
+	if filepath.IsAbs(path) {
+		return s.guardPath(path)
+	}
+	return s.guardPath(filepath.Join(s.root, path))
+}
+
+func positiveOrDefault(value, fallback int) int {
+	if value <= 0 {
+		return fallback
+	}
+	return value
 }
 
 func HeadersFromRequest(r *http.Request, body []byte) ContentUpload {

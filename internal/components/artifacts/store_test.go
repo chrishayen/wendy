@@ -236,6 +236,91 @@ func TestStoreRegisterLocalArtifactUsesPathGuard(t *testing.T) {
 	}
 }
 
+func TestPersistentStoreReloadsUploadAndArtifactState(t *testing.T) {
+	root := t.TempDir()
+	statePath := filepath.Join(root, "artifact-state.json")
+	store, err := NewPersistentStore(root, statePath)
+	if err != nil {
+		t.Fatalf("new persistent store: %v", err)
+	}
+	body := []byte("artifact bytes")
+	checksum, digest := checksumAndDigest(body)
+	size := int64(len(body))
+	session, _, err := store.CreateUpload(contracts.CreateArtifactUploadRequest{
+		Name:             "result.txt",
+		MediaType:        "text/plain",
+		ProducerRef:      "job_1",
+		OwnerSubjectID:   "sub_agent",
+		ExpectedSize:     &size,
+		ExpectedChecksum: checksum,
+		Metadata:         map[string]any{"capability_id": "cap_text"},
+	}, "create-persist")
+	if err != nil {
+		t.Fatalf("create persistent upload: %v", err)
+	}
+	if _, err := store.PutContent(session.UploadID, ContentUpload{
+		Body:          body,
+		ContentType:   "text/plain",
+		ContentLength: "14",
+		Digest:        digest,
+	}, "content-persist"); err != nil {
+		t.Fatalf("put persistent content: %v", err)
+	}
+
+	reloaded, err := NewPersistentStore(root, statePath)
+	if err != nil {
+		t.Fatalf("reload persistent store: %v", err)
+	}
+	contentReplay, err := reloaded.PutContent(session.UploadID, ContentUpload{
+		Body:          body,
+		ContentType:   "text/plain",
+		ContentLength: "14",
+		Digest:        digest,
+	}, "content-persist")
+	if err != nil {
+		t.Fatalf("content replay after reload: %v", err)
+	}
+	if contentReplay.State != contracts.ArtifactUploadReceived {
+		t.Fatalf("content replay = %#v", contentReplay)
+	}
+	artifact, created, err := reloaded.CompleteUpload(session.UploadID, contracts.CompleteArtifactUploadRequest{
+		Checksum: checksum,
+		Size:     size,
+	}, "complete-persist")
+	if err != nil {
+		t.Fatalf("complete after reload: %v", err)
+	}
+	if !created {
+		t.Fatalf("expected new artifact after reload")
+	}
+
+	reloadedAgain, err := NewPersistentStore(root, statePath)
+	if err != nil {
+		t.Fatalf("reload completed persistent store: %v", err)
+	}
+	completeReplay, replayCreated, err := reloadedAgain.CompleteUpload(session.UploadID, contracts.CompleteArtifactUploadRequest{
+		Checksum: checksum,
+		Size:     size,
+	}, "complete-persist")
+	if err != nil {
+		t.Fatalf("complete replay after reload: %v", err)
+	}
+	if replayCreated || completeReplay.ArtifactID != artifact.ArtifactID {
+		t.Fatalf("complete replay = %#v created=%v", completeReplay, replayCreated)
+	}
+	list := reloadedAgain.ListArtifacts(ListFilter{ProducerRef: "job_1"})
+	if len(list) != 1 || list[0].ArtifactID != artifact.ArtifactID {
+		t.Fatalf("persisted artifact list = %#v", list)
+	}
+	content, err := reloadedAgain.ReadContent(artifact.ArtifactID)
+	if err != nil {
+		t.Fatalf("read persisted content: %v", err)
+	}
+	if string(content.Body) != string(body) || content.Digest != digest {
+		t.Fatalf("persisted content = %#v", content)
+	}
+}
+
 func newTestStore(t *testing.T) *Store {
 	t.Helper()
 	store, err := NewStore(t.TempDir())
