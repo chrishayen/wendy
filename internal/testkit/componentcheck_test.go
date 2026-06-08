@@ -21,7 +21,17 @@ func TestCheckComponentValidatesHealthAndMetrics(t *testing.T) {
 		case "/v1/jobs/metrics":
 			writeTestEnvelope(t, w, http.StatusOK, contracts.NewComponentMetrics("jobs", []contracts.MetricSample{}))
 		case "/v1/jobs":
-			writeTestEnvelope(t, w, http.StatusOK, map[string]any{"items": []any{}, "next_cursor": nil})
+			writeTestEnvelope(t, w, http.StatusOK, map[string]any{
+				"items": []any{map[string]any{
+					"job_id":        "job_test_001",
+					"state":         "queued",
+					"created_at":    "2026-06-08T12:00:00Z",
+					"updated_at":    "2026-06-08T12:00:00Z",
+					"artifact_refs": []any{},
+					"links":         map[string]any{},
+				}},
+				"next_cursor": nil,
+			})
 		default:
 			t.Fatalf("unexpected request %s %s", r.Method, r.URL.Path)
 		}
@@ -100,6 +110,37 @@ func TestCheckComponentFailsOnMalformedListSurface(t *testing.T) {
 	}
 	last := report.Checks[len(report.Checks)-1]
 	if last.Name != "component.surface.artifacts.list" || last.Error == "" {
+		t.Fatalf("report = %#v", report)
+	}
+}
+
+func TestCheckComponentFailsOnMalformedListItem(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/jobs/health":
+			writeTestEnvelope(t, w, http.StatusOK, contracts.NewComponentHealth("jobs", nil))
+		case "/v1/jobs/metrics":
+			writeTestEnvelope(t, w, http.StatusOK, contracts.NewComponentMetrics("jobs", []contracts.MetricSample{}))
+		case "/v1/jobs":
+			writeTestEnvelope(t, w, http.StatusOK, map[string]any{
+				"items":       []any{map[string]any{"state": "queued", "created_at": "2026-06-08T12:00:00Z", "updated_at": "2026-06-08T12:00:00Z"}},
+				"next_cursor": nil,
+			})
+		default:
+			t.Fatalf("unexpected request %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	report := CheckComponent(context.Background(), server.Client(), ComponentCheckOptions{
+		BaseURL: server.URL,
+		Kind:    "jobs",
+	})
+	if report.Passed() {
+		t.Fatalf("report unexpectedly passed: %#v", report)
+	}
+	last := report.Checks[len(report.Checks)-1]
+	if last.Name != "component.surface.jobs.list" || last.Error == "" {
 		t.Fatalf("report = %#v", report)
 	}
 }
