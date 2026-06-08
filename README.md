@@ -17,7 +17,8 @@ Contract simulation data is kept as test input, not as product behavior.
 - `internal/components/catalog`: service catalog with in-memory or file-backed
   provider registration storage, health, and HTTP handlers.
 - `internal/components/gateway`: agent-facing tool discovery, invocation, job,
-  log, artifact, and content gateway that composes public component APIs.
+  log, artifact, content, and health gateway that composes public component
+  APIs.
 - `internal/components/jobs`: async job lifecycle service with in-memory or
   file-backed durable storage, health, and HTTP handlers.
 - `internal/components/leases`: resource registry, FIFO lease queue, heartbeat,
@@ -128,6 +129,7 @@ curl http://localhost:18082/v1/jobs/health
 curl http://localhost:18083/v1/leases/health
 curl http://localhost:18084/v1/artifacts/health
 curl http://localhost:18085/v1/policy/health
+curl http://localhost:18086/v1/gateway/health
 curl -X POST http://localhost:18085/v1/api-keys -H 'Content-Type: application/json' -d '{"subject_id":"sub_agent_local","scopes":["agent"],"token":"token_agent"}'
 go run ./cmd/pacp-control -gateway-url http://localhost:18086 -token token_agent tools
 ```

@@ -89,6 +89,8 @@ func NewPersistentHandler(cfg Config, idempotencyStatePath string) (http.Handler
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	path := strings.TrimSuffix(r.URL.Path, "/")
 	switch {
+	case path == "/v1/gateway/health" && r.Method == http.MethodGet:
+		writeSuccess(w, r, http.StatusOK, contracts.NewComponentHealth("gateway", nil))
 	case path == "/v1/tools" && r.Method == http.MethodGet:
 		h.listTools(w, r)
 	case strings.HasPrefix(path, "/v1/tools/"):

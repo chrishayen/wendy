@@ -20,6 +20,26 @@ import (
 	"pacp/internal/provider"
 )
 
+func TestGatewayHealthDoesNotRequireDownstreamServices(t *testing.T) {
+	handler := NewHandler(Config{})
+	req := httptest.NewRequest(http.MethodGet, "/v1/gateway/health", nil)
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("health status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var envelope map[string]any
+	if err := json.NewDecoder(rec.Body).Decode(&envelope); err != nil {
+		t.Fatalf("decode health response: %v", err)
+	}
+	data := envelope["data"].(map[string]any)
+	if data["status"] != "healthy" || data["details"].(map[string]any)["component"] != "gateway" {
+		t.Fatalf("health response = %#v", envelope)
+	}
+}
+
 func TestGatewayDiscoveryInvokeAndJobProjection(t *testing.T) {
 	env := newGatewayTestEnv(t)
 

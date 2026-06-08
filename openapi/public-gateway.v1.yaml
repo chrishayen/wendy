@@ -9,6 +9,20 @@ servers:
 security:
   - bearerAuth: []
 paths:
+  /v1/gateway/health:
+    get:
+      operationId: getGatewayHealth
+      summary: Read gateway health without requiring downstream component calls.
+      security: []
+      responses:
+        "200":
+          description: Gateway health.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthEnvelope"
+        default:
+          $ref: "#/components/responses/Error"
   /v1/tools:
     get:
       operationId: listTools
@@ -207,6 +221,32 @@ components:
           schema:
             $ref: "#/components/schemas/ErrorEnvelope"
   schemas:
+    HealthEnvelope:
+      type: object
+      required: [ok, data, links, meta]
+      properties:
+        ok:
+          const: true
+        data:
+          $ref: "#/components/schemas/ComponentHealth"
+        links:
+          $ref: "#/components/schemas/Links"
+        meta:
+          $ref: "#/components/schemas/Meta"
+    ComponentHealth:
+      type: object
+      required: [status, version, checked_at]
+      properties:
+        status:
+          type: string
+        version:
+          type: string
+        checked_at:
+          type: string
+          format: date-time
+        details:
+          type: object
+          additionalProperties: true
     ToolListEnvelope:
       type: object
       required: [ok, data, links, meta]
