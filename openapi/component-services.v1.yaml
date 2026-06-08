@@ -1246,6 +1246,39 @@ paths:
           $ref: "#/components/responses/Error"
         default:
           $ref: "#/components/responses/Error"
+  /v1/provider/artifacts/{content_ref}/content:
+    get:
+      tags: [provider]
+      operationId: getProviderArtifactContent
+      x-operation-audience: worker
+      x-policy-action: provider.content.read
+      summary: Retrieve provider-local result content for a completed invocation.
+      description: Runner-facing content handoff for opaque provider content refs.
+      security: []
+      parameters:
+        - $ref: "#/components/parameters/ProviderContentRef"
+      responses:
+        "200":
+          description: Provider result bytes.
+          headers:
+            Content-Length:
+              schema:
+                type: integer
+                minimum: 0
+            Digest:
+              schema:
+                type: string
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+            image/png:
+              schema:
+                type: string
+                format: binary
+        default:
+          $ref: "#/components/responses/Error"
 
   /v1/runner/health:
     get:
@@ -1303,6 +1336,12 @@ components:
         type: string
     CapabilityID:
       name: capability_id
+      in: path
+      required: true
+      schema:
+        type: string
+    ProviderContentRef:
+      name: content_ref
       in: path
       required: true
       schema:

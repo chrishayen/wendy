@@ -249,6 +249,88 @@ func TestServerExposesArtifactProducingHandler(t *testing.T) {
 	}
 }
 
+func TestServerExposesStoredProviderContentRefs(t *testing.T) {
+	manifest := testManifest()
+	manifest.Capabilities = append(manifest.Capabilities, contracts.Capability{
+		ID:            "cap_content_helper",
+		Name:          "Content Helper",
+		Description:   "Return a provider content ref through the generic SDK server.",
+		Tags:          []string{"test", "artifact"},
+		ExecutionMode: "sync",
+		InputSchema: map[string]any{
+			"type":       "object",
+			"properties": map[string]any{},
+		},
+		OutputSchema: map[string]any{
+			"type":     "object",
+			"required": []any{"content_count"},
+			"properties": map[string]any{
+				"content_count": map[string]any{"type": "integer"},
+			},
+		},
+		Examples:      []map[string]any{},
+		SideEffects:   "write",
+		ResourceHints: []contracts.ResourceHint{},
+		ArtifactHints: []contracts.ArtifactHint{{MediaType: "text/plain", Count: "one"}},
+		TimeoutHint:   "30s",
+	})
+	contentStore := NewContentStore()
+	body := []byte("provider content bytes")
+	server, err := NewServerWithContentStore(manifest, map[string]CapabilityHandler{
+		"cap_echo": func(ctx context.Context, req contracts.ProviderInvokeRequest) (contracts.ProviderInvokeResponse, error) {
+			return contracts.ProviderInvokeResponse{Output: map[string]any{"message": req.Input["message"]}}, nil
+		},
+		"cap_content_helper": ArtifactHandler(func(ctx context.Context, req contracts.ProviderInvokeRequest) (ArtifactResult, error) {
+			ref, err := contentStore.Put(ContentPut{
+				ContentRef: "pcr_text",
+				JobID:      req.Context.JobID,
+				Name:       "result.txt",
+				MediaType:  "text/plain",
+				Body:       body,
+			})
+			if err != nil {
+				return ArtifactResult{}, err
+			}
+			return ArtifactResult{
+				Output:      map[string]any{"content_count": 1},
+				ContentRefs: []contracts.ProviderContentRef{ref},
+			}, nil
+		}),
+	}, contentStore)
+	if err != nil {
+		t.Fatalf("new provider: %v", err)
+	}
+
+	response := doJSON(t, server, http.MethodPost, "/v1/provider/capabilities/cap_content_helper/invoke", map[string]any{
+		"input":   map[string]any{},
+		"context": map[string]any{"job_id": "job_content"},
+	}, http.StatusOK)
+	contentRefs := response["content_refs"].([]any)
+	if len(contentRefs) != 1 {
+		t.Fatalf("content refs = %#v", response)
+	}
+	ref := contentRefs[0].(map[string]any)
+	if ref["content_ref"] != "pcr_text" || ref["name"] != "result.txt" || ref["media_type"] != "text/plain" || ref["size"] != float64(len(body)) {
+		t.Fatalf("content ref = %#v", ref)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/provider/artifacts/pcr_text/content", nil)
+	rec := httptest.NewRecorder()
+	server.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("content status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if rec.Header().Get("Content-Type") != "text/plain" || rec.Header().Get("Digest") == "" || !bytes.Equal(rec.Body.Bytes(), body) {
+		t.Fatalf("content headers=%#v body=%q", rec.Header(), rec.Body.String())
+	}
+
+	missing := doJSONEnvelope(t, server, http.MethodGet, "/v1/provider/artifacts/pcr_missing/content", nil, http.StatusNotFound)
+	errObj := missing["error"].(map[string]any)
+	if errObj["code"] != "provider_content_not_found" {
+		t.Fatalf("missing content error = %#v", errObj)
+	}
+}
+
 func newTestProvider(t *testing.T) *Server {
 	t.Helper()
 	server, err := NewServer(testManifest(), map[string]CapabilityHandler{

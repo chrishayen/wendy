@@ -593,6 +593,101 @@ func TestRunnerFetchesProviderContentRefsAndUploadsArtifact(t *testing.T) {
 	}
 }
 
+func TestRunnerFetchesGenericProviderServerContentRefs(t *testing.T) {
+	jobStore := jobs.NewStore()
+	jobsServer := httptest.NewServer(jobs.NewHandler(jobStore))
+	defer jobsServer.Close()
+
+	artifactStore, err := artifacts.NewStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("artifact store: %v", err)
+	}
+	artifactsServer := httptest.NewServer(artifacts.NewHandler(artifactStore))
+	defer artifactsServer.Close()
+
+	providerBody := []byte("generic provider content bytes")
+	_, digest := checksumAndDigest(providerBody)
+	contentStore := provider.NewContentStore()
+	manifest := providerManifest("svc_generic_content", "cap_generic_content")
+	manifest.Capabilities[0].ArtifactHints = []contracts.ArtifactHint{{MediaType: "text/plain", Count: "one"}}
+	providerServer, err := provider.NewServerWithContentStore(manifest, map[string]provider.CapabilityHandler{
+		"cap_generic_content": provider.ArtifactHandler(func(ctx context.Context, req contracts.ProviderInvokeRequest) (provider.ArtifactResult, error) {
+			ref, err := contentStore.Put(provider.ContentPut{
+				ContentRef: "pcr_generic",
+				JobID:      req.Context.JobID,
+				Name:       "generic.txt",
+				MediaType:  "text/plain",
+				Body:       providerBody,
+			})
+			if err != nil {
+				return provider.ArtifactResult{}, err
+			}
+			return provider.ArtifactResult{
+				Output:      map[string]any{"message": "ok"},
+				ContentRefs: []contracts.ProviderContentRef{ref},
+			}, nil
+		}),
+	}, contentStore)
+	if err != nil {
+		t.Fatalf("new provider: %v", err)
+	}
+	providerHTTP := httptest.NewServer(providerServer)
+	defer providerHTTP.Close()
+
+	route := contracts.CapabilityRoute{
+		CapabilityID:       "cap_generic_content",
+		ServiceID:          "svc_generic_content",
+		ProviderEndpoint:   providerHTTP.URL,
+		ProviderHealthPath: "/v1/provider/health",
+		ProviderInvokePath: "/v1/provider/capabilities/cap_generic_content/invoke",
+		ServiceStartMode:   "manual",
+		ArtifactHints:      []contracts.ArtifactHint{{MediaType: "text/plain", Count: "one"}},
+	}
+	created, _, err := jobStore.Create(contracts.CreateJobRequest{
+		RequesterID:  "sub_agent",
+		CapabilityID: "cap_generic_content",
+		InputSummary: map[string]any{"message_present": true},
+		Metadata: map[string]any{"execution_plan": map[string]any{
+			"capability_id":   "cap_generic_content",
+			"subject_id":      "sub_agent",
+			"input":           map[string]any{"message": "hello"},
+			"route":           route,
+			"timeout_seconds": 30,
+		}},
+	}, "create-generic-ref-job")
+	if err != nil {
+		t.Fatalf("create job: %v", err)
+	}
+
+	r := New(Config{
+		WorkerID:     "runner_test",
+		JobsURL:      jobsServer.URL,
+		ArtifactsURL: artifactsServer.URL,
+		Client:       jobsServer.Client(),
+	})
+	jobID, ok, err := r.RunOnce(context.Background())
+	if err != nil {
+		t.Fatalf("run once: %v", err)
+	}
+	if !ok || jobID != created.JobID {
+		t.Fatalf("run result jobID=%q ok=%v", jobID, ok)
+	}
+	completed, err := jobStore.Get(created.JobID)
+	if err != nil {
+		t.Fatalf("get completed job: %v", err)
+	}
+	if completed.State != contracts.JobSucceeded || len(completed.ArtifactRefs) != 1 {
+		t.Fatalf("completed job = %#v", completed)
+	}
+	content, err := artifactStore.ReadContent(completed.ArtifactRefs[0])
+	if err != nil {
+		t.Fatalf("read artifact content: %v", err)
+	}
+	if !bytes.Equal(content.Body, providerBody) || content.Digest != digest {
+		t.Fatalf("content = %#v", content)
+	}
+}
+
 func TestRunnerFailsJobWithProviderContentFetchStage(t *testing.T) {
 	jobStore := jobs.NewStore()
 	jobsServer := httptest.NewServer(jobs.NewHandler(jobStore))

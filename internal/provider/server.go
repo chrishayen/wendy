@@ -25,12 +25,17 @@ type CapabilityHandler func(context.Context, contracts.ProviderInvokeRequest) (c
 type Server struct {
 	manifest          contracts.ProviderManifest
 	handlers          map[string]CapabilityHandler
+	content           *ContentStore
 	now               func() time.Time
 	httpMetrics       *observability.HTTPMetrics
 	invocationMetrics *providerInvocationMetrics
 }
 
 func NewServer(manifest contracts.ProviderManifest, handlers map[string]CapabilityHandler) (*Server, error) {
+	return NewServerWithContentStore(manifest, handlers, NewContentStore())
+}
+
+func NewServerWithContentStore(manifest contracts.ProviderManifest, handlers map[string]CapabilityHandler, content *ContentStore) (*Server, error) {
 	if errs := contracts.ValidateProviderManifest(manifest); len(errs) > 0 {
 		return nil, fmt.Errorf("%w: %s", ErrValidation, strings.Join(errs, "; "))
 	}
@@ -39,9 +44,13 @@ func NewServer(manifest contracts.ProviderManifest, handlers map[string]Capabili
 			return nil, fmt.Errorf("%w: missing handler for %s", ErrValidation, capability.ID)
 		}
 	}
+	if content == nil {
+		content = NewContentStore()
+	}
 	return &Server{
 		manifest:          manifest,
 		handlers:          handlers,
+		content:           content,
 		now:               time.Now,
 		httpMetrics:       observability.NewHTTPMetrics(),
 		invocationMetrics: newProviderInvocationMetrics(),
@@ -50,6 +59,9 @@ func NewServer(manifest contracts.ProviderManifest, handlers map[string]Capabili
 
 func (s *Server) SetClock(now func() time.Time) {
 	s.now = now
+	if s.content != nil {
+		s.content.SetClock(now)
+	}
 }
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -75,6 +87,9 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 	case r.Method == http.MethodPost && strings.HasPrefix(path, "/v1/provider/capabilities/") && strings.HasSuffix(path, "/invoke"):
 		capabilityID := strings.TrimSuffix(strings.TrimPrefix(path, "/v1/provider/capabilities/"), "/invoke")
 		s.invoke(w, r, capabilityID)
+	case r.Method == http.MethodGet && strings.HasPrefix(path, "/v1/provider/artifacts/") && strings.HasSuffix(path, "/content"):
+		contentRef := strings.TrimSuffix(strings.TrimPrefix(path, "/v1/provider/artifacts/"), "/content")
+		s.readContent(w, r, contentRef)
 	default:
 		writeError(w, r, http.StatusNotFound, "not_found", "provider route not found", false)
 	}
@@ -148,6 +163,20 @@ func (s *Server) invoke(w http.ResponseWriter, r *http.Request, capabilityID str
 	}
 	record("success", "")
 	writeSuccess(w, r, http.StatusOK, response)
+}
+
+func (s *Server) readContent(w http.ResponseWriter, r *http.Request, contentRef string) {
+	record, ok := s.content.Get(contentRef)
+	if !ok {
+		writeError(w, r, http.StatusNotFound, "provider_content_not_found", "provider content ref expired or not found", false)
+		return
+	}
+	_, digest := contentChecksumAndDigest(record.Body)
+	w.Header().Set("Content-Type", record.Ref.MediaType)
+	w.Header().Set("Content-Length", fmt.Sprintf("%d", len(record.Body)))
+	w.Header().Set("Digest", digest)
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(record.Body)
 }
 
 func statusForProviderErrorCode(code string) int {
