@@ -7,6 +7,8 @@ import (
 	"net/http/httptest"
 	"testing"
 	"time"
+
+	"pacp/internal/contracts"
 )
 
 func TestFakeComponentHandlersPassComponentChecks(t *testing.T) {
@@ -131,6 +133,58 @@ func TestFakeComponentHandlerSupportsUnavailableBehavior(t *testing.T) {
 	}
 	if envelope.OK || envelope.Error.Code != "component_unavailable" || !envelope.Error.Retryable {
 		t.Fatalf("envelope = %#v", envelope)
+	}
+}
+
+func TestFakeComponentHandlerSupportsCustomListItems(t *testing.T) {
+	now := "2026-06-08T00:00:00Z"
+	handler, err := NewFakeComponentHandler(FakeComponentConfig{
+		Kind: "jobs",
+		ListItems: []any{contracts.Job{
+			JobID:        "job_done",
+			State:        contracts.JobSucceeded,
+			CreatedAt:    now,
+			UpdatedAt:    now,
+			ArtifactRefs: []string{"art_done"},
+			Links:        map[string]any{},
+		}},
+		Now: fixedFakeClock,
+	})
+	if err != nil {
+		t.Fatalf("new fake component: %v", err)
+	}
+	server := httptest.NewServer(handler)
+	defer server.Close()
+
+	report := CheckComponent(context.Background(), server.Client(), ComponentCheckOptions{
+		BaseURL:   server.URL,
+		Kind:      "jobs",
+		RequestID: "req_fake_component_custom",
+	})
+	if !report.Passed() {
+		t.Fatalf("custom list check failed: %#v", report)
+	}
+}
+
+func TestFakeComponentHandlerSupportsExplicitEmptyList(t *testing.T) {
+	handler, err := NewFakeComponentHandler(FakeComponentConfig{
+		Kind:      "artifacts",
+		ListItems: []any{},
+		Now:       fixedFakeClock,
+	})
+	if err != nil {
+		t.Fatalf("new fake component: %v", err)
+	}
+	server := httptest.NewServer(handler)
+	defer server.Close()
+
+	report := CheckComponent(context.Background(), server.Client(), ComponentCheckOptions{
+		BaseURL:   server.URL,
+		Kind:      "artifacts",
+		RequestID: "req_fake_component_empty",
+	})
+	if !report.Passed() {
+		t.Fatalf("empty list check failed: %#v", report)
 	}
 }
 

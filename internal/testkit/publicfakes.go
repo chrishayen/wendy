@@ -19,6 +19,7 @@ type FakeComponentConfig struct {
 	Kind         string
 	Credential   string
 	Behavior     FakeComponentBehavior
+	ListItems    []any
 	HealthStatus string
 	Now          func() time.Time
 	Samples      []contracts.MetricSample
@@ -150,7 +151,7 @@ func (h *fakeComponentHandler) ServeHTTP(w http.ResponseWriter, r *http.Request)
 				if h.writeBlocked(w, r) {
 					return
 				}
-				writeFakeSuccess(w, r, http.StatusOK, fakeListPayload(h.contract.Kind))
+				writeFakeSuccess(w, r, http.StatusOK, fakeListPayload(h.contract.Kind, h.cfg.ListItems))
 				return
 			}
 		}
@@ -171,9 +172,13 @@ func (h *fakeComponentHandler) writeBlocked(w http.ResponseWriter, r *http.Reque
 	}
 }
 
-func fakeListPayload(kind string) map[string]any {
+func fakeListPayload(kind string, override []any) map[string]any {
+	items := override
+	if items == nil {
+		items = fakeListItems(kind)
+	}
 	return map[string]any{
-		"items":       fakeListItems(kind),
+		"items":       items,
 		"next_cursor": nil,
 	}
 }
