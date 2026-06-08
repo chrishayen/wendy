@@ -192,11 +192,14 @@ on catalog, jobs, leases, artifacts, and policy services. `pacp-gateway` uses
 leases, node starts, and artifact uploads. When the policy service is
 transport-protected by a component token, set `PACP_RUNNER_POLICY_CREDENTIAL`
 or `-policy-credential` so runner C08 calls use the component credential while
-worker routes still use the worker credential. Raw tokens and `Bearer ...`
-values are both accepted. Leaving the token unset keeps local service endpoints
-open for quick isolated testing. The example policy seed creates logical policy
-credentials for the gateway, runner, and local agent; component endpoint
-authentication is a separate transport guard.
+worker routes still use the worker credential. In `pacp-primary`,
+`-component-token` also becomes the default embedded gateway credential,
+embedded runner credential, and embedded runner policy credential unless the
+more specific gateway or runner credential flags are set. Raw tokens and
+`Bearer ...` values are both accepted. Leaving the token unset keeps local
+service endpoints open for quick isolated testing. The example policy seed
+creates logical policy credentials for the gateway, runner, and local agent;
+component endpoint authentication is a separate transport guard.
 Provider endpoints may also enforce runner/component bearer tokens. The
 ComfyUI provider accepts `-runner-tokens`, `-component-tokens`, and
 `-agent-tokens`; the first two are allowed to invoke and fetch provider-local
