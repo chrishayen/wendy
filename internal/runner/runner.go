@@ -25,6 +25,7 @@ type Config struct {
 	LeasesURL           string
 	ArtifactsURL        string
 	NodeURL             string
+	NodeURLs            map[string]string
 	NodeStartTimeout    time.Duration
 	NodePollInterval    time.Duration
 	ComponentCredential string
@@ -60,7 +61,23 @@ func New(cfg Config) *Runner {
 	cfg.LeasesURL = strings.TrimRight(cfg.LeasesURL, "/")
 	cfg.ArtifactsURL = strings.TrimRight(cfg.ArtifactsURL, "/")
 	cfg.NodeURL = strings.TrimRight(cfg.NodeURL, "/")
+	cfg.NodeURLs = normalizeNodeURLs(cfg.NodeURLs)
 	return &Runner{cfg: cfg, client: client}
+}
+
+func normalizeNodeURLs(raw map[string]string) map[string]string {
+	if len(raw) == 0 {
+		return map[string]string{}
+	}
+	out := make(map[string]string, len(raw))
+	for nodeID, nodeURL := range raw {
+		nodeID = strings.TrimSpace(nodeID)
+		nodeURL = strings.TrimRight(strings.TrimSpace(nodeURL), "/")
+		if nodeID != "" && nodeURL != "" {
+			out[nodeID] = nodeURL
+		}
+	}
+	return out
 }
 
 func (r *Runner) RunOnce(ctx context.Context) (string, bool, error) {
@@ -100,8 +117,8 @@ func (r *Runner) runJob(ctx context.Context, job contracts.Job) error {
 			_, _ = r.releaseLease(context.Background(), lease.LeaseID, job.JobID, "job finished")
 		}()
 	}
-	if r.cfg.NodeURL != "" && plan.Route.NodeManaged {
-		if err := r.ensureNodeService(ctx, plan.Route.ServiceID); err != nil {
+	if plan.Route.NodeManaged {
+		if err := r.ensureNodeService(ctx, plan.Route); err != nil {
 			_ = r.failJob(ctx, job.JobID, "node_unavailable", err.Error())
 			return err
 		}
@@ -197,13 +214,18 @@ func (r *Runner) releaseLease(ctx context.Context, leaseID, holderID, reason str
 	return lease, err
 }
 
-func (r *Runner) ensureNodeService(ctx context.Context, serviceID string) error {
+func (r *Runner) ensureNodeService(ctx context.Context, route contracts.CapabilityRoute) error {
+	serviceID := route.ServiceID
+	nodeURL, err := r.nodeURLForRoute(route)
+	if err != nil {
+		return err
+	}
 	waitCtx, cancel := context.WithTimeout(ctx, r.cfg.NodeStartTimeout)
 	defer cancel()
 
 	startIssued := false
 	for {
-		service, err := r.getNodeService(waitCtx, serviceID)
+		service, err := r.getNodeService(waitCtx, nodeURL, serviceID)
 		if err != nil {
 			return err
 		}
@@ -211,7 +233,7 @@ func (r *Runner) ensureNodeService(ctx context.Context, serviceID string) error 
 			return nil
 		}
 		if !startIssued && service.Status != "starting" {
-			service, err = r.startNodeService(waitCtx, serviceID)
+			service, err = r.startNodeService(waitCtx, nodeURL, serviceID)
 			if err != nil {
 				return err
 			}
@@ -231,15 +253,36 @@ func (r *Runner) ensureNodeService(ctx context.Context, serviceID string) error 
 	}
 }
 
-func (r *Runner) getNodeService(ctx context.Context, serviceID string) (contracts.NodeService, error) {
+func (r *Runner) nodeURLForRoute(route contracts.CapabilityRoute) (string, error) {
+	if route.NodeID != nil && *route.NodeID != "" {
+		if nodeURL := r.cfg.NodeURLs[*route.NodeID]; nodeURL != "" {
+			return nodeURL, nil
+		}
+		if r.cfg.NodeURL != "" {
+			return r.cfg.NodeURL, nil
+		}
+		return "", fmt.Errorf("node URL is not configured for node_id %s", *route.NodeID)
+	}
+	if r.cfg.NodeURL != "" {
+		return r.cfg.NodeURL, nil
+	}
+	if len(r.cfg.NodeURLs) == 1 {
+		for _, nodeURL := range r.cfg.NodeURLs {
+			return nodeURL, nil
+		}
+	}
+	return "", errors.New("node URL is not configured for node-managed service")
+}
+
+func (r *Runner) getNodeService(ctx context.Context, nodeURL, serviceID string) (contracts.NodeService, error) {
 	var service contracts.NodeService
-	err := r.getJSON(ctx, r.cfg.NodeURL+"/v1/node/services/"+url.PathEscape(serviceID), &service)
+	err := r.getJSON(ctx, nodeURL+"/v1/node/services/"+url.PathEscape(serviceID), &service)
 	return service, err
 }
 
-func (r *Runner) startNodeService(ctx context.Context, serviceID string) (contracts.NodeService, error) {
+func (r *Runner) startNodeService(ctx context.Context, nodeURL, serviceID string) (contracts.NodeService, error) {
 	var service contracts.NodeService
-	err := r.postJSON(ctx, r.cfg.NodeURL+"/v1/node/services/"+url.PathEscape(serviceID)+"/start", nil, "runner-start-"+serviceID, &service)
+	err := r.postJSON(ctx, nodeURL+"/v1/node/services/"+url.PathEscape(serviceID)+"/start", nil, "runner-start-"+serviceID, &service)
 	return service, err
 }
 

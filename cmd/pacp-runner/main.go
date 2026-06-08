@@ -3,8 +3,10 @@ package main
 import (
 	"context"
 	"flag"
+	"fmt"
 	"log"
 	"os"
+	"strings"
 	"time"
 
 	"pacp/internal/runner"
@@ -16,6 +18,7 @@ func main() {
 	leasesURL := flag.String("leases-url", os.Getenv("PACP_LEASES_URL"), "lease service base URL")
 	artifactsURL := flag.String("artifacts-url", os.Getenv("PACP_ARTIFACTS_URL"), "artifact service base URL")
 	nodeURL := flag.String("node-url", os.Getenv("PACP_NODE_URL"), "optional node service base URL")
+	nodeURLsRaw := flag.String("node-urls", os.Getenv("PACP_NODE_URLS"), "optional comma-separated node_id=URL mappings for node-managed services")
 	credential := flag.String("credential", "", "component credential for downstream calls")
 	nodeStartTimeout := flag.Duration("node-start-timeout", 30*time.Second, "maximum time to wait for node-managed service startup")
 	nodeStartPoll := flag.Duration("node-start-poll", 500*time.Millisecond, "poll interval while waiting for node-managed service startup")
@@ -25,6 +28,10 @@ func main() {
 	requireURL("jobs-url", *jobsURL)
 	requireURL("leases-url", *leasesURL)
 	requireURL("artifacts-url", *artifactsURL)
+	nodeURLs, err := parseNodeURLMap(*nodeURLsRaw)
+	if err != nil {
+		log.Fatal(err)
+	}
 
 	r := runner.New(runner.Config{
 		WorkerID:            *workerID,
@@ -32,6 +39,7 @@ func main() {
 		LeasesURL:           *leasesURL,
 		ArtifactsURL:        *artifactsURL,
 		NodeURL:             *nodeURL,
+		NodeURLs:            nodeURLs,
 		NodeStartTimeout:    *nodeStartTimeout,
 		NodePollInterval:    *nodeStartPoll,
 		ComponentCredential: *credential,
@@ -54,6 +62,31 @@ func main() {
 		}
 		time.Sleep(*poll)
 	}
+}
+
+func parseNodeURLMap(raw string) (map[string]string, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil, nil
+	}
+	out := map[string]string{}
+	for _, entry := range strings.Split(raw, ",") {
+		entry = strings.TrimSpace(entry)
+		if entry == "" {
+			continue
+		}
+		parts := strings.SplitN(entry, "=", 2)
+		if len(parts) != 2 {
+			return nil, fmt.Errorf("node URL mapping %q must be node_id=URL", entry)
+		}
+		nodeID := strings.TrimSpace(parts[0])
+		nodeURL := strings.TrimRight(strings.TrimSpace(parts[1]), "/")
+		if nodeID == "" || nodeURL == "" {
+			return nil, fmt.Errorf("node URL mapping %q must include node_id and URL", entry)
+		}
+		out[nodeID] = nodeURL
+	}
+	return out, nil
 }
 
 func requireURL(name, value string) {

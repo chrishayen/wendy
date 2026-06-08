@@ -125,12 +125,14 @@ func TestRunnerWaitsForNodeManagedServiceStartup(t *testing.T) {
 	defer nodeServer.Close()
 
 	r := New(Config{
-		NodeURL:          nodeServer.URL,
+		NodeURLs:         map[string]string{"node_linux_gpu": nodeServer.URL + "/"},
 		NodeStartTimeout: 250 * time.Millisecond,
 		NodePollInterval: time.Millisecond,
 		Client:           nodeServer.Client(),
 	})
-	if err := r.ensureNodeService(context.Background(), "svc_remote_provider"); err != nil {
+	nodeID := "node_linux_gpu"
+	route := contracts.CapabilityRoute{ServiceID: "svc_remote_provider", NodeID: &nodeID, NodeManaged: true}
+	if err := r.ensureNodeService(context.Background(), route); err != nil {
 		t.Fatalf("ensureNodeService: %v", err)
 	}
 	if starts != 1 || gets < 3 {
@@ -155,8 +157,18 @@ func TestRunnerTimesOutWaitingForNodeManagedServiceStartup(t *testing.T) {
 		NodePollInterval: time.Millisecond,
 		Client:           nodeServer.Client(),
 	})
-	if err := r.ensureNodeService(context.Background(), "svc_slow_provider"); err == nil {
+	route := contracts.CapabilityRoute{ServiceID: "svc_slow_provider", NodeManaged: true}
+	if err := r.ensureNodeService(context.Background(), route); err == nil {
 		t.Fatal("expected node start timeout")
+	}
+}
+
+func TestRunnerRequiresConfiguredNodeURLForNodeID(t *testing.T) {
+	r := New(Config{})
+	nodeID := "node_linux_gpu"
+	route := contracts.CapabilityRoute{ServiceID: "svc_remote_provider", NodeID: &nodeID, NodeManaged: true}
+	if err := r.ensureNodeService(context.Background(), route); err == nil {
+		t.Fatal("expected missing node URL error")
 	}
 }
 

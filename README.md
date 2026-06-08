@@ -12,8 +12,8 @@ Contract simulation data is kept as test input, not as product behavior.
 - `internal/provider`: provider SDK helpers for manifest, health, invoke,
   simple schema validation, and provider response envelopes.
 - `internal/runner`: composition runner that claims jobs, acquires leases,
-  invokes providers, uploads artifacts, and completes or fails jobs through
-  public APIs.
+  starts node-managed providers by node ID, invokes providers, uploads
+  artifacts, and completes or fails jobs through public APIs.
 - `internal/components/catalog`: service catalog with in-memory or file-backed
   provider registration storage, health, and HTTP handlers.
 - `internal/components/gateway`: agent-facing tool discovery, invocation, job,
@@ -82,7 +82,7 @@ go run ./cmd/pacp-artifacts -addr localhost:18084 -root /tmp/pacp-artifacts -sta
 go run ./cmd/pacp-policy -addr localhost:18085 -state-file /tmp/pacp-policy-state.json
 go run ./cmd/pacp-gateway -addr localhost:18086 -catalog-url http://localhost:18081 -jobs-url http://localhost:18082 -artifacts-url http://localhost:18084 -policy-url http://localhost:18085 -idempotency-state-file /tmp/pacp-gateway-idempotency-state.json
 go run ./cmd/pacp-node -addr localhost:18087 -config testdata/node/linux-gpu-fake.json
-go run ./cmd/pacp-runner -once -worker-id runner_local -jobs-url http://localhost:18082 -leases-url http://localhost:18083 -artifacts-url http://localhost:18084 -node-url http://localhost:18087 -node-start-timeout 30s
+go run ./cmd/pacp-runner -once -worker-id runner_local -jobs-url http://localhost:18082 -leases-url http://localhost:18083 -artifacts-url http://localhost:18084 -node-urls node_linux_gpu=http://localhost:18087 -node-start-timeout 30s
 ```
 
 For distributed deployments, set `PACP_COMPONENT_TOKEN` or `-component-token`
@@ -90,6 +90,10 @@ on catalog, jobs, leases, artifacts, and policy services. Then pass the same
 credential to `pacp-gateway -gateway-credential` and `pacp-runner -credential`.
 Leaving the token unset keeps local service endpoints open for quick isolated
 testing.
+
+Use `pacp-runner -node-urls` or `PACP_NODE_URLS` for distributed nodes. The
+format is comma-separated `node_id=URL` entries, for example
+`node_linux_gpu=http://linux-box:18087,node_mac_services=http://mac:18087`.
 
 HTTP provider bridge route files can set literal `headers` for non-secret
 values and `headers_from_env` for backend credentials that must not be stored in
