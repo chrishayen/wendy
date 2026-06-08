@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/url"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -663,7 +664,11 @@ func (h *fakeComponentHandler) ServeHTTP(w http.ResponseWriter, r *http.Request)
 				if h.writeBlocked(w, r) {
 					return
 				}
-				writeFakeSuccess(w, r, http.StatusOK, fakeListPayload(h.contract.Kind, check.Name, h.cfg.ListItems))
+				payload, ok := fakeListPayload(w, r, h.contract.Kind, check.Name, h.cfg.ListItems)
+				if !ok {
+					return
+				}
+				writeFakeSuccess(w, r, http.StatusOK, payload)
 				return
 			}
 		}
@@ -772,11 +777,23 @@ func (h *fakeNodeHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.mu.Lock()
 		resources := cloneFakeNodeResources(h.resources)
 		h.mu.Unlock()
-		writeFakeSuccess(w, r, http.StatusOK, map[string]any{"items": resources, "next_cursor": nil})
+		payload, ok := fakeListEnvelope(w, r, "node_resources", resources)
+		if !ok {
+			return
+		}
+		writeFakeSuccess(w, r, http.StatusOK, payload)
 	case r.Method == http.MethodGet && path == "/v1/node/events":
-		writeFakeSuccess(w, r, http.StatusOK, map[string]any{"items": h.listEvents(), "next_cursor": nil})
+		payload, ok := fakeListEnvelope(w, r, "node_events", h.listEvents())
+		if !ok {
+			return
+		}
+		writeFakeSuccess(w, r, http.StatusOK, payload)
 	case r.Method == http.MethodGet && path == "/v1/node/services":
-		writeFakeSuccess(w, r, http.StatusOK, map[string]any{"items": h.listServices(), "next_cursor": nil})
+		payload, ok := fakeListEnvelope(w, r, "node_services", h.listServices())
+		if !ok {
+			return
+		}
+		writeFakeSuccess(w, r, http.StatusOK, payload)
 	case strings.HasPrefix(path, "/v1/node/services/"):
 		h.serviceRoute(w, r, strings.TrimPrefix(path, "/v1/node/services/"))
 	default:
@@ -965,7 +982,11 @@ func (h *fakeJobsHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		metrics.CollectedAt = h.cfg.Now().UTC().Format(time.RFC3339)
 		writeFakeSuccess(w, r, http.StatusOK, metrics)
 	case r.Method == http.MethodGet && path == "/v1/jobs":
-		writeFakeSuccess(w, r, http.StatusOK, map[string]any{"items": h.listJobs(contracts.JobState(r.URL.Query().Get("state"))), "next_cursor": nil})
+		payload, ok := fakeListEnvelope(w, r, "jobs", h.listJobs(contracts.JobState(r.URL.Query().Get("state"))))
+		if !ok {
+			return
+		}
+		writeFakeSuccess(w, r, http.StatusOK, payload)
 	case r.Method == http.MethodPost && path == "/v1/jobs":
 		h.createJob(w, r)
 	case strings.HasPrefix(path, "/v1/jobs/"):
@@ -1283,7 +1304,11 @@ func (h *fakeJobsHandler) readLogs(w http.ResponseWriter, r *http.Request, jobID
 		return
 	}
 	entries := append([]contracts.JobLogEntry(nil), h.logs[jobID]...)
-	writeFakeSuccess(w, r, http.StatusOK, map[string]any{"items": entries, "next_cursor": nil})
+	payload, ok := fakeListEnvelope(w, r, "job_logs", entries)
+	if !ok {
+		return
+	}
+	writeFakeSuccess(w, r, http.StatusOK, payload)
 }
 
 func (h *fakeJobsHandler) appendLogs(w http.ResponseWriter, r *http.Request, jobID string) {
@@ -1381,7 +1406,11 @@ func (h *fakeLeasesHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		metrics.CollectedAt = h.cfg.Now().UTC().Format(time.RFC3339)
 		writeFakeSuccess(w, r, http.StatusOK, metrics)
 	case r.Method == http.MethodGet && path == "/v1/resources":
-		writeFakeSuccess(w, r, http.StatusOK, map[string]any{"items": h.listResources(r.URL.Query().Get("selector")), "next_cursor": nil})
+		payload, ok := fakeListEnvelope(w, r, "lease_resources", h.listResources(r.URL.Query().Get("selector")))
+		if !ok {
+			return
+		}
+		writeFakeSuccess(w, r, http.StatusOK, payload)
 	case r.Method == http.MethodPost && path == "/v1/resources":
 		h.registerResource(w, r)
 	case strings.HasPrefix(path, "/v1/resources/"):
@@ -1583,7 +1612,11 @@ func (h *fakeLeasesHandler) listLeaseRequests(w http.ResponseWriter, r *http.Req
 			items = append(items, cloneFakeLeaseRequest(request))
 		}
 	}
-	writeFakeSuccess(w, r, http.StatusOK, map[string]any{"items": items, "next_cursor": nil})
+	payload, ok := fakeListEnvelope(w, r, "lease_requests", items)
+	if !ok {
+		return
+	}
+	writeFakeSuccess(w, r, http.StatusOK, payload)
 }
 
 func (h *fakeLeasesHandler) cancelLeaseRequest(w http.ResponseWriter, r *http.Request, requestID string) {
@@ -1899,7 +1932,11 @@ func (h *fakeArtifactsHandler) ServeHTTP(w http.ResponseWriter, r *http.Request)
 	case strings.HasPrefix(path, "/v1/artifact-uploads/"):
 		h.uploadRoute(w, r, strings.TrimPrefix(path, "/v1/artifact-uploads/"))
 	case r.Method == http.MethodGet && path == "/v1/artifacts":
-		writeFakeSuccess(w, r, http.StatusOK, map[string]any{"items": h.listArtifacts(r.URL.Query().Get("producer_ref"), r.URL.Query().Get("owner_subject_id")), "next_cursor": nil})
+		payload, ok := fakeListEnvelope(w, r, "artifacts", h.listArtifacts(r.URL.Query().Get("producer_ref"), r.URL.Query().Get("owner_subject_id")))
+		if !ok {
+			return
+		}
+		writeFakeSuccess(w, r, http.StatusOK, payload)
 	case r.Method == http.MethodPost && path == "/v1/artifacts/register-local":
 		h.registerLocalArtifact(w, r)
 	case r.Method == http.MethodPost && path == "/v1/artifacts/retention/sweep":
@@ -2320,7 +2357,11 @@ func (h *fakeCatalogHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case r.Method == http.MethodGet && strings.HasPrefix(path, "/v1/catalog/services/"):
 		h.getService(w, r, strings.TrimPrefix(path, "/v1/catalog/services/"))
 	case r.Method == http.MethodGet && path == "/v1/catalog/capabilities":
-		writeFakeSuccess(w, r, http.StatusOK, map[string]any{"items": h.listCapabilities(r.URL.Query()), "next_cursor": nil})
+		payload, ok := fakeListEnvelope(w, r, "catalog_capabilities", h.listCapabilities(r.URL.Query()))
+		if !ok {
+			return
+		}
+		writeFakeSuccess(w, r, http.StatusOK, payload)
 	case r.Method == http.MethodGet && strings.HasPrefix(path, "/v1/catalog/capabilities/") && strings.HasSuffix(path, "/route"):
 		capabilityID := strings.TrimSuffix(strings.TrimPrefix(path, "/v1/catalog/capabilities/"), "/route")
 		h.getCapabilityRoute(w, r, capabilityID)
@@ -2381,7 +2422,14 @@ func (h *fakeCatalogHandler) listServices(w http.ResponseWriter, r *http.Request
 	for _, service := range h.services {
 		services = append(services, service)
 	}
-	writeFakeSuccess(w, r, http.StatusOK, map[string]any{"items": services, "next_cursor": nil})
+	sort.Slice(services, func(i, j int) bool {
+		return services[i].ID < services[j].ID
+	})
+	payload, ok := fakeListEnvelope(w, r, "catalog_services", services)
+	if !ok {
+		return
+	}
+	writeFakeSuccess(w, r, http.StatusOK, payload)
 }
 
 func (h *fakeCatalogHandler) getService(w http.ResponseWriter, r *http.Request, serviceID string) {
@@ -2442,7 +2490,12 @@ func (h *fakeCatalogHandler) listTags(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	writeFakeSuccess(w, r, http.StatusOK, map[string]any{"items": items, "next_cursor": nil})
+	sort.Strings(items)
+	payload, ok := fakeListEnvelope(w, r, "catalog_tags", items)
+	if !ok {
+		return
+	}
+	writeFakeSuccess(w, r, http.StatusOK, payload)
 }
 
 func (h *fakeCatalogHandler) exportCatalog(w http.ResponseWriter, r *http.Request) {
@@ -3122,15 +3175,88 @@ func decodeFakeBody(w http.ResponseWriter, r *http.Request, out any) bool {
 	return true
 }
 
-func fakeListPayload(kind, listName string, override []any) map[string]any {
+func fakeListPayload(w http.ResponseWriter, r *http.Request, kind, listName string, override []any) (map[string]any, bool) {
 	items := override
 	if items == nil {
 		items = fakeListItems(kind, listName)
 	}
-	return map[string]any{
-		"items":       items,
-		"next_cursor": nil,
+	page, next, ok := fakePage(w, r, fakeCursorPrefix(kind+"_"+listName), items)
+	if !ok {
+		return nil, false
 	}
+	return map[string]any{
+		"items":       page,
+		"next_cursor": next,
+	}, true
+}
+
+func fakeListEnvelope[T any](w http.ResponseWriter, r *http.Request, cursorName string, items []T) (map[string]any, bool) {
+	page, next, ok := fakePage(w, r, fakeCursorPrefix(cursorName), items)
+	if !ok {
+		return nil, false
+	}
+	return map[string]any{"items": page, "next_cursor": next}, true
+}
+
+func fakePage[T any](w http.ResponseWriter, r *http.Request, cursorPrefix string, items []T) ([]T, *string, bool) {
+	limit, ok := fakePositiveLimit(w, r)
+	if !ok {
+		return nil, nil, false
+	}
+	start := 0
+	if raw := r.URL.Query().Get("cursor"); raw != "" {
+		parsed, err := parseFakeCursor(raw, cursorPrefix)
+		if err != nil {
+			writeFakeError(w, r, http.StatusBadRequest, "invalid_cursor", "cursor is invalid or expired", false)
+			return nil, nil, false
+		}
+		start = parsed
+	}
+	if start > len(items) {
+		writeFakeError(w, r, http.StatusBadRequest, "invalid_cursor", "cursor is invalid or expired", false)
+		return nil, nil, false
+	}
+	end := len(items)
+	var next *string
+	if limit > 0 && start+limit < end {
+		end = start + limit
+		cursor := formatFakeCursor(cursorPrefix, end)
+		next = &cursor
+	}
+	return items[start:end], next, true
+}
+
+func fakePositiveLimit(w http.ResponseWriter, r *http.Request) (int, bool) {
+	raw := r.URL.Query().Get("limit")
+	if raw == "" {
+		return 0, true
+	}
+	limit, err := strconv.Atoi(raw)
+	if err != nil || limit < 1 {
+		writeFakeError(w, r, http.StatusBadRequest, "validation_failed", "limit must be a positive integer", false)
+		return 0, false
+	}
+	return limit, true
+}
+
+func fakeCursorPrefix(name string) string {
+	replacer := strings.NewReplacer(".", "_", "-", "_", "/", "_", " ", "_")
+	return "cursor_fake_" + strings.Trim(replacer.Replace(name), "_")
+}
+
+func formatFakeCursor(prefix string, index int) string {
+	return fmt.Sprintf("%s_%06d", prefix, index)
+}
+
+func parseFakeCursor(cursor, prefix string) (int, error) {
+	var index int
+	if _, err := fmt.Sscanf(cursor, prefix+"_%06d", &index); err != nil {
+		return 0, err
+	}
+	if index < 0 || formatFakeCursor(prefix, index) != cursor {
+		return 0, errors.New("invalid cursor")
+	}
+	return index, nil
 }
 
 func fakeListItems(kind, listName string) []any {

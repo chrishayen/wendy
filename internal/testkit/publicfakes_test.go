@@ -168,6 +168,52 @@ func TestFakeComponentHandlerSupportsCustomListItems(t *testing.T) {
 	}
 }
 
+func TestFakeComponentHandlerPaginatesCustomListItems(t *testing.T) {
+	now := "2026-06-08T00:00:00Z"
+	handler, err := NewFakeComponentHandler(FakeComponentConfig{
+		Kind: "jobs",
+		ListItems: []any{
+			contracts.Job{JobID: "job_a", State: contracts.JobQueued, CreatedAt: now, UpdatedAt: now, Links: map[string]any{}},
+			contracts.Job{JobID: "job_b", State: contracts.JobQueued, CreatedAt: now, UpdatedAt: now, Links: map[string]any{}},
+		},
+		Now: fixedFakeClock,
+	})
+	if err != nil {
+		t.Fatalf("new fake component: %v", err)
+	}
+	server := httptest.NewServer(handler)
+	defer server.Close()
+
+	first := doFakeJobsEnvelope(t, server, http.MethodGet, "/v1/jobs?limit=1", nil, nil, http.StatusOK)
+	var firstPage struct {
+		Items      []contracts.Job `json:"items"`
+		NextCursor *string         `json:"next_cursor"`
+	}
+	decodeEnvelopeData(t, first, &firstPage)
+	if len(firstPage.Items) != 1 || firstPage.Items[0].JobID != "job_a" || firstPage.NextCursor == nil {
+		t.Fatalf("first page = %#v", firstPage)
+	}
+
+	second := doFakeJobsEnvelope(t, server, http.MethodGet, "/v1/jobs?limit=1&cursor="+*firstPage.NextCursor, nil, nil, http.StatusOK)
+	var secondPage struct {
+		Items      []contracts.Job `json:"items"`
+		NextCursor *string         `json:"next_cursor"`
+	}
+	decodeEnvelopeData(t, second, &secondPage)
+	if len(secondPage.Items) != 1 || secondPage.Items[0].JobID != "job_b" || secondPage.NextCursor != nil {
+		t.Fatalf("second page = %#v", secondPage)
+	}
+
+	invalidLimit := doFakeJobsEnvelope(t, server, http.MethodGet, "/v1/jobs?limit=0", nil, nil, http.StatusBadRequest)
+	if invalidLimit.Error.Code != "validation_failed" {
+		t.Fatalf("invalid limit error = %#v", invalidLimit.Error)
+	}
+	invalidCursor := doFakeJobsEnvelope(t, server, http.MethodGet, "/v1/jobs?cursor=cursor_fake_artifacts_000001", nil, nil, http.StatusBadRequest)
+	if invalidCursor.Error.Code != "invalid_cursor" {
+		t.Fatalf("invalid cursor error = %#v", invalidCursor.Error)
+	}
+}
+
 func TestFakeComponentHandlerSupportsExplicitEmptyList(t *testing.T) {
 	handler, err := NewFakeComponentHandler(FakeComponentConfig{
 		Kind:      "artifacts",
@@ -258,6 +304,40 @@ func TestFakeCatalogHandlerSupportsCapabilityOutcomes(t *testing.T) {
 	missing := doFakeCatalogEnvelope(t, server, http.MethodGet, "/v1/catalog/capabilities/cap_missing", nil, http.StatusNotFound)
 	if missing.OK || missing.Error.Code != "not_found" {
 		t.Fatalf("missing = %#v", missing)
+	}
+}
+
+func TestFakeCatalogHandlerPaginatesCapabilityLists(t *testing.T) {
+	handler, err := NewFakeCatalogHandler(FakeCatalogConfig{Now: fixedFakeClock})
+	if err != nil {
+		t.Fatalf("new fake catalog: %v", err)
+	}
+	server := httptest.NewServer(handler)
+	defer server.Close()
+
+	first := doFakeCatalogEnvelope(t, server, http.MethodGet, "/v1/catalog/capabilities?limit=1", nil, http.StatusOK)
+	var firstPage struct {
+		Items      []contracts.CatalogCapabilityRecord `json:"items"`
+		NextCursor *string                             `json:"next_cursor"`
+	}
+	decodeEnvelopeData(t, first, &firstPage)
+	if len(firstPage.Items) != 1 || firstPage.Items[0].Capability.ID != "cap_fake_valid" || firstPage.NextCursor == nil {
+		t.Fatalf("first page = %#v", firstPage)
+	}
+
+	second := doFakeCatalogEnvelope(t, server, http.MethodGet, "/v1/catalog/capabilities?limit=1&cursor="+*firstPage.NextCursor, nil, http.StatusOK)
+	var secondPage struct {
+		Items      []contracts.CatalogCapabilityRecord `json:"items"`
+		NextCursor *string                             `json:"next_cursor"`
+	}
+	decodeEnvelopeData(t, second, &secondPage)
+	if len(secondPage.Items) != 1 || secondPage.Items[0].Capability.ID != "cap_fake_unavailable" || secondPage.NextCursor != nil {
+		t.Fatalf("second page = %#v", secondPage)
+	}
+
+	invalid := doFakeCatalogEnvelope(t, server, http.MethodGet, "/v1/catalog/capabilities?cursor=cursor_fake_catalog_services_000001", nil, http.StatusBadRequest)
+	if invalid.Error.Code != "invalid_cursor" {
+		t.Fatalf("invalid cursor error = %#v", invalid.Error)
 	}
 }
 
