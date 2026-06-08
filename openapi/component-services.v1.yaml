@@ -469,7 +469,7 @@ paths:
         - $ref: "#/components/parameters/Limit"
       responses:
         "200":
-          $ref: "#/components/responses/Success"
+          $ref: "#/components/responses/ResourceListResponse"
         default:
           $ref: "#/components/responses/Error"
     post:
@@ -485,7 +485,7 @@ paths:
               $ref: "#/components/schemas/RegisterResourceRequest"
       responses:
         "201":
-          $ref: "#/components/responses/Success"
+          $ref: "#/components/responses/ResourceResponse"
         default:
           $ref: "#/components/responses/Error"
   /v1/resources/{resource_id}:
@@ -498,7 +498,7 @@ paths:
         - $ref: "#/components/parameters/ResourceID"
       responses:
         "200":
-          $ref: "#/components/responses/Success"
+          $ref: "#/components/responses/ResourceResponse"
         default:
           $ref: "#/components/responses/Error"
   /v1/resources/{resource_id}/inspection:
@@ -511,7 +511,7 @@ paths:
         - $ref: "#/components/parameters/ResourceID"
       responses:
         "200":
-          $ref: "#/components/responses/Success"
+          $ref: "#/components/responses/ResourceInspectionResponse"
         default:
           $ref: "#/components/responses/Error"
   /v1/lease-requests:
@@ -526,7 +526,7 @@ paths:
         - $ref: "#/components/parameters/Limit"
       responses:
         "200":
-          $ref: "#/components/responses/Success"
+          $ref: "#/components/responses/LeaseRequestListResponse"
         default:
           $ref: "#/components/responses/Error"
     post:
@@ -542,7 +542,7 @@ paths:
               $ref: "#/components/schemas/CreateLeaseRequest"
       responses:
         "201":
-          $ref: "#/components/responses/Success"
+          $ref: "#/components/responses/LeaseRequestResponse"
         default:
           $ref: "#/components/responses/Error"
   /v1/lease-requests/{request_id}:
@@ -555,7 +555,7 @@ paths:
         - $ref: "#/components/parameters/RequestID"
       responses:
         "200":
-          $ref: "#/components/responses/Success"
+          $ref: "#/components/responses/LeaseRequestResponse"
         default:
           $ref: "#/components/responses/Error"
   /v1/lease-requests/{request_id}/cancel:
@@ -574,7 +574,7 @@ paths:
               $ref: "#/components/schemas/CancelRequest"
       responses:
         "200":
-          $ref: "#/components/responses/Success"
+          $ref: "#/components/responses/LeaseRequestResponse"
         default:
           $ref: "#/components/responses/Error"
   /v1/leases/{lease_id}:
@@ -587,7 +587,7 @@ paths:
         - $ref: "#/components/parameters/LeaseID"
       responses:
         "200":
-          $ref: "#/components/responses/Success"
+          $ref: "#/components/responses/LeaseResponse"
         default:
           $ref: "#/components/responses/Error"
   /v1/leases/{lease_id}/heartbeat:
@@ -606,7 +606,7 @@ paths:
               $ref: "#/components/schemas/LeaseHeartbeatRequest"
       responses:
         "200":
-          $ref: "#/components/responses/Success"
+          $ref: "#/components/responses/LeaseResponse"
         default:
           $ref: "#/components/responses/Error"
   /v1/leases/{lease_id}/release:
@@ -627,7 +627,7 @@ paths:
               $ref: "#/components/schemas/LeaseReleaseRequest"
       responses:
         "200":
-          $ref: "#/components/responses/Success"
+          $ref: "#/components/responses/LeaseResponse"
         default:
           $ref: "#/components/responses/Error"
 
@@ -1529,6 +1529,72 @@ components:
                 properties:
                   data:
                     $ref: "#/components/schemas/JobLogList"
+    ResourceResponse:
+      description: Lease resource envelope.
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: "#/components/schemas/SuccessEnvelope"
+              - type: object
+                properties:
+                  data:
+                    $ref: "#/components/schemas/ResourceRecord"
+    ResourceListResponse:
+      description: Lease resource list envelope.
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: "#/components/schemas/SuccessEnvelope"
+              - type: object
+                properties:
+                  data:
+                    $ref: "#/components/schemas/ResourceList"
+    ResourceInspectionResponse:
+      description: Lease resource inspection envelope.
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: "#/components/schemas/SuccessEnvelope"
+              - type: object
+                properties:
+                  data:
+                    $ref: "#/components/schemas/ResourceInspection"
+    LeaseRequestResponse:
+      description: Lease request envelope.
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: "#/components/schemas/SuccessEnvelope"
+              - type: object
+                properties:
+                  data:
+                    $ref: "#/components/schemas/LeaseRequest"
+    LeaseRequestListResponse:
+      description: Lease request list envelope.
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: "#/components/schemas/SuccessEnvelope"
+              - type: object
+                properties:
+                  data:
+                    $ref: "#/components/schemas/LeaseRequestList"
+    LeaseResponse:
+      description: Lease envelope.
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: "#/components/schemas/SuccessEnvelope"
+              - type: object
+                properties:
+                  data:
+                    $ref: "#/components/schemas/Lease"
     Success:
       description: Success envelope.
       content:
@@ -2145,6 +2211,39 @@ components:
     ResourceStatus:
       type: string
       enum: [available, unavailable]
+    ResourceRecord:
+      type: object
+      required: [resource_id, selector, status]
+      properties:
+        resource_id:
+          type: string
+        selector:
+          type: string
+        display_name:
+          type: string
+        status:
+          $ref: "#/components/schemas/ResourceStatus"
+        node_id:
+          type: string
+        tags:
+          type: array
+          items:
+            type: string
+        metadata:
+          $ref: "#/components/schemas/AnyMap"
+        links:
+          $ref: "#/components/schemas/Links"
+    ResourceList:
+      type: object
+      required: [items, next_cursor]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/ResourceRecord"
+        next_cursor:
+          type: string
+          nullable: true
     RegisterResourceRequest:
       type: object
       required: [selector]
@@ -2165,6 +2264,105 @@ components:
             type: string
         metadata:
           $ref: "#/components/schemas/AnyMap"
+    LeaseRequestState:
+      type: string
+      enum: [pending, granted, canceled, expired]
+    LeaseRequest:
+      type: object
+      required:
+        - request_id
+        - state
+        - resource_selector
+        - queue_position
+        - lease
+        - created_at
+        - updated_at
+        - links
+      properties:
+        request_id:
+          type: string
+        state:
+          $ref: "#/components/schemas/LeaseRequestState"
+        requester_id:
+          type: string
+        resource_selector:
+          type: string
+        queue_position:
+          type: integer
+          nullable: true
+        lease:
+          nullable: true
+          allOf:
+            - $ref: "#/components/schemas/Lease"
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+        links:
+          $ref: "#/components/schemas/Links"
+    LeaseRequestList:
+      type: object
+      required: [items, next_cursor]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/LeaseRequest"
+        next_cursor:
+          type: string
+          nullable: true
+    Lease:
+      type: object
+      required: [lease_id, resource_id, holder_id, expires_at, links]
+      properties:
+        lease_id:
+          type: string
+        resource_id:
+          type: string
+        holder_id:
+          type: string
+        expires_at:
+          type: string
+          format: date-time
+        released_at:
+          type: string
+          format: date-time
+        released_by:
+          type: string
+        release_reason:
+          type: string
+        links:
+          $ref: "#/components/schemas/Links"
+    ResourceInspection:
+      type: object
+      required: [resource, active_lease, queue_length, queue]
+      properties:
+        resource:
+          $ref: "#/components/schemas/ResourceRecord"
+        active_lease:
+          nullable: true
+          allOf:
+            - $ref: "#/components/schemas/Lease"
+        queue_length:
+          type: integer
+        queue:
+          type: array
+          items:
+            $ref: "#/components/schemas/LeaseQueueRecord"
+    LeaseQueueRecord:
+      type: object
+      required: [request_id, priority, queue_position]
+      properties:
+        request_id:
+          type: string
+        requester_id:
+          type: string
+        priority:
+          type: integer
+        queue_position:
+          type: integer
     CreateLeaseRequest:
       type: object
       required: [requester_id, resource_selector]
