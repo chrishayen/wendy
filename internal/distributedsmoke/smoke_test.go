@@ -22,6 +22,7 @@ func TestRunDistributedSmokePassesPrimaryPlusNodeFlow(t *testing.T) {
 		"runner.run_once",
 		"jobs.succeeded",
 		"artifacts.registered",
+		"artifacts.metadata",
 		"gateway.job_projection",
 		"gateway.artifact_list",
 		"gateway.artifact_content",

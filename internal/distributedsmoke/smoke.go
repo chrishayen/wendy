@@ -231,6 +231,7 @@ func Run(ctx context.Context) DistributedSmokeReport {
 	report.ArtifactID = job.ArtifactRefs[0]
 	report.add(DistributedSmokeCheck{Name: "artifacts.registered", OK: true})
 
+	checkArtifactMetadata(ctx, client, artifactsHTTP.URL, report.ArtifactID, jobID, agentID, capability, &report)
 	checkGatewayProjection(ctx, client, gatewayHTTP.URL, agentToken, jobID, &report)
 	checkGatewayArtifactList(ctx, client, gatewayHTTP.URL, agentToken, jobID, report.ArtifactID, &report)
 	checkGatewayArtifactContent(ctx, client, gatewayHTTP.URL, agentToken, report.ArtifactID, &report)
@@ -257,6 +258,40 @@ func checkLeaseReleaseAudit(store *leases.Store, runnerID, jobID string, report 
 		return
 	}
 	report.add(DistributedSmokeCheck{Name: "leases.release_audit", OK: true})
+}
+
+func checkArtifactMetadata(ctx context.Context, client *http.Client, artifactsURL, artifactID, jobID, ownerSubjectID, capabilityID string, report *DistributedSmokeReport) {
+	var envelope rawSuccessEnvelope
+	status, err := requestJSON(ctx, client, http.MethodGet, joinURLPath(artifactsURL, "/v1/artifacts/"+url.PathEscape(artifactID)), nil, nil, &envelope)
+	check := DistributedSmokeCheck{Name: "artifacts.metadata", HTTPStatus: status}
+	if err != nil {
+		check.Error = err.Error()
+		report.add(check)
+		return
+	}
+	if status != http.StatusOK || !envelope.OK {
+		check.Error = fmt.Sprintf("HTTP %d ok=%t", status, envelope.OK)
+		report.add(check)
+		return
+	}
+	var artifact contracts.Artifact
+	if err := json.Unmarshal(envelope.Data, &artifact); err != nil {
+		check.Error = "decode artifact: " + err.Error()
+		report.add(check)
+		return
+	}
+	if artifact.ArtifactID != artifactID || artifact.ProducerRef != jobID || artifact.OwnerSubjectID != ownerSubjectID {
+		check.Error = fmt.Sprintf("artifact_id=%q producer_ref=%q owner_subject_id=%q", artifact.ArtifactID, artifact.ProducerRef, artifact.OwnerSubjectID)
+		report.add(check)
+		return
+	}
+	if artifact.Metadata["capability_id"] != capabilityID {
+		check.Error = fmt.Sprintf("metadata=%#v", artifact.Metadata)
+		report.add(check)
+		return
+	}
+	check.OK = true
+	report.add(check)
 }
 
 func distributedProviderManifest(serviceID, capabilityID, endpoint string) contracts.ProviderManifest {
