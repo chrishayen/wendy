@@ -418,6 +418,309 @@ components:
 	}
 }
 
+func TestValidateFileDetectsMissingPathVersion(t *testing.T) {
+	path := writeContract(t, `
+openapi: 3.1.0
+info:
+  title: Missing path version
+  version: v1
+paths:
+  /content:
+    get:
+      operationId: readContent
+      x-operation-audience: component
+      x-policy-action: artifact.read
+      responses:
+        "200":
+          $ref: "#/components/responses/Success"
+        default:
+          $ref: "#/components/responses/Error"
+components:
+  responses:
+    Success:
+      description: Success.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/SuccessEnvelope"
+    Error:
+      description: Error.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorEnvelope"
+  schemas:
+    Meta:
+      type: object
+      required: [request_id, schema_version]
+      properties:
+        request_id:
+          type: string
+        schema_version:
+          type: string
+    SuccessEnvelope:
+      type: object
+      required: [ok, data, links, meta]
+      properties:
+        meta:
+          $ref: "#/components/schemas/Meta"
+    ErrorEnvelope:
+      type: object
+      required: [ok, error, links, meta]
+      properties:
+        meta:
+          $ref: "#/components/schemas/Meta"
+`)
+	report := ValidateFile(path)
+	if !hasFinding(report, "path_version_missing") {
+		t.Fatalf("expected path version finding, got %#v", report.Findings)
+	}
+}
+
+func TestValidateFileDetectsMissingSchemaVersionMetadata(t *testing.T) {
+	path := writeContract(t, `
+openapi: 3.1.0
+info:
+  title: Missing schema version
+  version: v1
+paths:
+  /v1/content:
+    get:
+      operationId: readContent
+      x-operation-audience: component
+      x-policy-action: artifact.read
+      responses:
+        "200":
+          $ref: "#/components/responses/Success"
+        default:
+          $ref: "#/components/responses/Error"
+components:
+  responses:
+    Success:
+      description: Success.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/SuccessEnvelope"
+    Error:
+      description: Error.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorEnvelope"
+  schemas:
+    Meta:
+      type: object
+      required: [request_id]
+      properties:
+        request_id:
+          type: string
+    SuccessEnvelope:
+      type: object
+      required: [ok, data, links, meta]
+      properties:
+        meta:
+          $ref: "#/components/schemas/Meta"
+    ErrorEnvelope:
+      type: object
+      required: [ok, error, links, meta]
+      properties:
+        meta:
+          $ref: "#/components/schemas/Meta"
+`)
+	report := ValidateFile(path)
+	if !hasFinding(report, "schema_version_missing") {
+		t.Fatalf("expected schema version finding, got %#v", report.Findings)
+	}
+	if !hasFinding(report, "schema_version_property_missing") {
+		t.Fatalf("expected schema version property finding, got %#v", report.Findings)
+	}
+}
+
+func TestValidateFileDetectsEnvelopeWithoutStandardMeta(t *testing.T) {
+	path := writeContract(t, `
+openapi: 3.1.0
+info:
+  title: Missing envelope meta
+  version: v1
+paths:
+  /v1/content:
+    get:
+      operationId: readContent
+      x-operation-audience: component
+      x-policy-action: artifact.read
+      responses:
+        "200":
+          $ref: "#/components/responses/Success"
+        default:
+          $ref: "#/components/responses/Error"
+components:
+  responses:
+    Success:
+      description: Success.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/SuccessEnvelope"
+    Error:
+      description: Error.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorEnvelope"
+  schemas:
+    Meta:
+      type: object
+      required: [request_id, schema_version]
+      properties:
+        request_id:
+          type: string
+        schema_version:
+          type: string
+    SuccessEnvelope:
+      type: object
+      required: [ok, data, links]
+      properties:
+        data:
+          type: object
+    ErrorEnvelope:
+      type: object
+      required: [ok, error, links, meta]
+      properties:
+        meta:
+          type: object
+`)
+	report := ValidateFile(path)
+	if !hasFinding(report, "envelope_meta_missing") {
+		t.Fatalf("expected missing envelope meta finding, got %#v", report.Findings)
+	}
+	if !hasFinding(report, "envelope_meta_not_standard") {
+		t.Fatalf("expected non-standard envelope meta finding, got %#v", report.Findings)
+	}
+}
+
+func TestValidateFileDetectsClosedAdditionalProperties(t *testing.T) {
+	path := writeContract(t, `
+openapi: 3.1.0
+info:
+  title: Closed schema
+  version: v1
+paths:
+  /v1/content:
+    get:
+      operationId: readContent
+      x-operation-audience: component
+      x-policy-action: artifact.read
+      responses:
+        "200":
+          $ref: "#/components/responses/Success"
+        default:
+          $ref: "#/components/responses/Error"
+components:
+  responses:
+    Success:
+      description: Success.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/SuccessEnvelope"
+    Error:
+      description: Error.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorEnvelope"
+  schemas:
+    Meta:
+      type: object
+      required: [request_id, schema_version]
+      properties:
+        request_id:
+          type: string
+        schema_version:
+          type: string
+    SuccessEnvelope:
+      type: object
+      required: [ok, data, links, meta]
+      properties:
+        meta:
+          $ref: "#/components/schemas/Meta"
+    ErrorEnvelope:
+      type: object
+      required: [ok, error, links, meta]
+      properties:
+        meta:
+          $ref: "#/components/schemas/Meta"
+    ClosedObject:
+      type: object
+      additionalProperties: false
+`)
+	report := ValidateFile(path)
+	if !hasFinding(report, "additional_properties_closed") {
+		t.Fatalf("expected closed schema finding, got %#v", report.Findings)
+	}
+}
+
+func TestValidateFileDetectsDeprecatedEntryWithoutCompatibilityWindow(t *testing.T) {
+	path := writeContract(t, `
+openapi: 3.1.0
+info:
+  title: Deprecated operation
+  version: v1
+paths:
+  /v1/content:
+    get:
+      operationId: readContent
+      deprecated: true
+      x-operation-audience: component
+      x-policy-action: artifact.read
+      responses:
+        "200":
+          $ref: "#/components/responses/Success"
+        default:
+          $ref: "#/components/responses/Error"
+components:
+  responses:
+    Success:
+      description: Success.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/SuccessEnvelope"
+    Error:
+      description: Error.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorEnvelope"
+  schemas:
+    Meta:
+      type: object
+      required: [request_id, schema_version]
+      properties:
+        request_id:
+          type: string
+        schema_version:
+          type: string
+    SuccessEnvelope:
+      type: object
+      required: [ok, data, links, meta]
+      properties:
+        meta:
+          $ref: "#/components/schemas/Meta"
+    ErrorEnvelope:
+      type: object
+      required: [ok, error, links, meta]
+      properties:
+        meta:
+          $ref: "#/components/schemas/Meta"
+`)
+	report := ValidateFile(path)
+	if !hasFinding(report, "deprecated_without_window") {
+		t.Fatalf("expected deprecation window finding, got %#v", report.Findings)
+	}
+}
+
 func TestValidateFileAllowsBinarySuccessResponse(t *testing.T) {
 	path := writeContract(t, `
 openapi: 3.1.0
@@ -425,7 +728,7 @@ info:
   title: Binary
   version: v1
 paths:
-  /content:
+  /v1/content:
     get:
       operationId: readContent
       x-operation-audience: component
@@ -449,8 +752,20 @@ components:
           schema:
             $ref: "#/components/schemas/ErrorEnvelope"
   schemas:
+    Meta:
+      type: object
+      required: [request_id, schema_version]
+      properties:
+        request_id:
+          type: string
+        schema_version:
+          type: string
     ErrorEnvelope:
       type: object
+      required: [ok, error, links, meta]
+      properties:
+        meta:
+          $ref: "#/components/schemas/Meta"
 `)
 	report := ValidateFile(path)
 	if !report.Passed() {

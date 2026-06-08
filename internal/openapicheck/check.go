@@ -90,6 +90,7 @@ func ValidateFile(path string) FileReport {
 	report.References = validateReferences(&report, doc)
 	validateSecurityRequirements(&report, doc, paths, components)
 	validateOperations(&report, doc, paths)
+	validateCompatibilityPolicy(&report, doc, paths, components)
 	return report
 }
 
@@ -217,6 +218,99 @@ func validateOperations(report *FileReport, doc map[string]any, paths map[string
 			}
 		}
 	}
+}
+
+func validateCompatibilityPolicy(report *FileReport, doc map[string]any, paths, components map[string]any) {
+	validatePathVersioning(report, paths)
+	validateEnvelopeCompatibility(report, components)
+	validateAdditiveCompatibility(report, components)
+	validateDeprecationWindows(report, doc)
+}
+
+func validatePathVersioning(report *FileReport, paths map[string]any) {
+	for pathName := range paths {
+		if pathName != "/v1" && !strings.HasPrefix(pathName, "/v1/") {
+			report.add("path_version_missing", "/paths/"+escapePointer(pathName), "public API paths must use /v1 path versioning")
+		}
+	}
+}
+
+func validateEnvelopeCompatibility(report *FileReport, components map[string]any) {
+	schemas, ok := asMap(components["schemas"])
+	if !ok {
+		return
+	}
+	meta, ok := asMap(schemas["Meta"])
+	if !ok {
+		report.add("meta_schema_missing", "/components/schemas/Meta", "Meta schema is required so responses can declare schema_version")
+		return
+	}
+	if !requiredContains(meta, "schema_version") {
+		report.add("schema_version_missing", "/components/schemas/Meta/required", "Meta schema must require schema_version")
+	}
+	metaProperties, _ := asMap(meta["properties"])
+	schemaVersion, ok := asMap(metaProperties["schema_version"])
+	if !ok {
+		report.add("schema_version_property_missing", "/components/schemas/Meta/properties/schema_version", "Meta schema must define schema_version")
+	} else if schemaType, _ := schemaVersion["type"].(string); schemaType != "" && schemaType != "string" {
+		report.add("schema_version_type_invalid", "/components/schemas/Meta/properties/schema_version/type", "schema_version must be documented as a string")
+	}
+
+	for schemaName, schemaValue := range schemas {
+		if !strings.HasSuffix(schemaName, "Envelope") {
+			continue
+		}
+		schema, ok := asMap(schemaValue)
+		if !ok {
+			continue
+		}
+		location := "/components/schemas/" + escapePointer(schemaName)
+		if !requiredContains(schema, "meta") {
+			report.add("envelope_meta_missing", location+"/required", "response envelope schemas must require meta")
+		}
+		properties, _ := asMap(schema["properties"])
+		metaProperty, ok := asMap(properties["meta"])
+		if !ok {
+			report.add("envelope_meta_property_missing", location+"/properties/meta", "response envelope schemas must define meta")
+			continue
+		}
+		if ref, _ := metaProperty["$ref"].(string); ref != "#/components/schemas/Meta" {
+			report.add("envelope_meta_not_standard", location+"/properties/meta", "response envelope meta must reference the shared Meta schema")
+		}
+	}
+}
+
+func validateAdditiveCompatibility(report *FileReport, components map[string]any) {
+	schemas, ok := asMap(components["schemas"])
+	if !ok {
+		return
+	}
+	walk(schemas, "/components/schemas", func(location string, value any) {
+		node, ok := asMap(value)
+		if !ok {
+			return
+		}
+		if additionalProperties, ok := node["additionalProperties"].(bool); ok && !additionalProperties {
+			report.add("additional_properties_closed", location+"/additionalProperties", "public schemas must not forbid unknown fields; additive fields are backward compatible")
+		}
+	})
+}
+
+func validateDeprecationWindows(report *FileReport, doc map[string]any) {
+	walk(doc, "", func(location string, value any) {
+		node, ok := asMap(value)
+		if !ok {
+			return
+		}
+		deprecated, ok := node["deprecated"].(bool)
+		if !ok || !deprecated {
+			return
+		}
+		window, _ := node["x-compatibility-window"].(string)
+		if strings.TrimSpace(window) == "" {
+			report.add("deprecated_without_window", location+"/deprecated", "deprecated public contract entries must document x-compatibility-window")
+		}
+	})
 }
 
 func validateOperationMetadata(report *FileReport, location string, operation map[string]any) {
@@ -393,6 +487,33 @@ func schemaRefName(ref string) string {
 		return ""
 	}
 	return strings.TrimPrefix(ref, "#/components/schemas/")
+}
+
+func requiredContains(schema map[string]any, field string) bool {
+	for _, required := range stringList(schema["required"]) {
+		if required == field {
+			return true
+		}
+	}
+	return false
+}
+
+func stringList(value any) []string {
+	switch typed := value.(type) {
+	case []string:
+		return append([]string(nil), typed...)
+	case []any:
+		out := make([]string, 0, len(typed))
+		for _, item := range typed {
+			text, ok := item.(string)
+			if ok {
+				out = append(out, text)
+			}
+		}
+		return out
+	default:
+		return nil
+	}
 }
 
 func resolveRef(doc any, ref string) (any, bool) {
