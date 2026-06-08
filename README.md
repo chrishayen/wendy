@@ -43,6 +43,7 @@ Contract simulation data is kept as test input, not as product behavior.
 - `cmd/pacp-policy`: runnable access policy and secrets service.
 - `cmd/pacp-node`: runnable runtime node agent for one configured service node.
 - `cmd/pacp-runner`: runnable composition runner.
+- `cmd/pacp-control`: JSON-first CLI for agent-facing gateway operations.
 - `testdata/contract-sim`: accepted role-play fixtures copied from the vault.
 - `testdata/manifests`: sample provider manifests used by tests and examples.
 
@@ -65,14 +66,16 @@ go run ./cmd/pacp-runner -once -worker-id runner_local -jobs-url http://localhos
 The fixture server can also serve individual contract-simulation fixture
 owners when a test needs a fixed fake dependency.
 
-The catalog can then be queried:
+The catalog and gateway can then be queried:
 
 ```sh
 curl http://localhost:18081/v1/catalog/capabilities
 curl http://localhost:18081/v1/catalog/capabilities/cap_image_generate_gpu/route
+curl -X POST http://localhost:18085/v1/auth/api-keys -H 'Content-Type: application/json' -d '{"subject_id":"sub_agent_local","scopes":["agent"],"token":"token_agent"}'
+go run ./cmd/pacp-control -gateway-url http://localhost:18086 -token token_agent tools
 ```
 
-This is not the full control plane yet. It is the first implementation-facing
-in-memory service stack with public HTTP boundaries, a provider SDK, and a
-composition runner. Durable storage, production node adapters, provider-specific
+This is not the full control plane yet. It is an in-memory service stack with
+public HTTP boundaries, a provider SDK, a composition runner, and a gateway
+control CLI. Durable storage, production node adapters, provider-specific
 wrappers, and hardening remain.

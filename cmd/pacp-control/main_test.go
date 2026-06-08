@@ -1,0 +1,124 @@
+package main
+
+import (
+	"bytes"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+)
+
+func TestToolsSendsBearerTokenAndPrintsEnvelope(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/v1/tools" {
+			t.Fatalf("request = %s %s", r.Method, r.URL.Path)
+		}
+		if got := r.Header.Get("Authorization"); got != "Bearer token_agent" {
+			t.Fatalf("Authorization = %q", got)
+		}
+		writeTestJSON(t, w, http.StatusOK, map[string]any{
+			"ok":   true,
+			"data": map[string]any{"items": []any{}},
+		})
+	}))
+	defer server.Close()
+
+	var stdout, stderr bytes.Buffer
+	code := run([]string{"-gateway-url", server.URL, "-token", "token_agent", "tools"}, &stdout, &stderr, server.Client())
+	if code != 0 {
+		t.Fatalf("code=%d stderr=%s", code, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), `"ok": true`) {
+		t.Fatalf("stdout = %s", stdout.String())
+	}
+}
+
+func TestInvokePostsInputAndIdempotencyKey(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/v1/tools/cap_echo/invoke" {
+			t.Fatalf("request = %s %s", r.Method, r.URL.Path)
+		}
+		if got := r.Header.Get("Authorization"); got != "Bearer token_agent" {
+			t.Fatalf("Authorization = %q", got)
+		}
+		if got := r.Header.Get("Idempotency-Key"); got != "invoke-1" {
+			t.Fatalf("Idempotency-Key = %q", got)
+		}
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		input := body["input"].(map[string]any)
+		if input["message"] != "hello" || body["preferred_mode"] != "sync" {
+			t.Fatalf("body = %#v", body)
+		}
+		writeTestJSON(t, w, http.StatusCreated, map[string]any{
+			"ok":   true,
+			"data": map[string]any{"mode": "sync", "output": map[string]any{"message": "hello"}},
+		})
+	}))
+	defer server.Close()
+
+	var stdout, stderr bytes.Buffer
+	code := run([]string{
+		"-gateway-url", server.URL,
+		"-token", "Bearer token_agent",
+		"invoke", "cap_echo",
+		"-idempotency-key", "invoke-1",
+		"-input", `{"message":"hello"}`,
+		"-mode", "sync",
+	}, &stdout, &stderr, server.Client())
+	if code != 0 {
+		t.Fatalf("code=%d stderr=%s", code, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), `"mode": "sync"`) {
+		t.Fatalf("stdout = %s", stdout.String())
+	}
+}
+
+func TestInvokeRequiresIdempotencyKey(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := run([]string{
+		"-gateway-url", "http://gateway.invalid",
+		"-token", "token_agent",
+		"invoke", "cap_echo",
+		"-input", `{"message":"hello"}`,
+	}, &stdout, &stderr, http.DefaultClient)
+	if code != 2 {
+		t.Fatalf("code=%d stderr=%s", code, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "idempotency-key is required") {
+		t.Fatalf("stderr = %s", stderr.String())
+	}
+}
+
+func TestArtifactContentStreamsBody(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/v1/artifacts/art_1/content" {
+			t.Fatalf("request = %s %s", r.Method, r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "text/plain")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("artifact bytes"))
+	}))
+	defer server.Close()
+
+	var stdout, stderr bytes.Buffer
+	code := run([]string{"-gateway-url", server.URL, "-token", "token_agent", "artifact-content", "art_1"}, &stdout, &stderr, server.Client())
+	if code != 0 {
+		t.Fatalf("code=%d stderr=%s", code, stderr.String())
+	}
+	if stdout.String() != "artifact bytes" {
+		t.Fatalf("stdout = %q", stdout.String())
+	}
+}
+
+func writeTestJSON(t *testing.T, w http.ResponseWriter, status int, body any) {
+	t.Helper()
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	if err := json.NewEncoder(w).Encode(body); err != nil {
+		t.Fatalf("encode response: %v", err)
+	}
+}
