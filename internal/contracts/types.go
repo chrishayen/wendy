@@ -47,6 +47,7 @@ type HTTPRequest struct {
 	Path        string            `json:"path"`
 	Headers     map[string]string `json:"headers,omitempty"`
 	Query       map[string]any    `json:"query,omitempty"`
+	WireQuery   string            `json:"wire_query,omitempty"`
 	Body        any               `json:"body,omitempty"`
 	BodyFixture string            `json:"body_fixture,omitempty"`
 	BodyBase64  string            `json:"body_base64,omitempty"`

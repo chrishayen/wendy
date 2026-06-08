@@ -149,7 +149,14 @@ func loadCatalogFixturePackage(t *testing.T) testkit.FixturePackage {
 
 func requestFromFixture(t *testing.T, fixture contracts.Fixture) *http.Request {
 	t.Helper()
-	req := httptest.NewRequest(fixture.Request.Method, fixture.Request.Path, nil)
+	path := fixture.Request.Path
+	if fixture.Request.WireQuery != "" {
+		path += "?" + fixture.Request.WireQuery
+	}
+	req := httptest.NewRequest(fixture.Request.Method, path, nil)
+	if fixture.Request.WireQuery != "" {
+		return req
+	}
 	query := url.Values{}
 	for key, value := range fixture.Request.Query {
 		switch typed := value.(type) {

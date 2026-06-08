@@ -148,7 +148,11 @@ func (s *FixtureServer) writeFixtureResponse(w http.ResponseWriter, response con
 }
 
 func (s *FixtureServer) requestMatches(r *http.Request, body []byte, fixture contracts.HTTPRequest) bool {
-	if !queryMatches(r.URL.Query(), fixture.Query) {
+	if fixture.WireQuery != "" {
+		if r.URL.RawQuery != fixture.WireQuery {
+			return false
+		}
+	} else if !queryMatches(r.URL.Query(), fixture.Query) {
 		return false
 	}
 	for name, value := range fixture.Headers {

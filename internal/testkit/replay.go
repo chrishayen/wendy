@@ -69,14 +69,18 @@ func requestFromFixture(pkg FixturePackage, fixture contracts.Fixture) (*http.Re
 		return nil, err
 	}
 	path := fixture.Request.Path
-	query := url.Values{}
-	for key, value := range fixture.Request.Query {
-		for _, item := range expectedQueryValues(value) {
-			query.Add(key, item)
+	if fixture.Request.WireQuery != "" {
+		path += "?" + fixture.Request.WireQuery
+	} else {
+		query := url.Values{}
+		for key, value := range fixture.Request.Query {
+			for _, item := range expectedQueryValues(value) {
+				query.Add(key, item)
+			}
 		}
-	}
-	if encoded := query.Encode(); encoded != "" {
-		path += "?" + encoded
+		if encoded := query.Encode(); encoded != "" {
+			path += "?" + encoded
+		}
 	}
 	req := httptest.NewRequest(fixture.Request.Method, path, bytes.NewReader(body))
 	for key, value := range fixture.Request.Headers {

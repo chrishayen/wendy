@@ -4,6 +4,8 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"net/url"
+	"sort"
 	"strings"
 )
 
@@ -86,6 +88,7 @@ func validateHTTPRequest(path, id string, req *HTTPRequest, report *Report) {
 	if req.Path == "" || !strings.HasPrefix(req.Path, "/") {
 		report.add(path, id, "invalid_http_path", "request path must be absolute")
 	}
+	validateWireQuery(path, id, req, report)
 	if req.BodyFixture != "" && req.BodyBase64 != "" {
 		report.add(path, id, "duplicate_request_body_source", "request must not include both body_fixture and body_base64")
 	}
@@ -93,6 +96,55 @@ func validateHTTPRequest(path, id string, req *HTTPRequest, report *Report) {
 		if _, err := base64.StdEncoding.DecodeString(req.BodyBase64); err != nil {
 			report.add(path, id, "request_body_base64_invalid", "request body_base64 must be valid standard base64")
 		}
+	}
+}
+
+func validateWireQuery(path, id string, req *HTTPRequest, report *Report) {
+	if req.WireQuery == "" {
+		return
+	}
+	parsed, err := url.ParseQuery(req.WireQuery)
+	if err != nil {
+		report.add(path, id, "invalid_wire_query", "wire_query must be a valid URL query string")
+		return
+	}
+	if len(req.Query) == 0 {
+		return
+	}
+	if len(parsed) != len(req.Query) {
+		report.add(path, id, "wire_query_mismatch", "wire_query keys must match query")
+		return
+	}
+	for key, value := range req.Query {
+		want := fixtureQueryValues(value)
+		got := append([]string(nil), parsed[key]...)
+		sort.Strings(want)
+		sort.Strings(got)
+		if len(want) != len(got) {
+			report.add(path, id, "wire_query_mismatch", fmt.Sprintf("wire_query values for %s must match query", key))
+			return
+		}
+		for i := range want {
+			if want[i] != got[i] {
+				report.add(path, id, "wire_query_mismatch", fmt.Sprintf("wire_query values for %s must match query", key))
+				return
+			}
+		}
+	}
+}
+
+func fixtureQueryValues(value any) []string {
+	switch typed := value.(type) {
+	case []any:
+		values := make([]string, 0, len(typed))
+		for _, item := range typed {
+			values = append(values, fmt.Sprint(item))
+		}
+		return values
+	case []string:
+		return append([]string(nil), typed...)
+	default:
+		return []string{fmt.Sprint(value)}
 	}
 }
 

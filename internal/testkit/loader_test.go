@@ -57,6 +57,32 @@ func TestGatewayFixtureServerServesPublicTools(t *testing.T) {
 	}
 }
 
+func TestFixtureServerMatchesWireQuery(t *testing.T) {
+	scenario := loadS003(t)
+	pkg, ok := FindPackage(scenario, "c03-service-catalog")
+	if !ok {
+		t.Fatalf("catalog package not found")
+	}
+	server := NewFixtureServer(pkg)
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/catalog/capabilities?visible_capability_ids=cap_other&visible_capability_ids=cap_image_generate_gpu", nil)
+	rec := httptest.NewRecorder()
+	server.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+	if requestID(decodeMap(t, rec.Body)) != "req_s003_catalog_visible_repeated" {
+		t.Fatalf("unexpected body=%s", rec.Body.String())
+	}
+
+	reordered := httptest.NewRequest(http.MethodGet, "/v1/catalog/capabilities?visible_capability_ids=cap_image_generate_gpu&visible_capability_ids=cap_other", nil)
+	reorderedRec := httptest.NewRecorder()
+	server.ServeHTTP(reorderedRec, reordered)
+	if reorderedRec.Code != http.StatusNotFound {
+		t.Fatalf("reordered status = %d, want 404; body=%s", reorderedRec.Code, reorderedRec.Body.String())
+	}
+}
+
 func TestFixtureServerMatchesHeadersAndBody(t *testing.T) {
 	scenario := loadS003(t)
 	pkg, ok := FindPackage(scenario, "c05-async-job-service")
@@ -231,6 +257,24 @@ func TestValidateScenarioReportsInvalidBinaryFixture(t *testing.T) {
 
 	report := ValidateScenario(scenario)
 	if report.Passed() || !hasFinding(report, "manifest_binary_fixture_invalid_base64") || !hasFinding(report, "response_body_fixture_invalid_base64") {
+		t.Fatalf("report = %#v", report)
+	}
+}
+
+func TestValidateScenarioReportsWireQueryMismatch(t *testing.T) {
+	_, report := contracts.ValidateFixtureFile("provider/fixtures.json", []byte(`{
+  "scenario_id": "S999",
+  "component": "provider",
+  "fixtures": [
+    {
+      "id": "query_mismatch",
+      "request": {"method": "GET", "path": "/v1/items", "query": {"tag": ["a", "b"]}, "wire_query": "tag=a&tag=c"},
+      "response": {"status": 200, "body": {"ok": true, "data": {}, "links": {}, "meta": {"request_id": "req_query", "schema_version": "v1"}}}
+    }
+  ]
+}`))
+
+	if report.Passed() || !hasFinding(report, "wire_query_mismatch") {
 		t.Fatalf("report = %#v", report)
 	}
 }
