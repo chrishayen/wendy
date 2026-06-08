@@ -47,6 +47,7 @@ type devConfig struct {
 	WorkerToken    string
 	WorkerID       string
 	PollInterval   time.Duration
+	LeasePoll      time.Duration
 	DisableRunner  bool
 }
 
@@ -74,6 +75,7 @@ func main() {
 	flag.StringVar(&cfg.WorkerToken, "worker-token", "token_worker", "local worker token")
 	flag.StringVar(&cfg.WorkerID, "worker-id", "runner_dev", "local runner worker id")
 	flag.DurationVar(&cfg.PollInterval, "poll", time.Second, "runner poll interval")
+	flag.DurationVar(&cfg.LeasePoll, "lease-poll", time.Second, "runner poll interval while waiting for pending resource leases")
 	flag.BoolVar(&cfg.DisableRunner, "disable-runner", false, "start services without the local runner")
 	flag.Parse()
 
@@ -148,6 +150,7 @@ func runDevStack(ctx context.Context, cfg devConfig) error {
 			LeasesURL:           leasesURL,
 			ArtifactsURL:        artifactsURL,
 			PolicyURL:           policyURL,
+			LeasePollInterval:   cfg.LeasePoll,
 			ComponentCredential: authorizationHeader(cfg.WorkerToken),
 			PolicyCredential:    authorizationHeader(cfg.ComponentToken),
 			WorkerSubjectID:     "sub_runner_local",

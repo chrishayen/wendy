@@ -31,6 +31,7 @@ func main() {
 	monitorToken := flag.String("monitor-token", os.Getenv("PACP_RUNNER_MONITOR_TOKEN"), "optional bearer token required for runner health and metrics")
 	nodeStartTimeout := flag.Duration("node-start-timeout", 30*time.Second, "maximum time to wait for node-managed service startup")
 	nodeStartPoll := flag.Duration("node-start-poll", 500*time.Millisecond, "poll interval while waiting for node-managed service startup")
+	leasePoll := flag.Duration("lease-poll", time.Second, "poll interval while waiting for pending resource leases")
 	once := flag.Bool("once", false, "process at most one queued job and exit")
 	poll := flag.Duration("poll", time.Second, "poll interval")
 	flag.Parse()
@@ -52,6 +53,7 @@ func main() {
 		NodeURLs:            nodeURLs,
 		NodeStartTimeout:    *nodeStartTimeout,
 		NodePollInterval:    *nodeStartPoll,
+		LeasePollInterval:   *leasePoll,
 		ComponentCredential: authorizationHeader(*credential),
 		PolicyCredential:    authorizationHeader(*policyCredential),
 		WorkerSubjectID:     *workerSubjectID,

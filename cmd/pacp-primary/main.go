@@ -51,6 +51,7 @@ type primaryConfig struct {
 	NodeStartTimeout       time.Duration
 	NodeStartPoll          time.Duration
 	PollInterval           time.Duration
+	LeasePoll              time.Duration
 	DisableRunner          bool
 	RouteAwareAuth         bool
 	ready                  chan primaryEndpoints
@@ -104,6 +105,7 @@ func main() {
 	flag.DurationVar(&cfg.NodeStartTimeout, "node-start-timeout", 30*time.Second, "maximum time to wait for node-managed service startup")
 	flag.DurationVar(&cfg.NodeStartPoll, "node-start-poll", 500*time.Millisecond, "poll interval while waiting for node-managed service startup")
 	flag.DurationVar(&cfg.PollInterval, "poll", time.Second, "runner poll interval")
+	flag.DurationVar(&cfg.LeasePoll, "lease-poll", time.Second, "runner poll interval while waiting for pending resource leases")
 	flag.BoolVar(&cfg.DisableRunner, "disable-runner", false, "start primary services without the local runner")
 	flag.BoolVar(&cfg.RouteAwareAuth, "route-aware-component-auth", false, "use co-hosted policy service for route-aware component API auth")
 	flag.Parse()
@@ -168,6 +170,7 @@ func runPrimaryStack(ctx context.Context, cfg primaryConfig) error {
 			NodeURLs:            nodeURLs,
 			NodeStartTimeout:    cfg.NodeStartTimeout,
 			NodePollInterval:    cfg.NodeStartPoll,
+			LeasePollInterval:   cfg.LeasePoll,
 			ComponentCredential: authorizationHeader(cfg.RunnerCredential),
 			PolicyCredential:    authorizationHeader(cfg.RunnerPolicyCredential),
 			WorkerSubjectID:     cfg.RunnerSubjectID,
