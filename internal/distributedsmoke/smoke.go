@@ -234,11 +234,16 @@ func Run(ctx context.Context) DistributedSmokeReport {
 	}, &report)
 	checkGatewayDependencyHealth(ctx, client, gatewayHTTP.URL, &report)
 
-	jobID := invokeDistributedTool(ctx, client, gatewayHTTP.URL, agentToken, capability, &report)
+	jobID := invokeDistributedTool(ctx, client, gatewayHTTP.URL, agentToken, capability, "distributed-smoke-invoke", "gateway.invoke", &report)
 	if jobID == "" {
 		return report
 	}
 	report.JobID = jobID
+	cancelJobID := invokeDistributedTool(ctx, client, gatewayHTTP.URL, agentToken, capability, "distributed-smoke-cancel-invoke", "gateway.cancel.invoke", &report)
+	if cancelJobID == "" {
+		return report
+	}
+	checkGatewayQueuedCancellation(ctx, client, gatewayHTTP.URL, jobsHTTP.URL, agentToken, componentToken, cancelJobID, &report)
 
 	r := runner.New(runner.Config{
 		WorkerID:            "runner_distributed_smoke",
@@ -557,14 +562,14 @@ func distributedProviderManifest(serviceID, capabilityID, endpoint string) contr
 	}
 }
 
-func invokeDistributedTool(ctx context.Context, client *http.Client, gatewayURL, agentToken, capabilityID string, report *DistributedSmokeReport) string {
+func invokeDistributedTool(ctx context.Context, client *http.Client, gatewayURL, agentToken, capabilityID, idempotencyKey, checkName string, report *DistributedSmokeReport) string {
 	body := contracts.InvokeToolRequest{Input: map[string]any{"prompt": "distributed smoke"}}
 	var envelope rawSuccessEnvelope
 	status, err := requestJSON(ctx, client, http.MethodPost, joinURLPath(gatewayURL, "/v1/tools/"+url.PathEscape(capabilityID)+"/invoke"), body, map[string]string{
 		"Authorization":   "Bearer " + agentToken,
-		"Idempotency-Key": "distributed-smoke-invoke",
+		"Idempotency-Key": idempotencyKey,
 	}, &envelope)
-	check := DistributedSmokeCheck{Name: "gateway.invoke", HTTPStatus: status}
+	check := DistributedSmokeCheck{Name: checkName, HTTPStatus: status}
 	if err != nil {
 		check.Error = err.Error()
 		report.add(check)
@@ -589,6 +594,55 @@ func invokeDistributedTool(ctx context.Context, client *http.Client, gatewayURL,
 	check.OK = true
 	report.add(check)
 	return response.JobID
+}
+
+func checkGatewayQueuedCancellation(ctx context.Context, client *http.Client, gatewayURL, jobsURL, agentToken, componentToken, jobID string, report *DistributedSmokeReport) {
+	body := contracts.CancelRequest{Reason: "distributed smoke queued cancel"}
+	var envelope rawSuccessEnvelope
+	status, err := requestJSON(ctx, client, http.MethodPost, joinURLPath(gatewayURL, "/v1/agent/jobs/"+url.PathEscape(jobID)+"/cancel"), body, map[string]string{
+		"Authorization":   "Bearer " + agentToken,
+		"Idempotency-Key": "distributed-smoke-cancel",
+	}, &envelope)
+	check := DistributedSmokeCheck{Name: "gateway.cancel_queued", HTTPStatus: status}
+	if err != nil {
+		check.Error = err.Error()
+		report.add(check)
+		return
+	}
+	if status != http.StatusOK || !envelope.OK {
+		check.Error = fmt.Sprintf("HTTP %d ok=%t", status, envelope.OK)
+		report.add(check)
+		return
+	}
+	var projection contracts.AgentJob
+	if err := json.Unmarshal(envelope.Data, &projection); err != nil {
+		check.Error = "decode cancel projection: " + err.Error()
+		report.add(check)
+		return
+	}
+	if projection.JobID != jobID || projection.State != contracts.JobCanceled {
+		check.Error = fmt.Sprintf("job_id=%q state=%q", projection.JobID, projection.State)
+		report.add(check)
+		return
+	}
+	check.OK = true
+	report.add(check)
+
+	job := readDistributedJob(ctx, client, jobsURL, componentToken, jobID, report)
+	stateCheck := DistributedSmokeCheck{Name: "jobs.canceled_queued"}
+	if job.JobID == "" {
+		stateCheck.Error = "job read failed"
+		report.add(stateCheck)
+		return
+	}
+	if job.State != contracts.JobCanceled {
+		stateCheck.Error = "job state is " + string(job.State)
+		report.add(stateCheck)
+		return
+	}
+	stateCheck.OK = true
+	report.add(stateCheck)
+	checkGatewayJobProjectionState(ctx, client, gatewayURL, agentToken, jobID, contracts.JobCanceled, "gateway.canceled_projection", report)
 }
 
 func readDistributedJob(ctx context.Context, client *http.Client, jobsURL, componentToken, jobID string, report *DistributedSmokeReport) contracts.Job {
@@ -617,9 +671,13 @@ func readDistributedJob(ctx context.Context, client *http.Client, jobsURL, compo
 }
 
 func checkGatewayProjection(ctx context.Context, client *http.Client, gatewayURL, agentToken, jobID string, report *DistributedSmokeReport) {
+	checkGatewayJobProjectionState(ctx, client, gatewayURL, agentToken, jobID, contracts.JobSucceeded, "gateway.job_projection", report)
+}
+
+func checkGatewayJobProjectionState(ctx context.Context, client *http.Client, gatewayURL, agentToken, jobID string, expectedState contracts.JobState, checkName string, report *DistributedSmokeReport) {
 	var envelope rawSuccessEnvelope
 	status, err := requestJSON(ctx, client, http.MethodGet, joinURLPath(gatewayURL, "/v1/agent/jobs/"+url.PathEscape(jobID)), nil, map[string]string{"Authorization": "Bearer " + agentToken}, &envelope)
-	check := DistributedSmokeCheck{Name: "gateway.job_projection", HTTPStatus: status}
+	check := DistributedSmokeCheck{Name: checkName, HTTPStatus: status}
 	if err != nil {
 		check.Error = err.Error()
 		report.add(check)
@@ -636,7 +694,7 @@ func checkGatewayProjection(ctx context.Context, client *http.Client, gatewayURL
 		report.add(check)
 		return
 	}
-	if job.JobID != jobID || job.State != contracts.JobSucceeded {
+	if job.JobID != jobID || job.State != expectedState {
 		check.Error = fmt.Sprintf("job_id=%q state=%q", job.JobID, job.State)
 		report.add(check)
 		return
