@@ -265,6 +265,7 @@ func TestArtifactContentWritesOutputFile(t *testing.T) {
 		`"bytes": 14`,
 		`"content_type": "text/plain"`,
 		`"digest": "sha256=testdigest"`,
+		`"request_id": "req_artifact_trace"`,
 	} {
 		if !strings.Contains(output, expected) {
 			t.Fatalf("stdout missing %q:\n%s", expected, output)
@@ -276,6 +277,9 @@ func TestArtifactsDownloadsJobArtifacts(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if got := r.Header.Get("Authorization"); got != "Bearer token_agent" {
 			t.Fatalf("Authorization = %q", got)
+		}
+		if got := r.Header.Get("X-Request-ID"); got != "req_artifacts_trace" {
+			t.Fatalf("X-Request-ID = %q", got)
 		}
 		switch r.URL.Path {
 		case "/v1/agent/jobs/job_1/artifacts":
@@ -313,6 +317,7 @@ func TestArtifactsDownloadsJobArtifacts(t *testing.T) {
 	code := run([]string{
 		"-gateway-url", server.URL,
 		"-token", "token_agent",
+		"-request-id", "req_artifacts_trace",
 		"artifacts", "job_1",
 		"-out-dir", outDir,
 	}, &stdout, &stderr, server.Client())
@@ -336,6 +341,7 @@ func TestArtifactsDownloadsJobArtifacts(t *testing.T) {
 		`"artifact_id": "art_1"`,
 		`"artifact_id": "art_2"`,
 		`"path": "` + filepath.Join(outDir, "result-2.txt") + `"`,
+		`"request_id": "req_artifacts_trace"`,
 	} {
 		if !strings.Contains(output, expected) {
 			t.Fatalf("stdout missing %q:\n%s", expected, output)

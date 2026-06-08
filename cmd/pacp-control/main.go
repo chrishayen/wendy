@@ -337,7 +337,7 @@ func artifactsCommand(client gatewayClient, args []string, stdout, stderr io.Wri
 			"items":  results,
 		},
 		"links": map[string]any{},
-		"meta":  map[string]string{"schema_version": "v1"},
+		"meta":  commandMeta(client),
 	}
 	encoded, err := json.MarshalIndent(report, "", "  ")
 	if err != nil {
@@ -384,7 +384,7 @@ func contentCommand(client gatewayClient, args []string, stdout, stderr io.Write
 		if closeErr != nil {
 			return 1, closeErr
 		}
-		return writeArtifactFileResult(stdout, artifactID, *outPath, bytesWritten, resp.Header.Get("Content-Type"), resp.Header.Get("Digest"))
+		return writeArtifactFileResult(stdout, client, artifactID, *outPath, bytesWritten, resp.Header.Get("Content-Type"), resp.Header.Get("Digest"))
 	}
 	if _, err := io.Copy(stdout, resp.Body); err != nil {
 		return 1, err
@@ -392,7 +392,7 @@ func contentCommand(client gatewayClient, args []string, stdout, stderr io.Write
 	return 0, nil
 }
 
-func writeArtifactFileResult(stdout io.Writer, artifactID, path string, size int64, contentType, digest string) (int, error) {
+func writeArtifactFileResult(stdout io.Writer, client gatewayClient, artifactID, path string, size int64, contentType, digest string) (int, error) {
 	result := map[string]any{
 		"ok": true,
 		"data": map[string]any{
@@ -403,7 +403,7 @@ func writeArtifactFileResult(stdout io.Writer, artifactID, path string, size int
 			"digest":       digest,
 		},
 		"links": map[string]any{},
-		"meta":  map[string]string{"schema_version": "v1"},
+		"meta":  commandMeta(client),
 	}
 	encoded, err := json.MarshalIndent(result, "", "  ")
 	if err != nil {
@@ -414,6 +414,14 @@ func writeArtifactFileResult(stdout io.Writer, artifactID, path string, size int
 		return 1, err
 	}
 	return 0, nil
+}
+
+func commandMeta(client gatewayClient) map[string]string {
+	meta := map[string]string{"schema_version": "v1"}
+	if client.requestID != "" {
+		meta["request_id"] = client.requestID
+	}
+	return meta
 }
 
 func downloadArtifactToFile(client gatewayClient, artifactID, outPath string) (map[string]any, error) {
