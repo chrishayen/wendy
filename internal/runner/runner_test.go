@@ -104,6 +104,9 @@ func TestRunnerCompletesJobAndUploadsArtifact(t *testing.T) {
 	if artifact.ProducerRef != created.JobID || artifact.OwnerSubjectID != "sub_agent" {
 		t.Fatalf("artifact = %#v", artifact)
 	}
+	if artifact.Metadata["capability_id"] != "cap_fake_image" {
+		t.Fatalf("artifact metadata = %#v", artifact.Metadata)
+	}
 	auditEvents := leaseStore.AuditEvents()
 	if len(auditEvents) != 1 || auditEvents[0].ActorSubjectID != "sub_runner_test" || auditEvents[0].ReleaseReason != "job completed" {
 		t.Fatalf("lease audit events = %#v", auditEvents)
@@ -216,6 +219,9 @@ func TestRunnerFetchesProviderContentRefsAndUploadsArtifact(t *testing.T) {
 	}
 	if artifact.Name != "provider-image.png" || artifact.MediaType != "image/png" || artifact.ProducerRef != created.JobID || artifact.OwnerSubjectID != "sub_agent" {
 		t.Fatalf("artifact = %#v", artifact)
+	}
+	if artifact.Metadata["capability_id"] != "cap_ref_image" {
+		t.Fatalf("artifact metadata = %#v", artifact.Metadata)
 	}
 	content, err := artifactStore.ReadContent(completed.ArtifactRefs[0])
 	if err != nil {

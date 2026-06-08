@@ -237,7 +237,7 @@ func (r *Runner) runJob(ctx context.Context, job contracts.Job) error {
 		}
 		artifactsToUpload = append(artifactsToUpload, fetched...)
 	}
-	artifactIDs, err := r.uploadArtifacts(ctx, job.JobID, plan.SubjectID, artifactsToUpload)
+	artifactIDs, err := r.uploadArtifacts(ctx, job.JobID, plan.SubjectID, plan.CapabilityID, artifactsToUpload)
 	if err != nil {
 		_ = r.failJob(ctx, job.JobID, "artifact_upload_failed", err.Error())
 		return err
@@ -686,7 +686,7 @@ func normalizeLeaseKeepaliveError(leaseID string, err error) keepaliveFailure {
 	return failure
 }
 
-func (r *Runner) uploadArtifacts(ctx context.Context, jobID, ownerSubjectID string, artifacts []contracts.ProviderArtifact) ([]string, error) {
+func (r *Runner) uploadArtifacts(ctx context.Context, jobID, ownerSubjectID, capabilityID string, artifacts []contracts.ProviderArtifact) ([]string, error) {
 	ids := make([]string, 0, len(artifacts))
 	for index, artifact := range artifacts {
 		body, err := base64.StdEncoding.DecodeString(artifact.ContentBase64)
@@ -714,6 +714,9 @@ func (r *Runner) uploadArtifacts(ctx context.Context, jobID, ownerSubjectID stri
 			OwnerSubjectID:   ownerSubjectID,
 			ExpectedSize:     &size,
 			ExpectedChecksum: checksum,
+		}
+		if capabilityID != "" {
+			create.Metadata = map[string]any{"capability_id": capabilityID}
 		}
 		keyPrefix := "runner-artifact-" + jobID + "-" + strconv.Itoa(index)
 		if err := r.postJSON(ctx, r.cfg.ArtifactsURL+"/v1/artifact-uploads", create, keyPrefix+"-create", &upload); err != nil {
