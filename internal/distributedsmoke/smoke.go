@@ -230,7 +230,7 @@ func Run(ctx context.Context) DistributedSmokeReport {
 		{Kind: "leases", URL: leasesHTTP.URL, Credential: policyCredential},
 		{Kind: "artifacts", URL: artifactsHTTP.URL, Credential: policyCredential},
 		{Kind: "node", URL: nodeHTTP.URL, Credential: "Bearer " + runnerToken},
-		{Kind: "gateway", URL: gatewayHTTP.URL},
+		{Kind: "gateway", URL: gatewayHTTP.URL, Credential: "Bearer " + agentToken},
 	}, &report)
 	checkGatewayDependencyHealth(ctx, client, gatewayHTTP.URL, &report)
 

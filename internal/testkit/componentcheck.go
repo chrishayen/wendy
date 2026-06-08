@@ -90,7 +90,12 @@ func componentContractFor(kind string) (componentContract, bool) {
 			ListChecks:  []componentListCheck{{Name: "component.surface.catalog.capabilities", Path: "/v1/catalog/capabilities?limit=1", ValidateItem: validateCatalogListItem}},
 		}, true
 	case "gateway":
-		return componentContract{Kind: "gateway", HealthPath: "/v1/gateway/health", MetricsPath: "/v1/gateway/metrics"}, true
+		return componentContract{
+			Kind:        "gateway",
+			HealthPath:  "/v1/gateway/health",
+			MetricsPath: "/v1/gateway/metrics",
+			ListChecks:  []componentListCheck{{Name: "component.surface.gateway.tools", Path: "/v1/tools?limit=1", ValidateItem: validateGatewayToolListItem}},
+		}, true
 	case "jobs":
 		return componentContract{
 			Kind:        "jobs",
@@ -355,6 +360,54 @@ func validateCatalogListItem(raw json.RawMessage) error {
 	}
 	if record.Route.ProviderInvokePath == "" {
 		return fmt.Errorf("route.provider_invoke_path is required")
+	}
+	return nil
+}
+
+func validateGatewayToolListItem(raw json.RawMessage) error {
+	var tool contracts.Tool
+	if err := json.Unmarshal(raw, &tool); err != nil {
+		return fmt.Errorf("decode tool: %w", err)
+	}
+	if tool.ID == "" {
+		return fmt.Errorf("id is required")
+	}
+	if tool.Name == "" {
+		return fmt.Errorf("name is required")
+	}
+	if tool.Description == "" {
+		return fmt.Errorf("description is required")
+	}
+	switch tool.ExecutionMode {
+	case "sync", "async", "either":
+	default:
+		return fmt.Errorf("execution_mode must be sync, async, or either")
+	}
+	if tool.InputSchema == nil {
+		return fmt.Errorf("input_schema is required")
+	}
+	if tool.OutputSchema == nil {
+		return fmt.Errorf("output_schema is required")
+	}
+	switch tool.SideEffects {
+	case "none", "read", "write", "external", "destructive":
+	default:
+		return fmt.Errorf("side_effects must be none, read, write, external, or destructive")
+	}
+	if tool.ResourceHints == nil {
+		return fmt.Errorf("resource_hints is required")
+	}
+	if tool.ArtifactHints == nil {
+		return fmt.Errorf("artifact_hints is required")
+	}
+	if tool.Examples == nil {
+		return fmt.Errorf("examples is required")
+	}
+	if tool.Links == nil {
+		return fmt.Errorf("links is required")
+	}
+	if _, ok := tool.Links["invoke"]; !ok {
+		return fmt.Errorf("links.invoke is required")
 	}
 	return nil
 }

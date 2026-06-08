@@ -145,6 +145,71 @@ func TestRunComponentSmokeChecksLiveComponent(t *testing.T) {
 	}
 }
 
+func TestRunComponentSmokeChecksGatewayToolSurface(t *testing.T) {
+	seenTools := false
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer agent-token" {
+			t.Fatalf("%s Authorization = %q", r.URL.Path, r.Header.Get("Authorization"))
+		}
+		switch r.URL.Path {
+		case "/v1/gateway/health":
+			writeSmokeEnvelope(t, w, r, http.StatusOK, contracts.NewComponentHealth("gateway", nil))
+		case "/v1/gateway/metrics":
+			writeSmokeEnvelope(t, w, r, http.StatusOK, contracts.NewComponentMetrics("gateway", []contracts.MetricSample{}))
+		case "/v1/tools":
+			seenTools = true
+			if r.URL.Query().Get("limit") != "1" {
+				t.Fatalf("tools query = %s", r.URL.RawQuery)
+			}
+			writeSmokeEnvelope(t, w, r, http.StatusOK, map[string]any{
+				"items": []map[string]any{{
+					"id":             "cap_echo",
+					"name":           "Echo",
+					"description":    "Echo a message.",
+					"execution_mode": "sync",
+					"input_schema":   map[string]any{"type": "object"},
+					"output_schema":  map[string]any{"type": "object"},
+					"side_effects":   "none",
+					"resource_hints": []any{},
+					"artifact_hints": []any{},
+					"examples":       []any{map[string]any{"message": "hello"}},
+					"links": map[string]any{
+						"invoke": map[string]any{"method": "POST", "href": "/v1/tools/cap_echo/invoke"},
+					},
+				}},
+				"next_cursor": nil,
+			})
+		default:
+			t.Fatalf("unexpected request = %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	var stdout, stderr bytes.Buffer
+	code := run([]string{
+		"-component-url", server.URL,
+		"-component-kind", "gateway",
+		"-component-credential", "agent-token",
+	}, &stdout, &stderr, server.Client())
+	if code != 0 {
+		t.Fatalf("code=%d stderr=%s stdout=%s", code, stderr.String(), stdout.String())
+	}
+	if !seenTools {
+		t.Fatal("gateway tools surface was not checked")
+	}
+	for _, expected := range []string{
+		"component=" + server.URL + " kind=gateway checks=3",
+		"check=component.health status=pass",
+		"check=component.metrics status=pass",
+		"check=component.surface.gateway.tools status=pass",
+		"contract-smoke=pass",
+	} {
+		if !strings.Contains(stdout.String(), expected) {
+			t.Fatalf("stdout missing %q:\n%s", expected, stdout.String())
+		}
+	}
+}
+
 func TestRunComponentSmokeRejectsUnknownKind(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	code := run([]string{
@@ -233,6 +298,7 @@ func TestRunFakePublicAPISmokePasses(t *testing.T) {
 	for _, expected := range []string{
 		"fake-public-apis=checked",
 		"check=fake.component.catalog.component.surface.catalog.capabilities status=pass",
+		"check=fake.component.gateway.component.surface.gateway.tools status=pass",
 		"check=fake.component.jobs.component.surface.jobs.list status=pass",
 		"check=fake.component.node.component.surface.node.resources status=pass",
 		"check=fake.component.node.component.surface.node.events status=pass",
