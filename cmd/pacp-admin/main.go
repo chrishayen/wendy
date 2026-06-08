@@ -39,6 +39,7 @@ type serviceTarget struct {
 	Kind        string
 	URL         string
 	HealthPath  string
+	MetricsPath string
 	Credential  string
 	Required    bool
 	Description string
@@ -77,6 +78,58 @@ type healthSummary struct {
 	Skipped   int `json:"skipped"`
 }
 
+type metricsReport struct {
+	OK    bool              `json:"ok"`
+	Data  metricsReportData `json:"data"`
+	Links map[string]any    `json:"links"`
+	Meta  map[string]string `json:"meta"`
+}
+
+type metricsReportData struct {
+	Items   []metricsItem  `json:"items"`
+	Summary metricsSummary `json:"summary"`
+}
+
+type metricsItem struct {
+	Name       string                   `json:"name"`
+	Kind       string                   `json:"kind,omitempty"`
+	ServiceID  string                   `json:"service_id,omitempty"`
+	NodeID     string                   `json:"node_id,omitempty"`
+	URL        string                   `json:"url"`
+	MetricsURL string                   `json:"metrics_url"`
+	Component  string                   `json:"component,omitempty"`
+	HTTPStatus int                      `json:"http_status,omitempty"`
+	Samples    []contracts.MetricSample `json:"samples,omitempty"`
+	Error      string                   `json:"error,omitempty"`
+}
+
+type metricsSummary struct {
+	Available   int `json:"available"`
+	Unavailable int `json:"unavailable"`
+	Skipped     int `json:"skipped"`
+	Samples     int `json:"samples"`
+}
+
+type alertsReport struct {
+	OK    bool              `json:"ok"`
+	Data  alertsReportData  `json:"data"`
+	Links map[string]any    `json:"links"`
+	Meta  map[string]string `json:"meta"`
+}
+
+type alertsReportData struct {
+	Findings []diagnosticFinding `json:"findings"`
+	Summary  alertSummary        `json:"summary"`
+	Health   healthReportData    `json:"health"`
+	Metrics  metricsReportData   `json:"metrics"`
+}
+
+type alertSummary struct {
+	Errors   int `json:"errors"`
+	Warnings int `json:"warnings"`
+	Info     int `json:"info"`
+}
+
 func main() {
 	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr, http.DefaultClient))
 }
@@ -111,6 +164,10 @@ func run(args []string, stdout, stderr io.Writer, httpClient *http.Client) int {
 	switch remaining[0] {
 	case "health":
 		return healthCommand(cfg, httpClient, remaining[1:], stdout, stderr)
+	case "metrics":
+		return metricsCommand(cfg, httpClient, remaining[1:], stdout, stderr)
+	case "alerts":
+		return alertsCommand(cfg, httpClient, remaining[1:], stdout, stderr)
 	case "catalog":
 		return catalogCommand(cfg, httpClient, remaining[1:], stdout, stderr)
 	case "jobs":
@@ -134,6 +191,10 @@ func run(args []string, stdout, stderr io.Writer, httpClient *http.Client) int {
 
 type healthOptions struct {
 	Providers bool
+}
+
+type alertOptions struct {
+	QueueDepthThreshold int
 }
 
 type diagnosticFinding struct {
@@ -163,6 +224,54 @@ func healthCommand(cfg adminConfig, httpClient *http.Client, args []string, stdo
 	report := checkHealth(cfg, httpClient, healthOptions{Providers: *providers})
 	if err := writeJSON(stdout, report); err != nil {
 		fmt.Fprintf(stderr, "write health report: %v\n", err)
+		return 1
+	}
+	if report.OK {
+		return 0
+	}
+	return 1
+}
+
+func metricsCommand(cfg adminConfig, httpClient *http.Client, args []string, stdout, stderr io.Writer) int {
+	flags := flag.NewFlagSet("metrics", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	remaining, err := parseSubcommandFlags(flags, args)
+	if err != nil {
+		return 2
+	}
+	if len(remaining) != 0 {
+		return usage(stderr, "usage: pacp-admin [flags] metrics")
+	}
+	report := collectMetrics(cfg, httpClient)
+	if err := writeJSON(stdout, report); err != nil {
+		fmt.Fprintf(stderr, "write metrics report: %v\n", err)
+		return 1
+	}
+	if report.OK {
+		return 0
+	}
+	return 1
+}
+
+func alertsCommand(cfg adminConfig, httpClient *http.Client, args []string, stdout, stderr io.Writer) int {
+	flags := flag.NewFlagSet("alerts", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	queueDepthThreshold := flags.Int("queue-depth-threshold", 0, "lease queue depth above this value produces a warning")
+	remaining, err := parseSubcommandFlags(flags, args)
+	if err != nil {
+		return 2
+	}
+	if len(remaining) != 0 {
+		return usage(stderr, "usage: pacp-admin [flags] alerts [-queue-depth-threshold n]")
+	}
+	if *queueDepthThreshold < 0 {
+		return usage(stderr, "queue-depth-threshold must be zero or greater")
+	}
+	health := checkHealth(cfg, httpClient, healthOptions{})
+	metrics := collectMetrics(cfg, httpClient)
+	report := buildAlertsReport(health, metrics, alertOptions{QueueDepthThreshold: *queueDepthThreshold})
+	if err := writeJSON(stdout, report); err != nil {
+		fmt.Fprintf(stderr, "write alerts report: %v\n", err)
 		return 1
 	}
 	if report.OK {
@@ -1121,6 +1230,272 @@ func checkHealth(cfg adminConfig, httpClient *http.Client, opts healthOptions) h
 	return report
 }
 
+func collectMetrics(cfg adminConfig, httpClient *http.Client) metricsReport {
+	ctx := context.Background()
+	if cfg.Timeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, cfg.Timeout)
+		defer cancel()
+	}
+	targets := metricsTargets(cfg)
+	report := metricsReport{
+		OK:    true,
+		Links: map[string]any{},
+		Meta: map[string]string{
+			"collected_at":    time.Now().UTC().Format(time.RFC3339),
+			"schema_version":  "v1",
+			"admin_command":   "metrics",
+			"optional_target": "node",
+		},
+	}
+	for _, target := range targets {
+		item := checkMetricsTarget(ctx, httpClient, target)
+		addMetricsItem(&report, item, target.Required || target.URL != "")
+	}
+	return report
+}
+
+func metricsTargets(cfg adminConfig) []serviceTarget {
+	componentCredential := authorizationHeader(cfg.ComponentToken)
+	targets := []serviceTarget{
+		{Name: "catalog", Kind: "component", URL: cfg.CatalogURL, MetricsPath: "/v1/catalog/metrics", Credential: componentCredential, Required: true},
+		{Name: "jobs", Kind: "component", URL: cfg.JobsURL, MetricsPath: "/v1/jobs/metrics", Credential: componentCredential, Required: true},
+		{Name: "leases", Kind: "component", URL: cfg.LeasesURL, MetricsPath: "/v1/leases/metrics", Credential: componentCredential, Required: true},
+		{Name: "artifacts", Kind: "component", URL: cfg.ArtifactsURL, MetricsPath: "/v1/artifacts/metrics", Credential: componentCredential, Required: true},
+		{Name: "policy", Kind: "component", URL: cfg.PolicyURL, MetricsPath: "/v1/policy/metrics", Credential: componentCredential, Required: true},
+		{Name: "gateway", Kind: "component", URL: cfg.GatewayURL, MetricsPath: "/v1/gateway/metrics", Required: true},
+	}
+	targets = append(targets, nodeMetricsTargets(cfg)...)
+	return targets
+}
+
+func nodeMetricsTargets(cfg adminConfig) []serviceTarget {
+	credential := authorizationHeader(cfg.NodeToken)
+	targets := []serviceTarget{}
+	seen := map[string]bool{}
+	add := func(name, nodeID, rawURL, configError string, required bool) {
+		key := name + "\x00" + rawURL
+		if seen[key] {
+			return
+		}
+		seen[key] = true
+		targets = append(targets, serviceTarget{
+			Name:        name,
+			Kind:        "node",
+			URL:         rawURL,
+			MetricsPath: "/v1/node/metrics",
+			Credential:  credential,
+			Required:    required,
+			NodeID:      nodeID,
+			ConfigError: configError,
+		})
+	}
+	if strings.TrimSpace(cfg.NodeURL) != "" {
+		add("node", "", cfg.NodeURL, "", false)
+	}
+	for _, entry := range splitCSV(cfg.NodeURLs) {
+		nodeID, rawURL, ok := strings.Cut(entry, "=")
+		nodeID = strings.TrimSpace(nodeID)
+		rawURL = strings.TrimSpace(rawURL)
+		if !ok || nodeID == "" || rawURL == "" {
+			add("node:"+entry, "", "", "node target must be formatted as node_id=url", true)
+			continue
+		}
+		add("node:"+nodeID, nodeID, rawURL, "", true)
+	}
+	if len(targets) == 0 {
+		add("node", "", "", "", false)
+	}
+	return targets
+}
+
+func checkMetricsTarget(ctx context.Context, httpClient *http.Client, target serviceTarget) metricsItem {
+	baseURL := strings.TrimRight(strings.TrimSpace(target.URL), "/")
+	item := metricsItem{
+		Name:   target.Name,
+		Kind:   target.Kind,
+		NodeID: target.NodeID,
+		URL:    baseURL,
+	}
+	if target.ConfigError != "" {
+		item.Error = target.ConfigError
+		return item
+	}
+	if baseURL == "" {
+		if target.Required {
+			item.Error = "service URL is required"
+		}
+		return item
+	}
+	item.MetricsURL = joinURLPath(baseURL, target.MetricsPath)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, item.MetricsURL, nil)
+	if err != nil {
+		item.Error = err.Error()
+		return item
+	}
+	if target.Credential != "" {
+		req.Header.Set("Authorization", target.Credential)
+	}
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		item.Error = err.Error()
+		return item
+	}
+	defer resp.Body.Close()
+	item.HTTPStatus = resp.StatusCode
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		item.Error = resp.Status
+		return item
+	}
+	var envelope struct {
+		OK    bool                       `json:"ok"`
+		Data  contracts.ComponentMetrics `json:"data"`
+		Error contracts.ErrorObject      `json:"error"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&envelope); err != nil {
+		item.Error = "invalid metrics response: " + err.Error()
+		return item
+	}
+	if !envelope.OK {
+		message := envelope.Error.Message
+		if message == "" {
+			message = "metrics response was not ok"
+		}
+		item.Error = message
+		return item
+	}
+	item.Component = envelope.Data.Component
+	item.Samples = envelope.Data.Samples
+	return item
+}
+
+func addMetricsItem(report *metricsReport, item metricsItem, affectsOK bool) {
+	report.Data.Items = append(report.Data.Items, item)
+	switch {
+	case item.URL == "" && item.Error == "":
+		report.Data.Summary.Skipped++
+	case item.Error != "":
+		report.Data.Summary.Unavailable++
+		if affectsOK {
+			report.OK = false
+		}
+	default:
+		report.Data.Summary.Available++
+		report.Data.Summary.Samples += len(item.Samples)
+	}
+}
+
+func buildAlertsReport(health healthReport, metrics metricsReport, opts alertOptions) alertsReport {
+	report := alertsReport{
+		OK: true,
+		Data: alertsReportData{
+			Health:  health.Data,
+			Metrics: metrics.Data,
+		},
+		Links: map[string]any{},
+		Meta: map[string]string{
+			"checked_at":     time.Now().UTC().Format(time.RFC3339),
+			"schema_version": "v1",
+			"admin_command":  "alerts",
+		},
+	}
+	for _, item := range health.Data.Items {
+		if item.Status == "healthy" || item.Status == "skipped" {
+			continue
+		}
+		message := fmt.Sprintf("%s health is %s", item.Name, item.Status)
+		if item.Error != "" {
+			message += ": " + item.Error
+		}
+		addAlertFinding(&report, diagnosticFinding{Severity: "error", Code: "target_unhealthy", Message: message})
+	}
+	for _, item := range metrics.Data.Items {
+		if item.Error != "" && item.URL != "" {
+			addAlertFinding(&report, diagnosticFinding{Severity: "warning", Code: "metrics_unavailable", Message: item.Name + " metrics unavailable: " + item.Error})
+			continue
+		}
+		addMetricFindings(&report, item, opts)
+	}
+	if len(report.Data.Findings) == 0 {
+		addAlertFinding(&report, diagnosticFinding{Severity: "info", Code: "no_alerts", Message: "no alert conditions were detected"})
+	}
+	return report
+}
+
+func addMetricFindings(report *alertsReport, item metricsItem, opts alertOptions) {
+	for _, sample := range item.Samples {
+		switch sample.Name {
+		case "jobs_by_state":
+			state := sample.Labels["state"]
+			switch {
+			case state == string(contracts.JobFailed) && sample.Value > 0:
+				addAlertFinding(report, diagnosticFinding{Severity: "error", Code: "jobs_failed", Message: fmt.Sprintf("%s has %.0f failed job(s)", item.Name, sample.Value)})
+			case state == string(contracts.JobExpired) && sample.Value > 0:
+				addAlertFinding(report, diagnosticFinding{Severity: "warning", Code: "jobs_expired", Message: fmt.Sprintf("%s has %.0f expired job(s)", item.Name, sample.Value)})
+			case state == string(contracts.JobQueued) && sample.Value > 0:
+				addAlertFinding(report, diagnosticFinding{Severity: "warning", Code: "jobs_queued", Message: fmt.Sprintf("%s has %.0f queued job(s)", item.Name, sample.Value)})
+			case state == string(contracts.JobRunning) && sample.Value > 0:
+				addAlertFinding(report, diagnosticFinding{Severity: "info", Code: "jobs_running", Message: fmt.Sprintf("%s has %.0f running job(s)", item.Name, sample.Value)})
+			}
+		case "jobs_active_claims":
+			if sample.Value > 0 {
+				addAlertFinding(report, diagnosticFinding{Severity: "info", Code: "jobs_claimed", Message: fmt.Sprintf("%s has %.0f active job claim(s)", item.Name, sample.Value)})
+			}
+		case "lease_queue_depth":
+			if sample.Value > float64(opts.QueueDepthThreshold) {
+				selector := sample.Labels["selector"]
+				if selector == "" {
+					selector = "unknown"
+				}
+				addAlertFinding(report, diagnosticFinding{Severity: "warning", Code: "lease_queue_depth", Message: fmt.Sprintf("%s selector %s queue depth is %.0f", item.Name, selector, sample.Value)})
+			}
+		case "leases_active_total":
+			if sample.Value > 0 {
+				addAlertFinding(report, diagnosticFinding{Severity: "info", Code: "leases_active", Message: fmt.Sprintf("%s has %.0f active lease(s)", item.Name, sample.Value)})
+			}
+		case "artifact_uploads_by_state":
+			state := sample.Labels["state"]
+			if (state == string(contracts.ArtifactUploadAborted) || state == string(contracts.ArtifactUploadExpired)) && sample.Value > 0 {
+				addAlertFinding(report, diagnosticFinding{Severity: "warning", Code: "artifact_uploads_not_completed", Message: fmt.Sprintf("%s has %.0f %s artifact upload(s)", item.Name, sample.Value, state)})
+			}
+		case "policy_decisions_total":
+			if sample.Labels["decision"] == "deny" && sample.Value > 0 {
+				action := sample.Labels["action"]
+				if action == "" {
+					action = "unknown"
+				}
+				addAlertFinding(report, diagnosticFinding{Severity: "warning", Code: "policy_denies", Message: fmt.Sprintf("%s denied %.0f policy decision(s) for %s", item.Name, sample.Value, action)})
+			}
+		case "node_services_by_status":
+			status := sample.Labels["status"]
+			if status == "failed" && sample.Value > 0 {
+				addAlertFinding(report, diagnosticFinding{Severity: "error", Code: "node_services_failed", Message: fmt.Sprintf("%s has %.0f failed service(s)", item.Name, sample.Value)})
+			}
+		case "gateway_downstream_configured":
+			if sample.Value == 0 {
+				downstream := sample.Labels["downstream"]
+				if downstream == "" {
+					downstream = "unknown"
+				}
+				addAlertFinding(report, diagnosticFinding{Severity: "error", Code: "gateway_downstream_missing", Message: fmt.Sprintf("%s downstream %s is not configured", item.Name, downstream)})
+			}
+		}
+	}
+}
+
+func addAlertFinding(report *alertsReport, finding diagnosticFinding) {
+	report.Data.Findings = append(report.Data.Findings, finding)
+	switch finding.Severity {
+	case "error":
+		report.Data.Summary.Errors++
+		report.OK = false
+	case "warning":
+		report.Data.Summary.Warnings++
+	default:
+		report.Data.Summary.Info++
+	}
+}
+
 func checkTarget(ctx context.Context, httpClient *http.Client, target serviceTarget) healthItem {
 	baseURL := strings.TrimRight(strings.TrimSpace(target.URL), "/")
 	item := healthItem{
@@ -1760,7 +2135,7 @@ func writePrettyJSON(w io.Writer, raw []byte) error {
 
 func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "usage: pacp-admin [flags] <command>")
-	fmt.Fprintln(w, "commands: health, catalog, jobs, leases, artifacts, policy, node, diagnose")
+	fmt.Fprintln(w, "commands: health, metrics, alerts, catalog, jobs, leases, artifacts, policy, node, diagnose")
 }
 
 func loadManifestInputs(path string) ([]contracts.ProviderManifest, error) {

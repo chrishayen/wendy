@@ -248,6 +248,171 @@ func TestHealthFailsWhenCatalogProviderIsUnhealthy(t *testing.T) {
 	}
 }
 
+func TestMetricsCollectsCoreServicesAndConfiguredNode(t *testing.T) {
+	seen := map[string]bool{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seen[r.URL.Path] = true
+		switch r.URL.Path {
+		case "/v1/gateway/metrics":
+			if r.Header.Get("Authorization") != "" {
+				t.Fatalf("gateway Authorization = %q", r.Header.Get("Authorization"))
+			}
+			writeMetrics(t, w, http.StatusOK, "gateway", []map[string]any{{
+				"name":   "gateway_idempotency_records_total",
+				"value":  0,
+				"unit":   "count",
+				"labels": map[string]string{},
+			}})
+		case "/v1/node/metrics":
+			if r.Header.Get("Authorization") != "Bearer node-token" {
+				t.Fatalf("node Authorization = %q", r.Header.Get("Authorization"))
+			}
+			writeMetrics(t, w, http.StatusOK, "node", []map[string]any{{
+				"name":  "node_services_total",
+				"value": 1,
+				"unit":  "count",
+				"labels": map[string]string{
+					"node_id": "linux",
+				},
+			}})
+		default:
+			if r.Header.Get("Authorization") != "Bearer component-token" {
+				t.Fatalf("%s Authorization = %q", r.URL.Path, r.Header.Get("Authorization"))
+			}
+			writeMetrics(t, w, http.StatusOK, strings.Trim(strings.TrimPrefix(r.URL.Path, "/v1/"), "/metrics"), []map[string]any{{
+				"name":  "sample_total",
+				"value": 1,
+				"unit":  "count",
+			}})
+		}
+	}))
+	defer server.Close()
+
+	args := append(coreURLArgs(server.URL),
+		"-component-token", "component-token",
+		"-node-urls", "linux="+server.URL,
+		"-node-token", "node-token",
+		"metrics",
+	)
+	var stdout, stderr bytes.Buffer
+	code := run(args, &stdout, &stderr, server.Client())
+	if code != 0 {
+		t.Fatalf("code=%d stderr=%s stdout=%s", code, stderr.String(), stdout.String())
+	}
+	for _, path := range []string{
+		"/v1/catalog/metrics",
+		"/v1/jobs/metrics",
+		"/v1/leases/metrics",
+		"/v1/artifacts/metrics",
+		"/v1/policy/metrics",
+		"/v1/gateway/metrics",
+		"/v1/node/metrics",
+	} {
+		if !seen[path] {
+			t.Fatalf("path %s was not collected; seen=%#v", path, seen)
+		}
+	}
+	report := decodeMetricsReport(t, stdout.Bytes())
+	if !report.OK || report.Data.Summary.Available != 7 || report.Data.Summary.Skipped != 0 {
+		t.Fatalf("report = %#v", report)
+	}
+	if report.Data.Summary.Samples != 7 {
+		t.Fatalf("sample count = %d", report.Data.Summary.Samples)
+	}
+}
+
+func TestMetricsFailsWhenRequiredComponentUnavailable(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v1/jobs/metrics" {
+			writeEnvelope(t, w, http.StatusServiceUnavailable, map[string]any{"status": "down"})
+			return
+		}
+		writeMetrics(t, w, http.StatusOK, "component", []map[string]any{})
+	}))
+	defer server.Close()
+
+	var stdout, stderr bytes.Buffer
+	code := run(append(coreURLArgs(server.URL), "metrics"), &stdout, &stderr, server.Client())
+	if code != 1 {
+		t.Fatalf("code=%d stderr=%s stdout=%s", code, stderr.String(), stdout.String())
+	}
+	report := decodeMetricsReport(t, stdout.Bytes())
+	if report.OK || report.Data.Summary.Unavailable != 1 {
+		t.Fatalf("report = %#v", report)
+	}
+}
+
+func TestAlertsReportsHealthAndMetricFindings(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/health") {
+			if r.URL.Path == "/v1/policy/health" {
+				writeHealth(t, w, http.StatusServiceUnavailable, "unhealthy")
+				return
+			}
+			writeHealth(t, w, http.StatusOK, "healthy")
+			return
+		}
+		switch r.URL.Path {
+		case "/v1/jobs/metrics":
+			writeMetrics(t, w, http.StatusOK, "jobs", []map[string]any{
+				{"name": "jobs_by_state", "value": 2, "unit": "count", "labels": map[string]string{"state": "failed"}},
+				{"name": "jobs_by_state", "value": 1, "unit": "count", "labels": map[string]string{"state": "queued"}},
+			})
+		case "/v1/leases/metrics":
+			writeMetrics(t, w, http.StatusOK, "leases", []map[string]any{
+				{"name": "lease_queue_depth", "value": 3, "unit": "count", "labels": map[string]string{"selector": "gpu"}},
+			})
+		case "/v1/artifacts/metrics":
+			writeMetrics(t, w, http.StatusOK, "artifacts", []map[string]any{
+				{"name": "artifact_uploads_by_state", "value": 1, "unit": "count", "labels": map[string]string{"state": "expired"}},
+			})
+		case "/v1/policy/metrics":
+			writeMetrics(t, w, http.StatusOK, "policy", []map[string]any{
+				{"name": "policy_decisions_total", "value": 2, "unit": "count", "labels": map[string]string{"action": "tool.invoke", "decision": "deny"}},
+			})
+		case "/v1/node/metrics":
+			writeMetrics(t, w, http.StatusOK, "node", []map[string]any{
+				{"name": "node_services_by_status", "value": 1, "unit": "count", "labels": map[string]string{"status": "failed"}},
+			})
+		default:
+			writeMetrics(t, w, http.StatusOK, "component", []map[string]any{})
+		}
+	}))
+	defer server.Close()
+
+	args := append(coreURLArgs(server.URL),
+		"-node-url", server.URL,
+		"alerts",
+		"-queue-depth-threshold", "2",
+	)
+	var stdout, stderr bytes.Buffer
+	code := run(args, &stdout, &stderr, server.Client())
+	if code != 1 {
+		t.Fatalf("code=%d stderr=%s stdout=%s", code, stderr.String(), stdout.String())
+	}
+	output := stdout.String()
+	for _, expected := range []string{
+		`"code": "target_unhealthy"`,
+		`"code": "jobs_failed"`,
+		`"code": "jobs_queued"`,
+		`"code": "lease_queue_depth"`,
+		`"code": "artifact_uploads_not_completed"`,
+		`"code": "policy_denies"`,
+		`"code": "node_services_failed"`,
+	} {
+		if !strings.Contains(output, expected) {
+			t.Fatalf("stdout missing %q:\n%s", expected, output)
+		}
+	}
+	var report alertsReport
+	if err := json.Unmarshal(stdout.Bytes(), &report); err != nil {
+		t.Fatalf("decode alerts: %v\n%s", err, output)
+	}
+	if report.OK || report.Data.Summary.Errors < 2 || report.Data.Summary.Warnings < 4 {
+		t.Fatalf("report = %#v", report)
+	}
+}
+
 func TestCatalogRouteCommandUsesComponentToken(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet || r.URL.Path != "/v1/catalog/capabilities/cap_1/route" {
@@ -1222,11 +1387,48 @@ func writeHealth(t *testing.T, w http.ResponseWriter, status int, health string)
 	}
 }
 
+func writeMetrics(t *testing.T, w http.ResponseWriter, status int, component string, samples []map[string]any) {
+	t.Helper()
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	if status >= 200 && status < 300 {
+		if err := json.NewEncoder(w).Encode(map[string]any{
+			"ok": true,
+			"data": map[string]any{
+				"component":    component,
+				"version":      "v1",
+				"collected_at": "2026-06-08T00:00:00Z",
+				"samples":      samples,
+			},
+			"links": map[string]any{},
+			"meta":  map[string]any{"request_id": "req_test", "schema_version": "v1"},
+		}); err != nil {
+			t.Fatalf("encode metrics: %v", err)
+		}
+		return
+	}
+	if err := json.NewEncoder(w).Encode(map[string]any{
+		"ok":    false,
+		"error": map[string]any{"code": "metrics_unavailable", "message": "metrics unavailable", "retryable": true},
+	}); err != nil {
+		t.Fatalf("encode metrics error: %v", err)
+	}
+}
+
 func decodeReport(t *testing.T, raw []byte) healthReport {
 	t.Helper()
 	var report healthReport
 	if err := json.Unmarshal(raw, &report); err != nil {
 		t.Fatalf("decode report: %v\n%s", err, string(raw))
+	}
+	return report
+}
+
+func decodeMetricsReport(t *testing.T, raw []byte) metricsReport {
+	t.Helper()
+	var report metricsReport
+	if err := json.Unmarshal(raw, &report); err != nil {
+		t.Fatalf("decode metrics report: %v\n%s", err, string(raw))
 	}
 	return report
 }
