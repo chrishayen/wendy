@@ -148,10 +148,10 @@ func NewFakeProviderHandler(cfg FakeProviderConfig) (http.Handler, error) {
 			message, _ := req.Input["message"].(string)
 			return contracts.ProviderInvokeResponse{Output: map[string]any{"reply": message}}, nil
 		},
-		"cap_artifact": func(ctx context.Context, req contracts.ProviderInvokeRequest) (contracts.ProviderInvokeResponse, error) {
+		"cap_artifact": provider.ArtifactHandler(func(ctx context.Context, req contracts.ProviderInvokeRequest) (provider.ArtifactResult, error) {
 			prompt, _ := req.Input["prompt"].(string)
 			body := []byte("fake artifact: " + prompt)
-			return contracts.ProviderInvokeResponse{
+			return provider.ArtifactResult{
 				Output: map[string]any{
 					"result": "artifact_created",
 					"name":   "fake-artifact.txt",
@@ -163,7 +163,7 @@ func NewFakeProviderHandler(cfg FakeProviderConfig) (http.Handler, error) {
 					Checksum:      checksumString(body),
 				}},
 			}, nil
-		},
+		}),
 		"cap_async_accept": provider.AsyncHandler(func(ctx context.Context, req contracts.ProviderInvokeRequest) (provider.AcceptedHandle, error) {
 			return provider.AcceptedHandle{HandleID: "provider_run_fake_0001", Status: "accepted"}, nil
 		}),

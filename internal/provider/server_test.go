@@ -195,6 +195,60 @@ func TestServerExposesAsyncStyleAcceptedHandle(t *testing.T) {
 	}
 }
 
+func TestServerExposesArtifactProducingHandler(t *testing.T) {
+	manifest := testManifest()
+	manifest.Capabilities = append(manifest.Capabilities, contracts.Capability{
+		ID:            "cap_artifact_helper",
+		Name:          "Artifact Helper",
+		Description:   "Return a provider artifact through the SDK artifact handler.",
+		Tags:          []string{"test", "artifact"},
+		ExecutionMode: "sync",
+		InputSchema: map[string]any{
+			"type":       "object",
+			"properties": map[string]any{},
+		},
+		OutputSchema: map[string]any{
+			"type":     "object",
+			"required": []any{"artifact_count"},
+			"properties": map[string]any{
+				"artifact_count": map[string]any{"type": "integer"},
+			},
+		},
+		Examples:      []map[string]any{},
+		SideEffects:   "writes artifact output",
+		ResourceHints: []contracts.ResourceHint{},
+		ArtifactHints: []contracts.ArtifactHint{{MediaType: "text/plain", Count: "one"}},
+		TimeoutHint:   "30s",
+	})
+	server, err := NewServer(manifest, map[string]CapabilityHandler{
+		"cap_echo": func(ctx context.Context, req contracts.ProviderInvokeRequest) (contracts.ProviderInvokeResponse, error) {
+			return contracts.ProviderInvokeResponse{Output: map[string]any{"message": req.Input["message"]}}, nil
+		},
+		"cap_artifact_helper": ArtifactHandler(func(ctx context.Context, req contracts.ProviderInvokeRequest) (ArtifactResult, error) {
+			return ArtifactResult{
+				Output: map[string]any{"artifact_count": 1},
+				Artifacts: []contracts.ProviderArtifact{{
+					Name:          "result.txt",
+					MediaType:     "text/plain",
+					ContentBase64: "aGVsbG8=",
+					Checksum:      "sha256:2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824",
+				}},
+			}, nil
+		}),
+	})
+	if err != nil {
+		t.Fatalf("new provider: %v", err)
+	}
+	response := doJSON(t, server, http.MethodPost, "/v1/provider/capabilities/cap_artifact_helper/invoke", map[string]any{
+		"input": map[string]any{},
+	}, http.StatusOK)
+	output := response["output"].(map[string]any)
+	artifacts := response["artifacts"].([]any)
+	if output["artifact_count"] != float64(1) || len(artifacts) != 1 {
+		t.Fatalf("invoke response = %#v", response)
+	}
+}
+
 func newTestProvider(t *testing.T) *Server {
 	t.Helper()
 	server, err := NewServer(testManifest(), map[string]CapabilityHandler{

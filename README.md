@@ -322,6 +322,11 @@ the provider health path to `/v1/provider/health`, validates the manifest with
 C01 rules, verifies that every capability has a handler, and can return either
 the manifest plus handler map or a ready `provider.Server`.
 
+Use `provider.ArtifactHandler` when a capability returns ordinary output plus
+provider-local artifacts or content refs. The handler still emits a normal C01
+provider response; durable artifact upload remains the runner and C07 artifact
+store responsibility.
+
 The fixture server can also serve individual contract-simulation fixture
 owners when a test needs a fixed fake dependency. It matches method, path,
 declared query values, declared headers, and declared request bodies. If the
