@@ -49,6 +49,8 @@ func ValidateProviderManifest(manifest ProviderManifest) []string {
 		}
 		if cap.ExecutionMode == "" {
 			errs = append(errs, prefix+".execution_mode is required")
+		} else if !validExecutionMode(cap.ExecutionMode) {
+			errs = append(errs, prefix+".execution_mode must be sync, async, or either")
 		}
 		if cap.InputSchema == nil {
 			errs = append(errs, prefix+".input_schema is required")
@@ -56,12 +58,41 @@ func ValidateProviderManifest(manifest ProviderManifest) []string {
 		if cap.OutputSchema == nil {
 			errs = append(errs, prefix+".output_schema is required")
 		}
+		if cap.Examples == nil {
+			errs = append(errs, prefix+".examples is required")
+		}
 		if cap.SideEffects == "" {
 			errs = append(errs, prefix+".side_effects is required")
+		} else if !validSideEffects(cap.SideEffects) {
+			errs = append(errs, prefix+".side_effects must be none, read, write, external, or destructive")
+		}
+		if cap.ResourceHints == nil {
+			errs = append(errs, prefix+".resource_hints is required")
+		}
+		if cap.ArtifactHints == nil {
+			errs = append(errs, prefix+".artifact_hints is required")
 		}
 		if cap.TimeoutHint == "" {
 			errs = append(errs, prefix+".timeout_hint is required")
 		}
 	}
 	return errs
+}
+
+func validExecutionMode(value string) bool {
+	switch value {
+	case "sync", "async", "either":
+		return true
+	default:
+		return false
+	}
+}
+
+func validSideEffects(value string) bool {
+	switch value {
+	case "none", "read", "write", "external", "destructive":
+		return true
+	default:
+		return false
+	}
 }

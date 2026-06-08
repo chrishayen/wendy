@@ -181,8 +181,11 @@ func validValidationManifest(serviceID, capabilityID string) map[string]any {
 						"message": map[string]any{"type": "string"},
 					},
 				},
-				"side_effects": "none",
-				"timeout_hint": "30s",
+				"examples":       []any{},
+				"side_effects":   "none",
+				"resource_hints": []any{},
+				"artifact_hints": []any{},
+				"timeout_hint":   "30s",
 			},
 		},
 	}

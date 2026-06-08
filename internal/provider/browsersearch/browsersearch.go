@@ -664,7 +664,7 @@ func manifest(cfg Config) contracts.ProviderManifest {
 					},
 				},
 				Examples:      []map[string]any{{"action": "fetch", "url": "https://example.com", "extract_text": true, "include_links": true}},
-				SideEffects:   "network",
+				SideEffects:   "external",
 				ResourceHints: []contracts.ResourceHint{},
 				ArtifactHints: []contracts.ArtifactHint{},
 				TimeoutHint:   "30s",

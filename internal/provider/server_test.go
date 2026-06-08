@@ -215,7 +215,7 @@ func TestServerExposesArtifactProducingHandler(t *testing.T) {
 			},
 		},
 		Examples:      []map[string]any{},
-		SideEffects:   "writes artifact output",
+		SideEffects:   "write",
 		ResourceHints: []contracts.ResourceHint{},
 		ArtifactHints: []contracts.ArtifactHint{{MediaType: "text/plain", Count: "one"}},
 		TimeoutHint:   "30s",

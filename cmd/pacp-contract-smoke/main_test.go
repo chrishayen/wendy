@@ -345,9 +345,11 @@ func smokeProviderManifest(endpoint string) contracts.ProviderManifest {
 					"reply": map[string]any{"type": "string"},
 				},
 			},
-			Examples:    []map[string]any{},
-			SideEffects: "none",
-			TimeoutHint: "30s",
+			Examples:      []map[string]any{},
+			SideEffects:   "none",
+			ResourceHints: []contracts.ResourceHint{},
+			ArtifactHints: []contracts.ArtifactHint{},
+			TimeoutHint:   "30s",
 		}},
 	}
 }
