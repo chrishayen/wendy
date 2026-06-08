@@ -70,6 +70,8 @@ paths:
   /one:
     get:
       operationId: duplicate
+      x-operation-audience: component
+      x-policy-action: test.read
       responses:
         "200":
           $ref: "#/components/responses/Success"
@@ -78,6 +80,8 @@ paths:
   /two:
     get:
       operationId: duplicate
+      x-operation-audience: component
+      x-policy-action: test.read
       responses:
         "200":
           $ref: "#/components/responses/Success"
@@ -119,6 +123,8 @@ paths:
   /one:
     get:
       operationId: one
+      x-operation-audience: component
+      x-policy-action: test.read
       responses:
         "200":
           $ref: "#/components/responses/Missing"
@@ -152,6 +158,8 @@ paths:
   /one:
     get:
       operationId: one
+      x-operation-audience: component
+      x-policy-action: test.read
       responses:
         "200":
           description: Raw response.
@@ -193,6 +201,8 @@ paths:
   /one:
     get:
       operationId: one
+      x-operation-audience: component
+      x-policy-action: test.read
       responses:
         "200":
           $ref: "#/components/responses/Success"
@@ -238,6 +248,8 @@ paths:
   /one:
     get:
       operationId: one
+      x-operation-audience: component
+      x-policy-action: test.read
       security:
         - bearerAuth: read
       responses:
@@ -275,6 +287,96 @@ components:
 	}
 }
 
+func TestValidateFileDetectsMissingOperationMetadata(t *testing.T) {
+	path := writeContract(t, `
+openapi: 3.1.0
+info:
+  title: Missing metadata
+  version: v1
+paths:
+  /one:
+    get:
+      operationId: one
+      responses:
+        "200":
+          $ref: "#/components/responses/Success"
+        default:
+          $ref: "#/components/responses/Error"
+components:
+  responses:
+    Success:
+      description: Success.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/SuccessEnvelope"
+    Error:
+      description: Error.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorEnvelope"
+  schemas:
+    SuccessEnvelope:
+      type: object
+    ErrorEnvelope:
+      type: object
+`)
+	report := ValidateFile(path)
+	if !hasFinding(report, "operation_audience_missing") {
+		t.Fatalf("expected missing audience finding, got %#v", report.Findings)
+	}
+	if !hasFinding(report, "policy_action_missing") {
+		t.Fatalf("expected missing policy action finding, got %#v", report.Findings)
+	}
+}
+
+func TestValidateFileDetectsInvalidOperationMetadata(t *testing.T) {
+	path := writeContract(t, `
+openapi: 3.1.0
+info:
+  title: Invalid metadata
+  version: v1
+paths:
+  /one:
+    get:
+      operationId: one
+      x-operation-audience: ["component", ""]
+      x-policy-action: []
+      responses:
+        "200":
+          $ref: "#/components/responses/Success"
+        default:
+          $ref: "#/components/responses/Error"
+components:
+  responses:
+    Success:
+      description: Success.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/SuccessEnvelope"
+    Error:
+      description: Error.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorEnvelope"
+  schemas:
+    SuccessEnvelope:
+      type: object
+    ErrorEnvelope:
+      type: object
+`)
+	report := ValidateFile(path)
+	if !hasFinding(report, "operation_audience_invalid") {
+		t.Fatalf("expected invalid audience finding, got %#v", report.Findings)
+	}
+	if !hasFinding(report, "policy_action_invalid") {
+		t.Fatalf("expected invalid policy action finding, got %#v", report.Findings)
+	}
+}
+
 func TestValidateFileAllowsBinarySuccessResponse(t *testing.T) {
 	path := writeContract(t, `
 openapi: 3.1.0
@@ -285,6 +387,8 @@ paths:
   /content:
     get:
       operationId: readContent
+      x-operation-audience: component
+      x-policy-action: artifact.read
       responses:
         "200":
           description: Bytes.

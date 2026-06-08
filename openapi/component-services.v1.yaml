@@ -36,6 +36,8 @@ paths:
     get:
       tags: [catalog]
       operationId: getCatalogHealth
+      x-operation-audience: monitor
+      x-policy-action: catalog.health.read
       responses:
         "200":
           $ref: "#/components/responses/Health"
@@ -45,6 +47,8 @@ paths:
     get:
       tags: [catalog]
       operationId: getCatalogMetrics
+      x-operation-audience: monitor
+      x-policy-action: catalog.metrics.read
       responses:
         "200":
           $ref: "#/components/responses/Metrics"
@@ -177,6 +181,8 @@ paths:
     get:
       tags: [jobs]
       operationId: getJobsHealth
+      x-operation-audience: monitor
+      x-policy-action: job.health.read
       responses:
         "200":
           $ref: "#/components/responses/Health"
@@ -186,6 +192,8 @@ paths:
     get:
       tags: [jobs]
       operationId: getJobsMetrics
+      x-operation-audience: monitor
+      x-policy-action: job.metrics.read
       responses:
         "200":
           $ref: "#/components/responses/Metrics"
@@ -406,6 +414,8 @@ paths:
     get:
       tags: [leases]
       operationId: getLeasesHealth
+      x-operation-audience: monitor
+      x-policy-action: lease.health.read
       responses:
         "200":
           $ref: "#/components/responses/Health"
@@ -415,6 +425,8 @@ paths:
     get:
       tags: [leases]
       operationId: getLeasesMetrics
+      x-operation-audience: monitor
+      x-policy-action: lease.metrics.read
       responses:
         "200":
           $ref: "#/components/responses/Metrics"
@@ -597,6 +609,8 @@ paths:
     get:
       tags: [artifacts]
       operationId: getArtifactsHealth
+      x-operation-audience: monitor
+      x-policy-action: artifact.health.read
       responses:
         "200":
           $ref: "#/components/responses/Health"
@@ -606,6 +620,8 @@ paths:
     get:
       tags: [artifacts]
       operationId: getArtifactsMetrics
+      x-operation-audience: monitor
+      x-policy-action: artifact.metrics.read
       responses:
         "200":
           $ref: "#/components/responses/Metrics"
@@ -797,6 +813,8 @@ paths:
     get:
       tags: [policy]
       operationId: getPolicyHealth
+      x-operation-audience: monitor
+      x-policy-action: policy.health.read
       responses:
         "200":
           $ref: "#/components/responses/Health"
@@ -806,6 +824,8 @@ paths:
     get:
       tags: [policy]
       operationId: getPolicyMetrics
+      x-operation-audience: monitor
+      x-policy-action: policy.metrics.read
       responses:
         "200":
           $ref: "#/components/responses/Metrics"
@@ -815,6 +835,8 @@ paths:
     post:
       tags: [policy]
       operationId: createAPIKey
+      x-operation-audience: admin
+      x-policy-action: policy.api_key.create
       requestBody:
         required: true
         content:
@@ -830,6 +852,8 @@ paths:
     post:
       tags: [policy]
       operationId: revokeAPIKey
+      x-operation-audience: admin
+      x-policy-action: policy.api_key.revoke
       parameters:
         - $ref: "#/components/parameters/KeyID"
       responses:
@@ -841,6 +865,8 @@ paths:
     post:
       tags: [policy]
       operationId: verifyCredential
+      x-operation-audience: component
+      x-policy-action: auth.verify
       requestBody:
         required: true
         content:
@@ -856,6 +882,8 @@ paths:
     post:
       tags: [policy]
       operationId: checkPolicy
+      x-operation-audience: component
+      x-policy-action: policy.check
       requestBody:
         required: true
         content:
@@ -871,6 +899,8 @@ paths:
     post:
       tags: [policy]
       operationId: createPolicyRule
+      x-operation-audience: admin
+      x-policy-action: policy.rule.create
       requestBody:
         required: true
         content:
@@ -886,6 +916,8 @@ paths:
     post:
       tags: [policy]
       operationId: createSecret
+      x-operation-audience: admin
+      x-policy-action: secret.create
       requestBody:
         required: true
         content:
@@ -901,6 +933,8 @@ paths:
     post:
       tags: [policy]
       operationId: resolveSecret
+      x-operation-audience: component
+      x-policy-action: secret.resolve
       requestBody:
         required: true
         content:
@@ -916,6 +950,8 @@ paths:
     post:
       tags: [policy]
       operationId: redactText
+      x-operation-audience: component
+      x-policy-action: secret.redact
       requestBody:
         required: true
         content:
@@ -932,6 +968,8 @@ paths:
     get:
       tags: [node]
       operationId: getNodeHealth
+      x-operation-audience: monitor
+      x-policy-action: node.health.read
       security:
         - nodeBearer: []
       responses:
@@ -943,6 +981,8 @@ paths:
     get:
       tags: [node]
       operationId: getNodeMetrics
+      x-operation-audience: monitor
+      x-policy-action: node.metrics.read
       security:
         - nodeBearer: []
       responses:
@@ -954,6 +994,8 @@ paths:
     get:
       tags: [node]
       operationId: listNodeResources
+      x-operation-audience: [component, worker]
+      x-policy-action: node.read
       security:
         - nodeBearer: []
       responses:
@@ -965,6 +1007,8 @@ paths:
     get:
       tags: [node]
       operationId: listNodeServices
+      x-operation-audience: [component, worker]
+      x-policy-action: node.read
       security:
         - nodeBearer: []
       responses:
@@ -976,6 +1020,8 @@ paths:
     get:
       tags: [node]
       operationId: getNodeService
+      x-operation-audience: [component, worker]
+      x-policy-action: node.read
       security:
         - nodeBearer: []
       parameters:
@@ -989,6 +1035,8 @@ paths:
     post:
       tags: [node]
       operationId: startNodeService
+      x-operation-audience: worker
+      x-policy-action: node.service.start
       security:
         - nodeBearer: []
       parameters:
@@ -1005,6 +1053,8 @@ paths:
     post:
       tags: [node]
       operationId: stopNodeService
+      x-operation-audience: worker
+      x-policy-action: node.service.stop
       security:
         - nodeBearer: []
       parameters:
@@ -1022,6 +1072,8 @@ paths:
     get:
       tags: [provider]
       operationId: getProviderManifest
+      x-operation-audience: [component, worker, agent]
+      x-policy-action: provider.manifest.read
       security: []
       responses:
         "200":
@@ -1041,6 +1093,8 @@ paths:
     get:
       tags: [provider]
       operationId: getProviderHealth
+      x-operation-audience: monitor
+      x-policy-action: provider.health.read
       security: []
       responses:
         "200":
@@ -1051,6 +1105,8 @@ paths:
     get:
       tags: [provider]
       operationId: getProviderMetrics
+      x-operation-audience: monitor
+      x-policy-action: provider.metrics.read
       security: []
       responses:
         "200":
@@ -1061,6 +1117,8 @@ paths:
     post:
       tags: [provider]
       operationId: invokeProviderCapability
+      x-operation-audience: worker
+      x-policy-action: provider.invoke
       security: []
       parameters:
         - $ref: "#/components/parameters/CapabilityID"
@@ -1092,6 +1150,8 @@ paths:
     get:
       tags: [runner]
       operationId: getRunnerHealth
+      x-operation-audience: monitor
+      x-policy-action: runner.health.read
       security:
         - runnerMonitorBearer: []
       responses:
@@ -1103,6 +1163,8 @@ paths:
     get:
       tags: [runner]
       operationId: getRunnerMetrics
+      x-operation-audience: monitor
+      x-policy-action: runner.metrics.read
       security:
         - runnerMonitorBearer: []
       responses:

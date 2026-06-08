@@ -195,6 +195,7 @@ func validateOperations(report *FileReport, doc map[string]any, paths map[string
 			} else {
 				seenOperationIDs[operationID] = location
 			}
+			validateOperationMetadata(report, location, operation)
 			responses, ok := asMap(operation["responses"])
 			if !ok {
 				report.add("responses_missing", location+"/responses", "responses object is required")
@@ -212,6 +213,35 @@ func validateOperations(report *FileReport, doc map[string]any, paths map[string
 				}
 			}
 		}
+	}
+}
+
+func validateOperationMetadata(report *FileReport, location string, operation map[string]any) {
+	validateStringOrStringList(report, location+"/x-operation-audience", operation["x-operation-audience"], "operation_audience_missing", "operation_audience_invalid", "x-operation-audience is required")
+	validateStringOrStringList(report, location+"/x-policy-action", operation["x-policy-action"], "policy_action_missing", "policy_action_invalid", "x-policy-action is required")
+}
+
+func validateStringOrStringList(report *FileReport, location string, raw any, missingCode, invalidCode, missingMessage string) {
+	switch typed := raw.(type) {
+	case nil:
+		report.add(missingCode, location, missingMessage)
+	case string:
+		if strings.TrimSpace(typed) == "" {
+			report.add(invalidCode, location, "value must be a non-empty string or non-empty string array")
+		}
+	case []any:
+		if len(typed) == 0 {
+			report.add(invalidCode, location, "value must be a non-empty string or non-empty string array")
+			return
+		}
+		for i, item := range typed {
+			value, ok := item.(string)
+			if !ok || strings.TrimSpace(value) == "" {
+				report.add(invalidCode, fmt.Sprintf("%s/%d", location, i), "array items must be non-empty strings")
+			}
+		}
+	default:
+		report.add(invalidCode, location, "value must be a non-empty string or non-empty string array")
 	}
 }
 

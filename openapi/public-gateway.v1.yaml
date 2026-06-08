@@ -12,6 +12,8 @@ paths:
   /v1/gateway/health:
     get:
       operationId: getGatewayHealth
+      x-operation-audience: public
+      x-policy-action: gateway.health.read
       summary: Read gateway health without requiring downstream component calls.
       security: []
       responses:
@@ -26,6 +28,8 @@ paths:
   /v1/gateway/metrics:
     get:
       operationId: getGatewayMetrics
+      x-operation-audience: public
+      x-policy-action: gateway.metrics.read
       summary: Read gateway metrics without requiring downstream component calls.
       security: []
       responses:
@@ -40,6 +44,8 @@ paths:
   /v1/tools:
     get:
       operationId: listTools
+      x-operation-audience: agent
+      x-policy-action: tool.discover
       summary: List tools visible to the authenticated agent.
       responses:
         "200":
@@ -53,6 +59,8 @@ paths:
   /v1/tools/{capability_id}:
     get:
       operationId: getTool
+      x-operation-audience: agent
+      x-policy-action: tool.discover
       summary: Read one tool definition.
       parameters:
         - $ref: "#/components/parameters/CapabilityID"
@@ -68,6 +76,8 @@ paths:
   /v1/tools/{capability_id}/invoke:
     post:
       operationId: invokeTool
+      x-operation-audience: agent
+      x-policy-action: tool.invoke
       summary: Invoke a tool synchronously or enqueue an async job.
       parameters:
         - $ref: "#/components/parameters/CapabilityID"
@@ -96,6 +106,8 @@ paths:
   /v1/agent/jobs/{job_id}:
     get:
       operationId: getAgentJob
+      x-operation-audience: agent
+      x-policy-action: job.read
       summary: Read an agent-safe job projection.
       parameters:
         - $ref: "#/components/parameters/JobID"
@@ -111,6 +123,8 @@ paths:
   /v1/agent/jobs/{job_id}/cancel:
     post:
       operationId: cancelAgentJob
+      x-operation-audience: agent
+      x-policy-action: job.cancel
       summary: Cancel a queued job owned by the authenticated agent.
       parameters:
         - $ref: "#/components/parameters/JobID"
@@ -133,6 +147,8 @@ paths:
   /v1/agent/jobs/{job_id}/logs:
     get:
       operationId: getAgentJobLogs
+      x-operation-audience: agent
+      x-policy-action: job.read
       summary: Read public job logs.
       parameters:
         - $ref: "#/components/parameters/JobID"
@@ -161,6 +177,8 @@ paths:
   /v1/agent/jobs/{job_id}/artifacts:
     get:
       operationId: listAgentJobArtifacts
+      x-operation-audience: agent
+      x-policy-action: artifact.read
       summary: List artifacts produced by a job.
       parameters:
         - $ref: "#/components/parameters/JobID"
@@ -176,6 +194,8 @@ paths:
   /v1/artifacts/{artifact_id}/content:
     get:
       operationId: readArtifactContent
+      x-operation-audience: agent
+      x-policy-action: artifact.read
       summary: Read artifact bytes through the gateway.
       parameters:
         - $ref: "#/components/parameters/ArtifactID"
