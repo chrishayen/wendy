@@ -767,7 +767,7 @@ func TestDiagnoseJobFetchesJobAndLogsWithComponentToken(t *testing.T) {
 						},
 					},
 				},
-				"artifact_refs": []any{},
+				"artifact_refs": []any{"art_1"},
 				"links":         map[string]any{},
 			})
 		case "/v1/jobs/job_1/logs":
@@ -834,6 +834,21 @@ func TestDiagnoseJobFetchesJobAndLogsWithComponentToken(t *testing.T) {
 				"provider_endpoint": "http://node-linux:8188",
 				"links":             map[string]any{},
 			})
+		case "/v1/artifacts/art_1":
+			if r.Header.Get("Authorization") != "Bearer component-token" {
+				t.Fatalf("%s Authorization = %q", r.URL.Path, r.Header.Get("Authorization"))
+			}
+			writeEnvelope(t, w, http.StatusOK, map[string]any{
+				"artifact_id":      "art_1",
+				"name":             "output.png",
+				"media_type":       "image/png",
+				"size":             68,
+				"checksum":         "sha256:abc",
+				"created_at":       now.Format(time.RFC3339),
+				"producer_ref":     "job_1",
+				"owner_subject_id": "sub_agent",
+				"links":            map[string]any{},
+			})
 		default:
 			t.Fatalf("request = %s %s", r.Method, r.URL.Path)
 		}
@@ -844,6 +859,7 @@ func TestDiagnoseJobFetchesJobAndLogsWithComponentToken(t *testing.T) {
 	code := run([]string{
 		"-jobs-url", server.URL,
 		"-leases-url", server.URL,
+		"-artifacts-url", server.URL,
 		"-node-urls", "node_linux_gpu=" + server.URL,
 		"-node-token", "node-token",
 		"-component-token", "component-token",
@@ -858,6 +874,9 @@ func TestDiagnoseJobFetchesJobAndLogsWithComponentToken(t *testing.T) {
 	if !seen["/v1/resources"] || !seen["/v1/resources/res_gpu_0/inspection"] || !seen["/v1/node/services/svc_comfyui_gpu"] {
 		t.Fatalf("seen requests = %#v", seen)
 	}
+	if !seen["/v1/artifacts/art_1"] {
+		t.Fatalf("seen requests = %#v", seen)
+	}
 	output := stdout.String()
 	for _, expected := range []string{
 		`"admin_command": "diagnose job"`,
@@ -867,9 +886,11 @@ func TestDiagnoseJobFetchesJobAndLogsWithComponentToken(t *testing.T) {
 		`"code": "lease_resources_found"`,
 		`"code": "resource_queue_depth"`,
 		`"code": "node_service_status"`,
+		`"code": "artifact_metadata_available"`,
 		`"lease_resources"`,
 		`"lease_inspections"`,
 		`"node_service"`,
+		`"artifact_metadata"`,
 		`"check node health and service status"`,
 	} {
 		if !strings.Contains(output, expected) {

@@ -215,6 +215,7 @@ type jobDiagnosticData struct {
 	LeaseResources   []contracts.ResourceRecord     `json:"lease_resources,omitempty"`
 	LeaseInspections []contracts.ResourceInspection `json:"lease_inspections,omitempty"`
 	NodeService      *contracts.NodeService         `json:"node_service,omitempty"`
+	ArtifactMetadata []contracts.Artifact           `json:"artifact_metadata,omitempty"`
 	Findings         []diagnosticFinding            `json:"findings"`
 	SuggestedActions []string                       `json:"suggested_actions"`
 }
@@ -1211,6 +1212,9 @@ func enrichJobDiagnostics(cfg adminConfig, httpClient *http.Client, data *jobDia
 	if resourceSelector != "" {
 		enrichLeaseDiagnostics(cfg, httpClient, resourceSelector, data)
 	}
+	if len(data.Job.ArtifactRefs) > 0 {
+		enrichArtifactDiagnostics(cfg, httpClient, data)
+	}
 
 	route, _ := plan["route"].(map[string]any)
 	nodeManaged, _ := route["node_managed"].(bool)
@@ -1220,6 +1224,40 @@ func enrichJobDiagnostics(cfg adminConfig, httpClient *http.Client, data *jobDia
 	nodeID, _ := route["node_id"].(string)
 	serviceID, _ := route["service_id"].(string)
 	enrichNodeServiceDiagnostics(cfg, httpClient, nodeID, serviceID, data)
+}
+
+func enrichArtifactDiagnostics(cfg adminConfig, httpClient *http.Client, data *jobDiagnosticData) {
+	for _, artifactID := range data.Job.ArtifactRefs {
+		artifactID = strings.TrimSpace(artifactID)
+		if artifactID == "" {
+			continue
+		}
+		var artifactEnvelope struct {
+			OK    bool                  `json:"ok"`
+			Data  contracts.Artifact    `json:"data"`
+			Error contracts.ErrorObject `json:"error"`
+		}
+		path := "/v1/artifacts/" + url.PathEscape(artifactID)
+		status, err := getJSONDecode(cfg, httpClient, cfg.ArtifactsURL, path, authorizationHeader(cfg.ComponentToken), &artifactEnvelope)
+		if err != nil {
+			data.Findings = append(data.Findings, diagnosticFinding{Severity: "warning", Code: "artifact_metadata_unavailable", Message: artifactID + ": " + err.Error()})
+			addSuggestedAction(&data.SuggestedActions, "inspect artifact service health and permissions")
+			continue
+		}
+		if status < 200 || status >= 300 || !artifactEnvelope.OK {
+			message := artifactEnvelope.Error.Message
+			if message == "" {
+				message = fmt.Sprintf("artifact service returned HTTP %d for artifact %s", status, artifactID)
+			}
+			data.Findings = append(data.Findings, diagnosticFinding{Severity: "warning", Code: "artifact_metadata_unavailable", Message: message})
+			addSuggestedAction(&data.SuggestedActions, "inspect artifact service health and permissions")
+			continue
+		}
+		data.ArtifactMetadata = append(data.ArtifactMetadata, artifactEnvelope.Data)
+	}
+	if len(data.ArtifactMetadata) > 0 {
+		data.Findings = append(data.Findings, diagnosticFinding{Severity: "info", Code: "artifact_metadata_available", Message: fmt.Sprintf("artifact service returned metadata for %d artifact(s)", len(data.ArtifactMetadata))})
+	}
 }
 
 func enrichLeaseDiagnostics(cfg adminConfig, httpClient *http.Client, resourceSelector string, data *jobDiagnosticData) {
