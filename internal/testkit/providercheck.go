@@ -54,6 +54,9 @@ func CheckProvider(ctx context.Context, httpClient *http.Client, opts ProviderCh
 	invoked := false
 	if strings.TrimSpace(opts.CapabilityID) != "" {
 		invoked = checkProviderInvoke(ctx, httpClient, baseURL, manifest, opts, &report)
+		if invoked {
+			checkProviderInvalidInput(ctx, httpClient, baseURL, manifest, strings.TrimSpace(opts.CapabilityID), &report)
+		}
 	}
 	checkProviderMetrics(ctx, httpClient, baseURL, strings.TrimSpace(opts.CapabilityID), invoked, &report)
 	return report
@@ -185,6 +188,40 @@ func checkProviderInvoke(ctx context.Context, httpClient *http.Client, baseURL s
 	return true
 }
 
+func checkProviderInvalidInput(ctx context.Context, httpClient *http.Client, baseURL string, manifest contracts.ProviderManifest, capabilityID string, report *ProviderCheckReport) {
+	capability, ok := findCapability(manifest, capabilityID)
+	if !ok || len(requiredFields(capability.InputSchema)) == 0 {
+		return
+	}
+	request := contracts.ProviderInvokeRequest{Input: map[string]any{}}
+	var envelope rawErrorEnvelope
+	path := "/v1/provider/capabilities/" + url.PathEscape(capabilityID) + "/invoke"
+	status, err := postEnvelope(ctx, httpClient, joinURLPath(baseURL, path), request, &envelope)
+	result := ProviderCheckResult{Name: "provider.invalid_input", HTTPStatus: status}
+	if err != nil {
+		result.Error = err.Error()
+		report.add(result)
+		return
+	}
+	if status != http.StatusBadRequest {
+		result.Error = fmt.Sprintf("HTTP %d, want 400", status)
+		report.add(result)
+		return
+	}
+	if envelope.OK {
+		result.Error = "invalid input response was ok"
+		report.add(result)
+		return
+	}
+	if envelope.Error.Code != "validation_failed" {
+		result.Error = "invalid input error code was " + envelope.Error.Code
+		report.add(result)
+		return
+	}
+	result.OK = true
+	report.add(result)
+}
+
 func checkProviderMetrics(ctx context.Context, httpClient *http.Client, baseURL, capabilityID string, expectInvocation bool, report *ProviderCheckReport) {
 	var envelope rawSuccessEnvelope
 	status, err := getEnvelope(ctx, httpClient, joinURLPath(baseURL, "/v1/provider/metrics"), &envelope)
@@ -270,6 +307,32 @@ func (r *ProviderCheckReport) add(result ProviderCheckResult) {
 type rawSuccessEnvelope struct {
 	OK   bool            `json:"ok"`
 	Data json.RawMessage `json:"data"`
+}
+
+type rawErrorEnvelope struct {
+	OK    bool                  `json:"ok"`
+	Error contracts.ErrorObject `json:"error"`
+}
+
+func requiredFields(schema map[string]any) []string {
+	raw, ok := schema["required"]
+	if !ok {
+		return nil
+	}
+	switch typed := raw.(type) {
+	case []string:
+		return typed
+	case []any:
+		out := make([]string, 0, len(typed))
+		for _, item := range typed {
+			if value, ok := item.(string); ok {
+				out = append(out, value)
+			}
+		}
+		return out
+	default:
+		return nil
+	}
 }
 
 func getEnvelope(ctx context.Context, httpClient *http.Client, endpoint string, out any) (int, error) {

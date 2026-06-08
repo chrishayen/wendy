@@ -49,6 +49,10 @@ func TestCheckProviderInvoke(t *testing.T) {
 				t.Fatalf("decode invoke: %v", err)
 			}
 			if req.Input["message"] != "hello" {
+				if _, exists := req.Input["message"]; !exists {
+					writeTestErrorEnvelope(t, w, http.StatusBadRequest, "validation_failed", "message is required")
+					return
+				}
 				t.Fatalf("input = %#v", req.Input)
 			}
 			writeTestEnvelope(t, w, http.StatusOK, contracts.ProviderInvokeResponse{
@@ -81,7 +85,7 @@ func TestCheckProviderInvoke(t *testing.T) {
 	if !invoked {
 		t.Fatal("provider was not invoked")
 	}
-	if len(report.Checks) != 4 {
+	if len(report.Checks) != 5 {
 		t.Fatalf("checks = %#v", report.Checks)
 	}
 }
@@ -174,6 +178,20 @@ func writeTestEnvelope(t *testing.T, w http.ResponseWriter, status int, data any
 		"meta":  map[string]any{"request_id": "req_test", "schema_version": "v1"},
 	}); err != nil {
 		t.Fatalf("encode envelope: %v", err)
+	}
+}
+
+func writeTestErrorEnvelope(t *testing.T, w http.ResponseWriter, status int, code, message string) {
+	t.Helper()
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	if err := json.NewEncoder(w).Encode(map[string]any{
+		"ok":    false,
+		"error": map[string]any{"code": code, "message": message, "retryable": false},
+		"links": map[string]any{},
+		"meta":  map[string]any{"request_id": "req_test", "schema_version": "v1"},
+	}); err != nil {
+		t.Fatalf("encode error envelope: %v", err)
 	}
 }
 

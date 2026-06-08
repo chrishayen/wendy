@@ -42,6 +42,10 @@ func TestRunProviderSmokeChecksLiveProvider(t *testing.T) {
 				t.Fatalf("decode invoke: %v", err)
 			}
 			if req.Input["message"] != "hello" {
+				if _, exists := req.Input["message"]; !exists {
+					writeSmokeErrorEnvelope(t, w, http.StatusBadRequest, "validation_failed", "message is required")
+					return
+				}
 				t.Fatalf("input = %#v", req.Input)
 			}
 			writeSmokeEnvelope(t, w, http.StatusOK, contracts.ProviderInvokeResponse{
@@ -76,6 +80,7 @@ func TestRunProviderSmokeChecksLiveProvider(t *testing.T) {
 		"check=provider.manifest status=pass",
 		"check=provider.health status=pass",
 		"check=provider.invoke status=pass",
+		"check=provider.invalid_input status=pass",
 		"check=provider.metrics status=pass",
 		"contract-smoke=pass",
 	} {
@@ -220,5 +225,19 @@ func writeSmokeEnvelope(t *testing.T, w http.ResponseWriter, status int, data an
 		"meta":  map[string]any{"request_id": "req_test", "schema_version": "v1"},
 	}); err != nil {
 		t.Fatalf("encode envelope: %v", err)
+	}
+}
+
+func writeSmokeErrorEnvelope(t *testing.T, w http.ResponseWriter, status int, code, message string) {
+	t.Helper()
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	if err := json.NewEncoder(w).Encode(map[string]any{
+		"ok":    false,
+		"error": map[string]any{"code": code, "message": message, "retryable": false},
+		"links": map[string]any{},
+		"meta":  map[string]any{"request_id": "req_test", "schema_version": "v1"},
+	}); err != nil {
+		t.Fatalf("encode error envelope: %v", err)
 	}
 }
