@@ -209,6 +209,10 @@ type healthOptions struct {
 	Providers bool
 }
 
+type metricsOptions struct {
+	Providers bool
+}
+
 type alertOptions struct {
 	QueueDepthThreshold       int
 	RunnerHeartbeatStaleAfter time.Duration
@@ -265,14 +269,15 @@ func healthCommand(cfg adminConfig, httpClient *http.Client, args []string, stdo
 func metricsCommand(cfg adminConfig, httpClient *http.Client, args []string, stdout, stderr io.Writer) int {
 	flags := flag.NewFlagSet("metrics", flag.ContinueOnError)
 	flags.SetOutput(stderr)
+	providers := flags.Bool("providers", false, "collect registered provider metrics through catalog routes")
 	remaining, err := parseSubcommandFlags(flags, args)
 	if err != nil {
 		return 2
 	}
 	if len(remaining) != 0 {
-		return usage(stderr, "usage: pacp-admin [flags] metrics")
+		return usage(stderr, "usage: pacp-admin [flags] metrics [-providers]")
 	}
-	report := collectMetrics(cfg, httpClient)
+	report := collectMetrics(cfg, httpClient, metricsOptions{Providers: *providers})
 	if err := writeJSON(stdout, report); err != nil {
 		fmt.Fprintf(stderr, "write metrics report: %v\n", err)
 		return 1
@@ -304,7 +309,7 @@ func alertsCommand(cfg adminConfig, httpClient *http.Client, args []string, stdo
 		return usage(stderr, "runner-heartbeat-stale-after must be zero or greater")
 	}
 	health := checkHealth(cfg, httpClient, healthOptions{Providers: *providers})
-	metrics := collectMetrics(cfg, httpClient)
+	metrics := collectMetrics(cfg, httpClient, metricsOptions{Providers: *providers})
 	report := buildAlertsReport(health, metrics, alertOptions{
 		QueueDepthThreshold:       *queueDepthThreshold,
 		RunnerHeartbeatStaleAfter: *runnerHeartbeatStaleAfter,
@@ -1975,7 +1980,7 @@ func checkHealth(cfg adminConfig, httpClient *http.Client, opts healthOptions) h
 	return report
 }
 
-func collectMetrics(cfg adminConfig, httpClient *http.Client) metricsReport {
+func collectMetrics(cfg adminConfig, httpClient *http.Client, opts metricsOptions) metricsReport {
 	ctx := context.Background()
 	if cfg.Timeout > 0 {
 		var cancel context.CancelFunc
@@ -1997,6 +2002,16 @@ func collectMetrics(cfg adminConfig, httpClient *http.Client) metricsReport {
 	for _, target := range targets {
 		item := checkMetricsTarget(ctx, httpClient, target)
 		addMetricsItem(&report, item, target.Required || target.URL != "")
+	}
+	if opts.Providers {
+		providerTargets, discoveryItem := discoverProviderMetricsTargets(ctx, httpClient, cfg)
+		if discoveryItem != nil {
+			addMetricsItem(&report, *discoveryItem, discoveryItem.Error != "")
+		}
+		for _, target := range providerTargets {
+			item := checkMetricsTarget(ctx, httpClient, target)
+			addMetricsItem(&report, item, true)
+		}
 	}
 	return report
 }
@@ -2090,10 +2105,11 @@ func nodeMetricsTargets(cfg adminConfig) []serviceTarget {
 func checkMetricsTarget(ctx context.Context, httpClient *http.Client, target serviceTarget) metricsItem {
 	baseURL := strings.TrimRight(strings.TrimSpace(target.URL), "/")
 	item := metricsItem{
-		Name:   target.Name,
-		Kind:   target.Kind,
-		NodeID: target.NodeID,
-		URL:    baseURL,
+		Name:      target.Name,
+		Kind:      target.Kind,
+		ServiceID: target.ServiceID,
+		NodeID:    target.NodeID,
+		URL:       baseURL,
 	}
 	if target.ConfigError != "" {
 		item.Error = target.ConfigError
@@ -2335,6 +2351,18 @@ func addMetricFindings(report *alertsReport, item metricsItem, opts alertOptions
 			state := sample.Labels["state"]
 			if (state == string(contracts.ArtifactUploadAborted) || state == string(contracts.ArtifactUploadExpired)) && sample.Value > 0 {
 				addAlertFinding(report, diagnosticFinding{Severity: "warning", Code: "artifact_uploads_not_completed", Message: fmt.Sprintf("%s has %.0f %s artifact upload(s)", item.Name, sample.Value, state)})
+			}
+		case "provider_invocation_errors_total":
+			if sample.Value > 0 {
+				capabilityID := sample.Labels["capability_id"]
+				if capabilityID == "" {
+					capabilityID = "unknown"
+				}
+				errorCode := sample.Labels["error_code"]
+				if errorCode == "" {
+					errorCode = "unknown"
+				}
+				addAlertFinding(report, diagnosticFinding{Severity: "warning", Code: "provider_invocation_errors", Message: fmt.Sprintf("%s recorded %.0f provider invocation error(s) for %s, error_code=%s", item.Name, sample.Value, capabilityID, errorCode)})
 			}
 		case "policy_decisions_total":
 			if sample.Labels["decision"] == "deny" && sample.Value > 0 {
@@ -2664,6 +2692,33 @@ func discoverProviderHealthTargets(ctx context.Context, httpClient *http.Client,
 			Status: "skipped",
 			Error:  "catalog returned no provider endpoints",
 		}
+	}
+	return targets, nil
+}
+
+func discoverProviderMetricsTargets(ctx context.Context, httpClient *http.Client, cfg adminConfig) ([]serviceTarget, *metricsItem) {
+	targets, discoveryItem := discoverProviderHealthTargets(ctx, httpClient, cfg)
+	if discoveryItem != nil {
+		item := metricsItem{
+			Name:       discoveryItem.Name,
+			Kind:       discoveryItem.Kind,
+			ServiceID:  discoveryItem.ServiceID,
+			NodeID:     discoveryItem.NodeID,
+			URL:        discoveryItem.URL,
+			MetricsURL: discoveryItem.HealthURL,
+			HTTPStatus: discoveryItem.HTTPStatus,
+			Error:      discoveryItem.Error,
+		}
+		if discoveryItem.Status == "skipped" {
+			item.URL = ""
+			item.MetricsURL = ""
+			item.Error = ""
+		}
+		return nil, &item
+	}
+	for i := range targets {
+		targets[i].HealthPath = ""
+		targets[i].MetricsPath = "/v1/provider/metrics"
 	}
 	return targets, nil
 }

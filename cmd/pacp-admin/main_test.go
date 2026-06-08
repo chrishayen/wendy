@@ -406,6 +406,67 @@ func TestMetricsIncludesConfiguredRunnerMonitor(t *testing.T) {
 	}
 }
 
+func TestMetricsCanIncludeProviderMetrics(t *testing.T) {
+	providerMetricHits := 0
+	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/v1/provider/metrics" {
+			t.Fatalf("provider request = %s %s", r.Method, r.URL.Path)
+		}
+		providerMetricHits++
+		writeMetrics(t, w, http.StatusOK, "provider", []map[string]any{{
+			"name":  "provider_invocations_total",
+			"value": 3,
+			"unit":  "count",
+			"labels": map[string]string{
+				"service_id":    "svc_search",
+				"capability_id": "cap_search",
+				"status":        "success",
+			},
+		}})
+	}))
+	defer provider.Close()
+
+	catalog := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/catalog/capabilities":
+			if r.Header.Get("Authorization") != "Bearer component-token" {
+				t.Fatalf("catalog capabilities Authorization = %q", r.Header.Get("Authorization"))
+			}
+			writeEnvelope(t, w, http.StatusOK, map[string]any{
+				"items": []map[string]any{{
+					"route": map[string]any{
+						"capability_id":     "cap_search",
+						"service_id":        "svc_search",
+						"provider_endpoint": provider.URL,
+					},
+					"service": map[string]any{"id": "svc_search"},
+				}},
+			})
+		default:
+			writeMetrics(t, w, http.StatusOK, "component", []map[string]any{})
+		}
+	}))
+	defer catalog.Close()
+
+	args := append(coreURLArgs(catalog.URL),
+		"-component-token", "component-token",
+		"metrics", "-providers",
+	)
+	var stdout, stderr bytes.Buffer
+	code := run(args, &stdout, &stderr, catalog.Client())
+	if code != 0 {
+		t.Fatalf("code=%d stderr=%s stdout=%s", code, stderr.String(), stdout.String())
+	}
+	if providerMetricHits != 1 {
+		t.Fatalf("provider metric hits = %d", providerMetricHits)
+	}
+	report := decodeMetricsReport(t, stdout.Bytes())
+	item := findMetricsItem(report, "provider:svc_search")
+	if item == nil || item.Kind != "provider" || item.ServiceID != "svc_search" || item.Component != "provider" {
+		t.Fatalf("provider metrics item = %#v", item)
+	}
+}
+
 func TestMetricsFailsWhenRequiredComponentUnavailable(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/v1/jobs/metrics" {
@@ -512,12 +573,21 @@ func TestAlertsReportsHealthAndMetricFindings(t *testing.T) {
 
 func TestAlertsCanIncludeProviderHealthFindings(t *testing.T) {
 	providerHealthHits := 0
+	providerMetricHits := 0
 	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet || r.URL.Path != "/v1/provider/health" {
+		if r.Method != http.MethodGet {
 			t.Fatalf("provider request = %s %s", r.Method, r.URL.Path)
 		}
-		providerHealthHits++
-		writeHealth(t, w, http.StatusServiceUnavailable, "unhealthy")
+		switch r.URL.Path {
+		case "/v1/provider/health":
+			providerHealthHits++
+			writeHealth(t, w, http.StatusServiceUnavailable, "unhealthy")
+		case "/v1/provider/metrics":
+			providerMetricHits++
+			writeMetrics(t, w, http.StatusOK, "provider", []map[string]any{})
+		default:
+			t.Fatalf("provider request = %s %s", r.Method, r.URL.Path)
+		}
 	}))
 	defer provider.Close()
 
@@ -556,6 +626,9 @@ func TestAlertsCanIncludeProviderHealthFindings(t *testing.T) {
 	if providerHealthHits != 1 {
 		t.Fatalf("provider health hits = %d", providerHealthHits)
 	}
+	if providerMetricHits != 1 {
+		t.Fatalf("provider metric hits = %d", providerMetricHits)
+	}
 	output := stdout.String()
 	for _, expected := range []string{
 		`"code": "target_unhealthy"`,
@@ -573,6 +646,76 @@ func TestAlertsCanIncludeProviderHealthFindings(t *testing.T) {
 	}
 	if report.OK || report.Data.Summary.Errors == 0 {
 		t.Fatalf("report = %#v", report)
+	}
+}
+
+func TestAlertsCanIncludeProviderMetricFindings(t *testing.T) {
+	providerMetricHits := 0
+	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/provider/health":
+			writeHealth(t, w, http.StatusOK, "healthy")
+		case "/v1/provider/metrics":
+			providerMetricHits++
+			writeMetrics(t, w, http.StatusOK, "provider", []map[string]any{{
+				"name":  "provider_invocation_errors_total",
+				"value": 2,
+				"unit":  "count",
+				"labels": map[string]string{
+					"service_id":    "svc_search",
+					"capability_id": "cap_search",
+					"status":        "error",
+					"error_code":    "provider_unavailable",
+				},
+			}})
+		default:
+			t.Fatalf("provider request = %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer provider.Close()
+
+	catalog := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/v1/catalog/capabilities":
+			writeEnvelope(t, w, http.StatusOK, map[string]any{
+				"items": []map[string]any{{
+					"route": map[string]any{
+						"capability_id":        "cap_search",
+						"service_id":           "svc_search",
+						"provider_endpoint":    provider.URL,
+						"provider_health_path": "/v1/provider/health",
+					},
+					"service": map[string]any{"id": "svc_search"},
+				}},
+			})
+		case strings.HasSuffix(r.URL.Path, "/health"):
+			writeHealth(t, w, http.StatusOK, "healthy")
+		case strings.HasSuffix(r.URL.Path, "/metrics"):
+			writeMetrics(t, w, http.StatusOK, "component", []map[string]any{})
+		default:
+			t.Fatalf("request = %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer catalog.Close()
+
+	var stdout, stderr bytes.Buffer
+	code := run(append(coreURLArgs(catalog.URL), "alerts", "-providers"), &stdout, &stderr, catalog.Client())
+	if code != 0 {
+		t.Fatalf("code=%d stderr=%s stdout=%s", code, stderr.String(), stdout.String())
+	}
+	if providerMetricHits != 1 {
+		t.Fatalf("provider metric hits = %d", providerMetricHits)
+	}
+	output := stdout.String()
+	for _, expected := range []string{
+		`"code": "provider_invocation_errors"`,
+		`provider invocation error`,
+		`cap_search`,
+		`provider_unavailable`,
+	} {
+		if !strings.Contains(output, expected) {
+			t.Fatalf("stdout missing %q:\n%s", expected, output)
+		}
 	}
 }
 
@@ -2456,6 +2599,15 @@ func decodeMetricsReport(t *testing.T, raw []byte) metricsReport {
 }
 
 func findHealthItem(report healthReport, name string) *healthItem {
+	for i := range report.Data.Items {
+		if report.Data.Items[i].Name == name {
+			return &report.Data.Items[i]
+		}
+	}
+	return nil
+}
+
+func findMetricsItem(report metricsReport, name string) *metricsItem {
 	for i := range report.Data.Items {
 		if report.Data.Items[i].Name == name {
 			return &report.Data.Items[i]

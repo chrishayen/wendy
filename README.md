@@ -131,6 +131,7 @@ go run ./cmd/pacp-speech-provider -addr localhost:18091 -dry-run -voice-catalog 
 go run ./cmd/pacp-ai-toolkit-provider -addr localhost:18092 -dry-run -workspace testdata/ai-toolkit
 go run ./cmd/pacp-admin health
 go run ./cmd/pacp-admin -node-urls node_mac=http://mac:18087,node_linux_gpu=http://linux-box:18087 health -providers
+go run ./cmd/pacp-admin metrics -providers
 go run ./cmd/pacp-admin node-registry list
 go run ./cmd/pacp-admin node-registry register node_linux_gpu -url http://linux-box:18087 -trust-state trusted -status reachable -tags gpu,linux
 go run ./cmd/pacp-admin node-registry trust node_linux_gpu -trust-state disabled -reason "maintenance"
@@ -414,7 +415,7 @@ curl http://localhost:18089/v1/runner/metrics
 go run ./cmd/pacp-admin -node-url http://localhost:18087 -node-token token_agent_smoke health
 go run ./cmd/pacp-admin -node-urls node_linux_gpu=http://localhost:18087 -node-token token_agent_smoke health -providers
 go run ./cmd/pacp-admin -runner-url http://localhost:18089 health
-go run ./cmd/pacp-admin -node-urls node_linux_gpu=http://localhost:18087 -node-token token_agent_smoke -runner-url http://localhost:18089 metrics
+go run ./cmd/pacp-admin -node-urls node_linux_gpu=http://localhost:18087 -node-token token_agent_smoke -runner-url http://localhost:18089 metrics -providers
 go run ./cmd/pacp-admin -node-urls node_linux_gpu=http://localhost:18087 -node-token token_agent_smoke -runner-url http://localhost:18089 alerts -providers -node-registry -queue-depth-threshold 1 -runner-heartbeat-stale-after 5m
 go run ./cmd/pacp-admin catalog route cap_image_generate_gpu
 go run ./cmd/pacp-admin -node-url http://localhost:18087 -node-token token_agent_smoke node services
@@ -431,7 +432,9 @@ can be surfaced without direct store access.
 Artifact metrics include registration counts, content retrieval counts, upload
 states, and expiration counts.
 Provider metrics additionally expose invocation count, error count, and average
-duration by service id, capability id, status, and error code.
+duration by service id, capability id, status, and error code. Admin provider
+metrics and alerts discover provider metric endpoints from catalog routes when
+run with `-providers`.
 Runner metrics expose active job count, run loop results, successful heartbeat
 timestamps, and dependency reachability for configured primary APIs and nodes.
 Runner lease-expiration and artifact-materialization errors are surfaced
