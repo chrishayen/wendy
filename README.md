@@ -44,6 +44,8 @@ Contract simulation data is kept as test input, not as product behavior.
 - `cmd/pacp-node`: runnable runtime node agent for one configured service node.
 - `cmd/pacp-runner`: runnable composition runner.
 - `cmd/pacp-control`: JSON-first CLI for agent-facing gateway operations.
+- `cmd/pacp-dev`: one-command local development stack using the real service
+  HTTP boundaries.
 - `testdata/contract-sim`: accepted role-play fixtures copied from the vault.
 - `testdata/manifests`: sample provider manifests used by tests and examples.
 
@@ -52,6 +54,15 @@ Contract simulation data is kept as test input, not as product behavior.
 ```sh
 go test ./...
 go run ./cmd/pacp-contract-smoke
+go run ./cmd/pacp-dev
+go run ./cmd/pacp-control -gateway-url http://localhost:18086 -token token_agent tools
+go run ./cmd/pacp-control -gateway-url http://localhost:18086 -token token_agent invoke cap_dev_echo -idempotency-key echo-1 -input '{"message":"hello"}'
+go run ./cmd/pacp-control -gateway-url http://localhost:18086 -token token_agent invoke cap_dev_artifact -idempotency-key artifact-1 -input '{"prompt":"red mug"}'
+```
+
+The services can also be run separately for distributed testing:
+
+```sh
 go run ./cmd/pacp-fake-provider -addr localhost:18088
 go run ./cmd/pacp-catalog -addr localhost:18081 -manifest testdata/manifests/s003-comfyui-gpu.json
 go run ./cmd/pacp-jobs -addr localhost:18082
