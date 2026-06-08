@@ -37,19 +37,32 @@ func NewFixtureServer(pkg FixturePackage) *FixtureServer {
 		served:     map[int]int{},
 	}
 	for _, fixture := range pkg.File.Fixtures {
-		if fixture.Request == nil || fixture.Response == nil {
-			continue
+		server.addRoute(fixture.Request, fixture.Response)
+		for _, step := range fixture.Steps {
+			server.addRoute(step.Request, step.Response)
 		}
-		key := fixture.Request.Method + " " + fixture.Request.Path
-		id := server.nextID
-		server.nextID++
-		server.routes[key] = append(server.routes[key], fixtureRoute{
-			id:       id,
-			request:  *fixture.Request,
-			response: *fixture.Response,
-		})
+		if fixture.TimeoutInvoke != nil {
+			server.addRoute(fixture.TimeoutInvoke.Request, fixture.TimeoutInvoke.Response)
+		}
+		for _, step := range fixture.TimeoutCleanup {
+			server.addRoute(step.Request, step.Response)
+		}
 	}
 	return server
+}
+
+func (s *FixtureServer) addRoute(request *contracts.HTTPRequest, response *contracts.HTTPResponse) {
+	if request == nil || response == nil {
+		return
+	}
+	key := request.Method + " " + request.Path
+	id := s.nextID
+	s.nextID++
+	s.routes[key] = append(s.routes[key], fixtureRoute{
+		id:       id,
+		request:  *request,
+		response: *response,
+	})
 }
 
 func (s *FixtureServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {

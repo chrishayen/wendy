@@ -131,6 +131,27 @@ func TestProviderFixtureServerServesBinaryContent(t *testing.T) {
 	}
 }
 
+func TestFixtureServerServesNestedOrchestrationSteps(t *testing.T) {
+	scenario := loadS003(t)
+	pkg, ok := FindPackage(scenario, "composition-runner")
+	if !ok {
+		t.Fatalf("composition runner package not found")
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/lease-requests", strings.NewReader(`{"requester_id":"job_s003_0001","resource_selector":"gpu","priority":0,"heartbeat_timeout_seconds":60}`))
+	req.Header.Set("Authorization", "Bearer token_s003_runner")
+	rec := httptest.NewRecorder()
+	NewFixtureServer(pkg).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201; body=%s", rec.Code, rec.Body.String())
+	}
+	body := decodeMap(t, rec.Body)
+	if requestID(body) != "req_s003_lease_grant" {
+		t.Fatalf("request id = %s", requestID(body))
+	}
+}
+
 func postCancelFixture(t *testing.T, server *FixtureServer) *httptest.ResponseRecorder {
 	t.Helper()
 	req := httptest.NewRequest(http.MethodPost, "/v1/jobs/job_s003_0001/cancel", strings.NewReader(`{"requester_id":"sub_agent_s003","reason":"canceled by requester"}`))
