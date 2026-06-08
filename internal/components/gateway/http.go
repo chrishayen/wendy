@@ -276,6 +276,15 @@ func (h *Handler) invokeTool(w http.ResponseWriter, r *http.Request, capabilityI
 		writeError(w, r, http.StatusConflict, "idempotency_conflict", "idempotency key was reused with different request content", false)
 		return
 	}
+	record, err := h.getCapability(r.Context(), capabilityID)
+	if err != nil {
+		h.writeGatewayError(w, r, err)
+		return
+	}
+	if message := validateInvokeInput(req.Input, record.Capability.InputSchema); message != "" {
+		writeError(w, r, http.StatusBadRequest, "validation_failed", message, false)
+		return
+	}
 	if !h.requirePolicy(w, r, sub.ID, "tool.invoke", capabilityID, map[string]any{"capability_id": capabilityID}, "tool invocation denied") {
 		return
 	}
@@ -285,16 +294,8 @@ func (h *Handler) invokeTool(w http.ResponseWriter, r *http.Request, capabilityI
 			h.writeGatewayError(w, r, err)
 			return
 		}
-		record := contracts.CatalogCapabilityRecord{
-			Capability: contracts.Capability{ID: capabilityID},
-			Route:      route,
-		}
+		record.Route = route
 		h.invokeAsyncJob(w, r, sub, record, req, idempotencyKey, fp)
-		return
-	}
-	record, err := h.getCapability(r.Context(), capabilityID)
-	if err != nil {
-		h.writeGatewayError(w, r, err)
 		return
 	}
 	if shouldRunSync(record.Capability, req) {
@@ -827,6 +828,37 @@ func jobContextMap(context contracts.JobPolicyContext) map[string]any {
 		"requester_id":     context.RequesterID,
 		"owner_subject_id": context.OwnerSubjectID,
 		"job_state":        context.JobState,
+	}
+}
+
+func validateInvokeInput(input map[string]any, schema map[string]any) string {
+	for _, field := range schemaRequiredFields(schema) {
+		value, ok := input[field]
+		if !ok || value == nil {
+			return "input." + field + " is required"
+		}
+	}
+	return ""
+}
+
+func schemaRequiredFields(schema map[string]any) []string {
+	raw, ok := schema["required"]
+	if !ok {
+		return nil
+	}
+	switch required := raw.(type) {
+	case []string:
+		return append([]string(nil), required...)
+	case []any:
+		fields := make([]string, 0, len(required))
+		for _, item := range required {
+			if field, ok := item.(string); ok && field != "" {
+				fields = append(fields, field)
+			}
+		}
+		return fields
+	default:
+		return nil
 	}
 }
 

@@ -70,7 +70,7 @@
         "headers": {"Authorization": "Bearer token_s003_agent", "Idempotency-Key": "idem_s003_0001", "Content-Type": "application/json"},
         "body": {"input": {"prompt": "a clean product photo of a red ceramic mug", "width": 1024, "height": 1024}, "preferred_mode": "async", "dry_run": false}
       },
-      "dependencies": ["c08_auth_agent_ok", "c08_policy_tool_invoke_allow", "c03_catalog_route_ok", "c05_create_job_ok"],
+      "dependencies": ["c08_auth_agent_ok", "c03_catalog_detail_lookup_ok", "c08_policy_tool_invoke_allow", "c03_catalog_route_ok", "c05_create_job_ok"],
       "response": {
         "status": 202,
         "body": {
@@ -120,7 +120,7 @@
         "body": {"input": {"prompt": "different prompt", "width": 512, "height": 512}, "preferred_mode": "async", "dry_run": false},
         "precondition": "same public invocation idempotency key already used for different request content"
       },
-      "dependencies": ["c08_auth_agent_ok", "c03_catalog_detail_lookup_ok"],
+      "dependencies": ["c08_auth_agent_ok"],
       "response": {
         "status": 409,
         "body": {
@@ -139,7 +139,7 @@
         "headers": {"Authorization": "Bearer token_s003_agent", "Idempotency-Key": "idem_s003_invalid_input", "Content-Type": "application/json"},
         "body": {"input": {"width": 1024, "height": 1024}, "preferred_mode": "async", "dry_run": false}
       },
-      "dependencies": ["c08_auth_agent_ok"],
+      "dependencies": ["c08_auth_agent_ok", "c03_catalog_detail_lookup_ok"],
       "response": {
         "status": 400,
         "body": {

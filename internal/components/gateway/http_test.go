@@ -152,6 +152,7 @@ func TestGatewayReplaysS003PublicDiscoveryAndInvokeFixtures(t *testing.T) {
 		"public_invoke_async_ok",
 		"public_invoke_idempotency_replay",
 		"public_invoke_idempotency_conflict",
+		"public_invoke_invalid_input",
 	} {
 		if _, err := deps.replay(handler, fixtureID); err != nil {
 			t.Fatalf("replay %s: %v", fixtureID, err)
