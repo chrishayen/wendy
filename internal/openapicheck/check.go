@@ -88,6 +88,7 @@ func ValidateFile(path string) FileReport {
 		report.Schemas = len(schemas)
 	}
 	report.References = validateReferences(&report, doc)
+	validateSecurityRequirements(&report, doc, paths, components)
 	validateOperations(&report, doc, paths)
 	return report
 }
@@ -113,6 +114,58 @@ func validateReferences(report *FileReport, doc map[string]any) int {
 		}
 	})
 	return count
+}
+
+func validateSecurityRequirements(report *FileReport, doc map[string]any, paths, components map[string]any) {
+	securitySchemes, _ := asMap(components["securitySchemes"])
+	validateSecurityRequirementList(report, "/security", doc["security"], securitySchemes)
+
+	for pathName, pathValue := range paths {
+		pathItem, ok := asMap(pathValue)
+		if !ok {
+			continue
+		}
+		for method, operationValue := range pathItem {
+			if !isHTTPMethod(method) {
+				continue
+			}
+			operation, ok := asMap(operationValue)
+			if !ok {
+				continue
+			}
+			if securityValue, exists := operation["security"]; exists {
+				location := "/paths/" + escapePointer(pathName) + "/" + method + "/security"
+				validateSecurityRequirementList(report, location, securityValue, securitySchemes)
+			}
+		}
+	}
+}
+
+func validateSecurityRequirementList(report *FileReport, location string, raw any, securitySchemes map[string]any) {
+	if raw == nil {
+		return
+	}
+	requirements, ok := raw.([]any)
+	if !ok {
+		report.add("security_requirement_invalid", location, "security must be an array")
+		return
+	}
+	for i, requirement := range requirements {
+		requirementLocation := fmt.Sprintf("%s/%d", location, i)
+		requirementMap, ok := asMap(requirement)
+		if !ok {
+			report.add("security_requirement_invalid", requirementLocation, "security requirement must be an object")
+			continue
+		}
+		for schemeName, scopesRaw := range requirementMap {
+			if _, ok := securitySchemes[schemeName]; !ok {
+				report.add("security_scheme_unknown", requirementLocation+"/"+escapePointer(schemeName), "security scheme is not declared: "+schemeName)
+			}
+			if _, ok := scopesRaw.([]any); !ok {
+				report.add("security_scopes_invalid", requirementLocation+"/"+escapePointer(schemeName), "security scheme scopes must be an array")
+			}
+		}
+	}
 }
 
 func validateOperations(report *FileReport, doc map[string]any, paths map[string]any) {

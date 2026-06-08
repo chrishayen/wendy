@@ -181,6 +181,100 @@ components:
 	}
 }
 
+func TestValidateFileDetectsUnknownSecurityScheme(t *testing.T) {
+	path := writeContract(t, `
+openapi: 3.1.0
+info:
+  title: Unknown security
+  version: v1
+security:
+  - typoAuth: []
+paths:
+  /one:
+    get:
+      operationId: one
+      responses:
+        "200":
+          $ref: "#/components/responses/Success"
+        default:
+          $ref: "#/components/responses/Error"
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+  responses:
+    Success:
+      description: Success.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/SuccessEnvelope"
+    Error:
+      description: Error.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorEnvelope"
+  schemas:
+    SuccessEnvelope:
+      type: object
+    ErrorEnvelope:
+      type: object
+`)
+	report := ValidateFile(path)
+	if !hasFinding(report, "security_scheme_unknown") {
+		t.Fatalf("expected unknown security scheme finding, got %#v", report.Findings)
+	}
+}
+
+func TestValidateFileDetectsInvalidSecurityScopes(t *testing.T) {
+	path := writeContract(t, `
+openapi: 3.1.0
+info:
+  title: Bad security scopes
+  version: v1
+paths:
+  /one:
+    get:
+      operationId: one
+      security:
+        - bearerAuth: read
+      responses:
+        "200":
+          $ref: "#/components/responses/Success"
+        default:
+          $ref: "#/components/responses/Error"
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+  responses:
+    Success:
+      description: Success.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/SuccessEnvelope"
+    Error:
+      description: Error.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorEnvelope"
+  schemas:
+    SuccessEnvelope:
+      type: object
+    ErrorEnvelope:
+      type: object
+`)
+	report := ValidateFile(path)
+	if !hasFinding(report, "security_scopes_invalid") {
+		t.Fatalf("expected invalid security scopes finding, got %#v", report.Findings)
+	}
+}
+
 func TestValidateFileAllowsBinarySuccessResponse(t *testing.T) {
 	path := writeContract(t, `
 openapi: 3.1.0
