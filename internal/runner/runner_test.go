@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -118,6 +119,41 @@ func TestRunnerCompletesJobAndUploadsArtifact(t *testing.T) {
 	assertContractMetric(t, metrics.Samples, "runner_job_heartbeats_total", nil, 1)
 	assertContractMetric(t, metrics.Samples, "runner_dependency_reachable", map[string]string{"dependency": "jobs", "required": "true", "status": "healthy"}, 1)
 	assertContractMetricExists(t, metrics.Samples, "runner_last_successful_heartbeat_unix_seconds", nil)
+}
+
+func TestRunnerCompleteJobIncludesOutputArtifactRefs(t *testing.T) {
+	var observed contracts.JobCompleteRequest
+	jobsServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/v1/jobs/job_complete/complete" {
+			t.Fatalf("unexpected request %s %s", r.Method, r.URL.Path)
+		}
+		if err := json.NewDecoder(r.Body).Decode(&observed); err != nil {
+			t.Fatalf("decode complete body: %v", err)
+		}
+		writeRunnerTestSuccess(w, http.StatusOK, contracts.Job{
+			JobID:        "job_complete",
+			State:        contracts.JobSucceeded,
+			ArtifactRefs: []string{"art_1", "art_2"},
+			Links:        map[string]any{},
+		})
+	}))
+	defer jobsServer.Close()
+
+	runner := New(Config{
+		WorkerID: "runner_test",
+		JobsURL:  jobsServer.URL,
+		Client:   jobsServer.Client(),
+	})
+	if err := runner.completeJob(context.Background(), "job_complete", []string{"art_1", "art_2"}); err != nil {
+		t.Fatalf("complete job: %v", err)
+	}
+	if observed.WorkerID != "runner_test" || !slices.Equal(observed.ArtifactRefs, []string{"art_1", "art_2"}) {
+		t.Fatalf("complete request = %#v", observed)
+	}
+	outputRefs, ok := observed.Output["artifact_refs"].([]any)
+	if !ok || len(outputRefs) != 2 || outputRefs[0] != "art_1" || outputRefs[1] != "art_2" {
+		t.Fatalf("complete output = %#v", observed.Output)
+	}
 }
 
 func TestRunnerWaitsForPendingResourceLease(t *testing.T) {

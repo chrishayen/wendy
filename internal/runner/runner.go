@@ -361,7 +361,11 @@ func reportKeepaliveError(keepaliveErrs chan<- error, err error) {
 
 func (r *Runner) completeJob(ctx context.Context, jobID string, artifactIDs []string) error {
 	var job contracts.Job
-	return r.postJSON(ctx, r.cfg.JobsURL+"/v1/jobs/"+url.PathEscape(jobID)+"/complete", contracts.JobCompleteRequest{WorkerID: r.cfg.WorkerID, ArtifactRefs: artifactIDs}, "", &job)
+	req := contracts.JobCompleteRequest{WorkerID: r.cfg.WorkerID, ArtifactRefs: artifactIDs}
+	if len(artifactIDs) > 0 {
+		req.Output = map[string]any{"artifact_refs": append([]string(nil), artifactIDs...)}
+	}
+	return r.postJSON(ctx, r.cfg.JobsURL+"/v1/jobs/"+url.PathEscape(jobID)+"/complete", req, "", &job)
 }
 
 func (r *Runner) failJob(ctx context.Context, jobID, code, message string) error {
