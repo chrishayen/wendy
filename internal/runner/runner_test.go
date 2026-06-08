@@ -465,6 +465,176 @@ func TestRunnerFetchesProviderContentRefsAndUploadsArtifact(t *testing.T) {
 	}
 }
 
+func TestRunnerFailsJobWithProviderContentFetchStage(t *testing.T) {
+	jobStore := jobs.NewStore()
+	jobsServer := httptest.NewServer(jobs.NewHandler(jobStore))
+	defer jobsServer.Close()
+
+	providerServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/v1/provider/capabilities/cap_ref_image/invoke":
+			writeRunnerTestSuccess(w, http.StatusOK, contracts.ProviderInvokeResponse{
+				Output: map[string]any{"result": "image_generated"},
+				ContentRefs: []contracts.ProviderContentRef{{
+					ContentRef: "pcr_missing",
+					Name:       "provider-image.png",
+					MediaType:  "image/png",
+				}},
+			})
+		case r.Method == http.MethodGet && r.URL.Path == "/v1/provider/artifacts/pcr_missing/content":
+			writeRunnerTestError(w, http.StatusNotFound, contracts.ErrorObject{
+				Code:      "provider_content_not_found",
+				Message:   "provider content ref expired",
+				Retryable: false,
+			})
+		default:
+			t.Fatalf("unexpected provider request %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer providerServer.Close()
+
+	route := contracts.CapabilityRoute{
+		CapabilityID:       "cap_ref_image",
+		ServiceID:          "svc_ref_provider",
+		ProviderEndpoint:   providerServer.URL,
+		ProviderHealthPath: "/v1/provider/health",
+		ProviderInvokePath: "/v1/provider/capabilities/cap_ref_image/invoke",
+		ServiceStartMode:   "manual",
+		ArtifactHints:      []contracts.ArtifactHint{{MediaType: "image/png", Count: "one"}},
+	}
+	created, _, err := jobStore.Create(contracts.CreateJobRequest{
+		RequesterID:  "sub_agent",
+		CapabilityID: "cap_ref_image",
+		InputSummary: map[string]any{"prompt_present": true},
+		Metadata: map[string]any{"execution_plan": map[string]any{
+			"capability_id":   "cap_ref_image",
+			"subject_id":      "sub_agent",
+			"input":           map[string]any{"prompt": "red mug"},
+			"route":           route,
+			"timeout_seconds": 30,
+		}},
+	}, "create-ref-fetch-failure-job")
+	if err != nil {
+		t.Fatalf("create job: %v", err)
+	}
+
+	r := New(Config{
+		WorkerID:       "runner_test",
+		JobsURL:        jobsServer.URL,
+		ArtifactsURL:   "http://artifacts.invalid",
+		Client:         jobsServer.Client(),
+		ActorSubjectID: "sub_runner_test",
+	})
+	jobID, ok, err := r.RunOnce(context.Background())
+	if err == nil {
+		t.Fatal("expected provider content fetch error")
+	}
+	if !strings.Contains(err.Error(), "provider content fetch \"pcr_missing\" failed") || !strings.Contains(err.Error(), "provider content ref expired") {
+		t.Fatalf("error = %v", err)
+	}
+	if !ok || jobID != created.JobID {
+		t.Fatalf("run result jobID=%q ok=%v", jobID, ok)
+	}
+	failed, err := jobStore.Get(created.JobID)
+	if err != nil {
+		t.Fatalf("get failed job: %v", err)
+	}
+	if failed.State != contracts.JobFailed || failed.TerminalError == nil || failed.TerminalError.Code != "artifact_upload_failed" {
+		t.Fatalf("failed job = %#v", failed)
+	}
+	if !strings.Contains(failed.TerminalError.Message, "provider content fetch \"pcr_missing\" failed") || !strings.Contains(failed.TerminalError.Message, "provider content ref expired") {
+		t.Fatalf("terminal error = %#v", failed.TerminalError)
+	}
+}
+
+func TestRunnerFailsJobWithArtifactUploadCreateStage(t *testing.T) {
+	jobStore := jobs.NewStore()
+	jobsServer := httptest.NewServer(jobs.NewHandler(jobStore))
+	defer jobsServer.Close()
+
+	body := []byte("artifact bytes")
+	checksum, _ := checksumAndDigest(body)
+	providerServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/v1/provider/capabilities/cap_artifact/invoke" {
+			t.Fatalf("unexpected provider request %s %s", r.Method, r.URL.Path)
+		}
+		writeRunnerTestSuccess(w, http.StatusOK, contracts.ProviderInvokeResponse{
+			Output: map[string]any{"artifact_count": 1},
+			Artifacts: []contracts.ProviderArtifact{{
+				Name:          "fake-image.txt",
+				MediaType:     "text/plain",
+				ContentBase64: base64.StdEncoding.EncodeToString(body),
+				Checksum:      checksum,
+			}},
+		})
+	}))
+	defer providerServer.Close()
+
+	artifactsServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/v1/artifact-uploads" {
+			t.Fatalf("unexpected artifact request %s %s", r.Method, r.URL.Path)
+		}
+		writeRunnerTestError(w, http.StatusServiceUnavailable, contracts.ErrorObject{
+			Code:      "artifact_store_unavailable",
+			Message:   "artifact store unavailable",
+			Retryable: true,
+		})
+	}))
+	defer artifactsServer.Close()
+
+	route := contracts.CapabilityRoute{
+		CapabilityID:       "cap_artifact",
+		ServiceID:          "svc_artifact_provider",
+		ProviderEndpoint:   providerServer.URL,
+		ProviderHealthPath: "/v1/provider/health",
+		ProviderInvokePath: "/v1/provider/capabilities/cap_artifact/invoke",
+		ServiceStartMode:   "manual",
+		ArtifactHints:      []contracts.ArtifactHint{{MediaType: "text/plain", Count: "one"}},
+	}
+	created, _, err := jobStore.Create(contracts.CreateJobRequest{
+		RequesterID:  "sub_agent",
+		CapabilityID: "cap_artifact",
+		InputSummary: map[string]any{"prompt_present": true},
+		Metadata: map[string]any{"execution_plan": map[string]any{
+			"capability_id":   "cap_artifact",
+			"subject_id":      "sub_agent",
+			"input":           map[string]any{"prompt": "red mug"},
+			"route":           route,
+			"timeout_seconds": 30,
+		}},
+	}, "create-artifact-upload-failure-job")
+	if err != nil {
+		t.Fatalf("create job: %v", err)
+	}
+
+	r := New(Config{
+		WorkerID:     "runner_test",
+		JobsURL:      jobsServer.URL,
+		ArtifactsURL: artifactsServer.URL,
+		Client:       jobsServer.Client(),
+	})
+	jobID, ok, err := r.RunOnce(context.Background())
+	if err == nil {
+		t.Fatal("expected artifact upload create error")
+	}
+	if !strings.Contains(err.Error(), "artifact upload create failed") || !strings.Contains(err.Error(), "artifact store unavailable") {
+		t.Fatalf("error = %v", err)
+	}
+	if !ok || jobID != created.JobID {
+		t.Fatalf("run result jobID=%q ok=%v", jobID, ok)
+	}
+	failed, err := jobStore.Get(created.JobID)
+	if err != nil {
+		t.Fatalf("get failed job: %v", err)
+	}
+	if failed.State != contracts.JobFailed || failed.TerminalError == nil || failed.TerminalError.Code != "artifact_upload_failed" {
+		t.Fatalf("failed job = %#v", failed)
+	}
+	if !strings.Contains(failed.TerminalError.Message, "artifact upload create failed") || !strings.Contains(failed.TerminalError.Message, "artifact store unavailable") {
+		t.Fatalf("terminal error = %#v", failed.TerminalError)
+	}
+}
+
 func TestRunnerPreservesProviderTimeoutFailureCodeAndReleaseReason(t *testing.T) {
 	runProviderFailureBranch(t, contracts.ErrorObject{
 		Code:      "provider_timeout",

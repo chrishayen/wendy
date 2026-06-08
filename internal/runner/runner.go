@@ -754,7 +754,7 @@ func (r *Runner) uploadArtifacts(ctx context.Context, jobID, ownerSubjectID, cap
 	for index, artifact := range artifacts {
 		body, err := base64.StdEncoding.DecodeString(artifact.ContentBase64)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("provider artifact content decode failed: %w", err)
 		}
 		checksum, digest := checksumAndDigest(body)
 		if artifact.Checksum != "" && artifact.Checksum != checksum {
@@ -783,14 +783,14 @@ func (r *Runner) uploadArtifacts(ctx context.Context, jobID, ownerSubjectID, cap
 		}
 		keyPrefix := "runner-artifact-" + jobID + "-" + strconv.Itoa(index)
 		if err := r.postJSON(ctx, r.cfg.ArtifactsURL+"/v1/artifact-uploads", create, keyPrefix+"-create", &upload); err != nil {
-			return nil, err
+			return nil, fmt.Errorf("artifact upload create failed: %w", err)
 		}
 		if err := r.putBytes(ctx, r.cfg.ArtifactsURL+"/v1/artifact-uploads/"+url.PathEscape(upload.UploadID)+"/content", body, mediaType, digest, keyPrefix+"-content", &upload); err != nil {
-			return nil, err
+			return nil, fmt.Errorf("artifact upload content failed: %w", err)
 		}
 		var completed contracts.Artifact
 		if err := r.postJSON(ctx, r.cfg.ArtifactsURL+"/v1/artifact-uploads/"+url.PathEscape(upload.UploadID)+"/complete", contracts.CompleteArtifactUploadRequest{Checksum: checksum, Size: size}, keyPrefix+"-complete", &completed); err != nil {
-			return nil, err
+			return nil, fmt.Errorf("artifact upload complete failed: %w", err)
 		}
 		ids = append(ids, completed.ArtifactID)
 	}
@@ -807,26 +807,26 @@ func (r *Runner) fetchProviderContentRefs(ctx context.Context, providerEndpoint 
 		target := providerEndpoint + "/v1/provider/artifacts/" + url.PathEscape(ref.ContentRef) + "/content"
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("provider content request build failed for %q: %w", ref.ContentRef, err)
 		}
 		r.addAuth(req)
 		resp, err := r.client.Do(req)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("provider content fetch %q failed: %w", ref.ContentRef, err)
 		}
 		body, readErr := readProviderContentResponse(resp)
 		if readErr != nil {
-			return nil, readErr
+			return nil, fmt.Errorf("provider content fetch %q failed: %w", ref.ContentRef, readErr)
 		}
 		checksum, digest := checksumAndDigest(body)
 		if ref.Checksum != "" && ref.Checksum != checksum {
-			return nil, fmt.Errorf("provider content checksum mismatch")
+			return nil, fmt.Errorf("provider content checksum mismatch for %q", ref.ContentRef)
 		}
 		if ref.Size > 0 && int64(len(body)) != ref.Size {
-			return nil, fmt.Errorf("provider content size mismatch")
+			return nil, fmt.Errorf("provider content size mismatch for %q", ref.ContentRef)
 		}
 		if got := resp.Header.Get("Digest"); got != "" && got != digest {
-			return nil, fmt.Errorf("provider content digest mismatch")
+			return nil, fmt.Errorf("provider content digest mismatch for %q", ref.ContentRef)
 		}
 		name := ref.Name
 		if name == "" {
