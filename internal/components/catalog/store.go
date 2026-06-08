@@ -48,6 +48,11 @@ type CapabilityFilter struct {
 	Limit                int
 }
 
+type ListOptions struct {
+	Cursor string
+	Limit  int
+}
+
 func NewPersistentStore(path string) (*Store, error) {
 	store := NewStore()
 	store.snapshotPath = path
@@ -130,7 +135,7 @@ func (s *Store) RegisterManifest(manifest contracts.ProviderManifest) ([]string,
 	return ids, nil
 }
 
-func (s *Store) ListServices() []contracts.Service {
+func (s *Store) ListServices(opts ListOptions) ([]contracts.Service, *string, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -144,7 +149,11 @@ func (s *Store) ListServices() []contracts.Service {
 	for _, id := range ids {
 		services = append(services, s.services[id])
 	}
-	return services
+	start, end, next, err := paginationWindow(len(services), opts, parseServiceListCursor, serviceListCursor)
+	if err != nil {
+		return nil, nil, err
+	}
+	return services[start:end], next, nil
 }
 
 func (s *Store) GetService(id string) (contracts.Service, bool) {
@@ -279,7 +288,7 @@ func (s *Store) Export() contracts.CatalogExport {
 	return contracts.CatalogExport{SchemaVersion: "v1", Manifests: manifests}
 }
 
-func (s *Store) Tags() []string {
+func (s *Store) Tags(opts ListOptions) ([]string, *string, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -299,7 +308,11 @@ func (s *Store) Tags() []string {
 		tags = append(tags, tag)
 	}
 	sort.Strings(tags)
-	return tags
+	start, end, next, err := paginationWindow(len(tags), opts, parseTagListCursor, tagListCursor)
+	if err != nil {
+		return nil, nil, err
+	}
+	return tags[start:end], next, nil
 }
 
 func buildRoute(serviceID string, capability contracts.Capability, provider contracts.Provider) contracts.CapabilityRoute {
@@ -349,10 +362,62 @@ func parseCapabilityListCursor(cursor string) (int, error) {
 	if _, err := fmt.Sscanf(cursor, "cursor_catalog_capabilities_%06d", &index); err != nil {
 		return 0, err
 	}
-	if index < 0 {
+	if index < 0 || capabilityListCursor(index) != cursor {
 		return 0, ErrInvalidCursor
 	}
 	return index, nil
+}
+
+func serviceListCursor(index int) string {
+	return fmt.Sprintf("cursor_catalog_services_%06d", index)
+}
+
+func parseServiceListCursor(cursor string) (int, error) {
+	var index int
+	if _, err := fmt.Sscanf(cursor, "cursor_catalog_services_%06d", &index); err != nil {
+		return 0, err
+	}
+	if index < 0 || serviceListCursor(index) != cursor {
+		return 0, ErrInvalidCursor
+	}
+	return index, nil
+}
+
+func tagListCursor(index int) string {
+	return fmt.Sprintf("cursor_catalog_tags_%06d", index)
+}
+
+func parseTagListCursor(cursor string) (int, error) {
+	var index int
+	if _, err := fmt.Sscanf(cursor, "cursor_catalog_tags_%06d", &index); err != nil {
+		return 0, err
+	}
+	if index < 0 || tagListCursor(index) != cursor {
+		return 0, ErrInvalidCursor
+	}
+	return index, nil
+}
+
+func paginationWindow(count int, opts ListOptions, parse func(string) (int, error), build func(int) string) (int, int, *string, error) {
+	start := 0
+	if opts.Cursor != "" {
+		parsed, err := parse(opts.Cursor)
+		if err != nil {
+			return 0, 0, nil, ErrInvalidCursor
+		}
+		start = parsed
+	}
+	if start > count {
+		return 0, 0, nil, ErrInvalidCursor
+	}
+	end := count
+	var next *string
+	if opts.Limit > 0 && start+opts.Limit < end {
+		end = start + opts.Limit
+		cursor := build(end)
+		next = &cursor
+	}
+	return start, end, next, nil
 }
 
 func (s *Store) loadSnapshot(path string) error {

@@ -91,6 +91,74 @@ func TestListCapabilitiesRejectsPastEndCursor(t *testing.T) {
 	}
 }
 
+func TestListServicesPaginatesWithOpaqueCursor(t *testing.T) {
+	store := sampleStore(t)
+	manifest := sampleManifest(t)
+	manifest.Service.ID = "svc_catalog_second"
+	manifest.Service.Name = "Second Catalog Provider"
+	manifest.Provider.Endpoint = "http://second-provider.local:18088"
+	manifest.Capabilities[0].ID = "cap_catalog_second"
+	if _, err := store.RegisterManifest(manifest); err != nil {
+		t.Fatalf("register second manifest: %v", err)
+	}
+
+	first, next, err := store.ListServices(ListOptions{Limit: 1})
+	if err != nil {
+		t.Fatalf("list first page: %v", err)
+	}
+	if len(first) != 1 || first[0].ID != "svc_catalog_second" || next == nil {
+		t.Fatalf("first page services=%#v next=%v", first, next)
+	}
+	if *next != serviceListCursor(1) {
+		t.Fatalf("next cursor = %q", *next)
+	}
+
+	second, next, err := store.ListServices(ListOptions{Cursor: *next, Limit: 1})
+	if err != nil {
+		t.Fatalf("list second page: %v", err)
+	}
+	if len(second) != 1 || second[0].ID != "svc_comfyui_gpu" || next != nil {
+		t.Fatalf("second page services=%#v next=%v", second, next)
+	}
+
+	if _, _, err := store.ListServices(ListOptions{Cursor: "cursor_catalog_tags_000001"}); !errors.Is(err, ErrInvalidCursor) {
+		t.Fatalf("expected invalid cursor prefix, got %v", err)
+	}
+	if _, _, err := store.ListServices(ListOptions{Cursor: serviceListCursor(3)}); !errors.Is(err, ErrInvalidCursor) {
+		t.Fatalf("expected past-end cursor error, got %v", err)
+	}
+}
+
+func TestTagsPaginatesWithOpaqueCursor(t *testing.T) {
+	store := sampleStore(t)
+
+	first, next, err := store.Tags(ListOptions{Limit: 1})
+	if err != nil {
+		t.Fatalf("list first page: %v", err)
+	}
+	if len(first) != 1 || first[0] != "gpu" || next == nil {
+		t.Fatalf("first page tags=%#v next=%v", first, next)
+	}
+	if *next != tagListCursor(1) {
+		t.Fatalf("next cursor = %q", *next)
+	}
+
+	second, next, err := store.Tags(ListOptions{Cursor: *next, Limit: 1})
+	if err != nil {
+		t.Fatalf("list second page: %v", err)
+	}
+	if len(second) != 1 || second[0] != "image" || next != nil {
+		t.Fatalf("second page tags=%#v next=%v", second, next)
+	}
+
+	if _, _, err := store.Tags(ListOptions{Cursor: "cursor_catalog_services_000001"}); !errors.Is(err, ErrInvalidCursor) {
+		t.Fatalf("expected invalid cursor prefix, got %v", err)
+	}
+	if _, _, err := store.Tags(ListOptions{Cursor: tagListCursor(3)}); !errors.Is(err, ErrInvalidCursor) {
+		t.Fatalf("expected past-end cursor error, got %v", err)
+	}
+}
+
 func TestPersistentStoreReloadsCatalogRecordsAndRoutes(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "catalog.json")
 	store, err := NewPersistentStore(path)
@@ -116,7 +184,10 @@ func TestPersistentStoreReloadsCatalogRecordsAndRoutes(t *testing.T) {
 	if record.Route.ProviderEndpoint != manifest.Provider.Endpoint || record.Route.ProviderInvokePath == "" {
 		t.Fatalf("route = %#v", record.Route)
 	}
-	services := reloaded.ListServices()
+	services, _, err := reloaded.ListServices(ListOptions{})
+	if err != nil {
+		t.Fatalf("list services: %v", err)
+	}
 	if len(services) != 1 || services[0].ID != manifest.Service.ID {
 		t.Fatalf("services = %#v", services)
 	}

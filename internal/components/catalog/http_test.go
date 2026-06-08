@@ -124,6 +124,73 @@ func TestExportHTTP(t *testing.T) {
 	}
 }
 
+func TestListServicesHTTPPaginates(t *testing.T) {
+	store := sampleStore(t)
+	manifest := sampleManifest(t)
+	manifest.Service.ID = "svc_catalog_second"
+	manifest.Service.Name = "Second Catalog Provider"
+	manifest.Provider.Endpoint = "http://second-provider.local:18088"
+	manifest.Capabilities[0].ID = "cap_catalog_second"
+	if _, err := store.RegisterManifest(manifest); err != nil {
+		t.Fatalf("register second manifest: %v", err)
+	}
+	handler := NewHandler(store)
+
+	first := requestCatalogData(t, handler, "/v1/catalog/services?limit=1", http.StatusOK)
+	items := first["items"].([]any)
+	if len(items) != 1 || items[0].(map[string]any)["id"] != "svc_catalog_second" {
+		t.Fatalf("first services page = %#v", first)
+	}
+	cursor, ok := first["next_cursor"].(string)
+	if !ok || cursor == "" {
+		t.Fatalf("first services page missing cursor = %#v", first)
+	}
+
+	second := requestCatalogData(t, handler, "/v1/catalog/services?limit=1&cursor="+cursor, http.StatusOK)
+	items = second["items"].([]any)
+	if len(items) != 1 || items[0].(map[string]any)["id"] != "svc_comfyui_gpu" || second["next_cursor"] != nil {
+		t.Fatalf("second services page = %#v", second)
+	}
+
+	invalidLimit := requestCatalogEnvelope(t, handler, "/v1/catalog/services?limit=0", http.StatusBadRequest)
+	if invalidLimit["error"].(map[string]any)["code"] != "validation_failed" {
+		t.Fatalf("invalid service limit error = %#v", invalidLimit)
+	}
+	invalidCursor := requestCatalogEnvelope(t, handler, "/v1/catalog/services?cursor=cursor_catalog_tags_000001", http.StatusBadRequest)
+	if invalidCursor["error"].(map[string]any)["code"] != "invalid_cursor" {
+		t.Fatalf("invalid service cursor error = %#v", invalidCursor)
+	}
+}
+
+func TestListTagsHTTPPaginates(t *testing.T) {
+	handler := NewHandler(sampleStore(t))
+
+	first := requestCatalogData(t, handler, "/v1/catalog/tags?limit=1", http.StatusOK)
+	items := first["items"].([]any)
+	if len(items) != 1 || items[0] != "gpu" {
+		t.Fatalf("first tags page = %#v", first)
+	}
+	cursor, ok := first["next_cursor"].(string)
+	if !ok || cursor == "" {
+		t.Fatalf("first tags page missing cursor = %#v", first)
+	}
+
+	second := requestCatalogData(t, handler, "/v1/catalog/tags?limit=1&cursor="+cursor, http.StatusOK)
+	items = second["items"].([]any)
+	if len(items) != 1 || items[0] != "image" || second["next_cursor"] != nil {
+		t.Fatalf("second tags page = %#v", second)
+	}
+
+	invalidLimit := requestCatalogEnvelope(t, handler, "/v1/catalog/tags?limit=0", http.StatusBadRequest)
+	if invalidLimit["error"].(map[string]any)["code"] != "validation_failed" {
+		t.Fatalf("invalid tag limit error = %#v", invalidLimit)
+	}
+	invalidCursor := requestCatalogEnvelope(t, handler, "/v1/catalog/tags?cursor=cursor_catalog_services_000001", http.StatusBadRequest)
+	if invalidCursor["error"].(map[string]any)["code"] != "invalid_cursor" {
+		t.Fatalf("invalid tag cursor error = %#v", invalidCursor)
+	}
+}
+
 func TestLoadManifestsFromDirectory(t *testing.T) {
 	manifests, err := LoadManifests(filepath.Join("..", "..", "..", "testdata", "manifests"))
 	if err != nil {
@@ -148,6 +215,31 @@ func decodeData(t *testing.T, body io.Reader) map[string]any {
 		t.Fatalf("data missing from envelope: %#v", envelope)
 	}
 	return data
+}
+
+func requestCatalogData(t *testing.T, handler http.Handler, path string, wantStatus int) map[string]any {
+	t.Helper()
+	envelope := requestCatalogEnvelope(t, handler, path, wantStatus)
+	data, ok := envelope["data"].(map[string]any)
+	if !ok {
+		t.Fatalf("data missing from envelope: %#v", envelope)
+	}
+	return data
+}
+
+func requestCatalogEnvelope(t *testing.T, handler http.Handler, path string, wantStatus int) map[string]any {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodGet, path, nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != wantStatus {
+		t.Fatalf("GET %s status=%d want=%d body=%s", path, rec.Code, wantStatus, rec.Body.String())
+	}
+	var envelope map[string]any
+	if err := json.NewDecoder(rec.Body).Decode(&envelope); err != nil {
+		t.Fatalf("decode envelope: %v", err)
+	}
+	return envelope
 }
 
 func loadCatalogFixturePackage(t *testing.T) testkit.FixturePackage {

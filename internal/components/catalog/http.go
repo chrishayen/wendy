@@ -81,9 +81,18 @@ func (h Handler) registerManifest(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h Handler) listServices(w http.ResponseWriter, r *http.Request) {
+	opts, ok := listOptions(w, r)
+	if !ok {
+		return
+	}
+	items, next, err := h.store.ListServices(opts)
+	if err != nil {
+		writeCatalogQueryError(w, r, err)
+		return
+	}
 	writeSuccess(w, r, http.StatusOK, map[string]any{
-		"items":       h.store.ListServices(),
-		"next_cursor": nil,
+		"items":       items,
+		"next_cursor": next,
 	})
 }
 
@@ -98,14 +107,9 @@ func (h Handler) getService(w http.ResponseWriter, r *http.Request, id string) {
 
 func (h Handler) listCapabilities(w http.ResponseWriter, r *http.Request) {
 	query := r.URL.Query()
-	limit := 0
-	if raw := query.Get("limit"); raw != "" {
-		parsed, err := strconv.Atoi(raw)
-		if err != nil || parsed < 1 {
-			writeError(w, r, http.StatusBadRequest, "validation_failed", "limit must be a positive integer", false)
-			return
-		}
-		limit = parsed
+	opts, ok := listOptions(w, r)
+	if !ok {
+		return
 	}
 
 	records, nextCursor, err := h.store.ListCapabilities(CapabilityFilter{
@@ -115,15 +119,11 @@ func (h Handler) listCapabilities(w http.ResponseWriter, r *http.Request) {
 		ExecutionMode:        query.Get("execution_mode"),
 		ResourceSelector:     query.Get("resource_selector"),
 		VisibleCapabilityIDs: query["visible_capability_ids"],
-		Cursor:               query.Get("cursor"),
-		Limit:                limit,
+		Cursor:               opts.Cursor,
+		Limit:                opts.Limit,
 	})
 	if err != nil {
-		if errors.Is(err, ErrInvalidCursor) {
-			writeError(w, r, http.StatusBadRequest, "invalid_cursor", "cursor is invalid or expired", false)
-			return
-		}
-		writeError(w, r, http.StatusInternalServerError, "internal_error", "catalog query failed", false)
+		writeCatalogQueryError(w, r, err)
 		return
 	}
 	writeSuccess(w, r, http.StatusOK, map[string]any{
@@ -151,9 +151,47 @@ func (h Handler) getCapabilityRoute(w http.ResponseWriter, r *http.Request, id s
 }
 
 func (h Handler) listTags(w http.ResponseWriter, r *http.Request) {
+	opts, ok := listOptions(w, r)
+	if !ok {
+		return
+	}
+	items, next, err := h.store.Tags(opts)
+	if err != nil {
+		writeCatalogQueryError(w, r, err)
+		return
+	}
 	writeSuccess(w, r, http.StatusOK, map[string]any{
-		"items": h.store.Tags(),
+		"items":       items,
+		"next_cursor": next,
 	})
+}
+
+func listOptions(w http.ResponseWriter, r *http.Request) (ListOptions, bool) {
+	limit, err := positiveInt(r.URL.Query().Get("limit"))
+	if err != nil {
+		writeError(w, r, http.StatusBadRequest, "validation_failed", "limit must be a positive integer", false)
+		return ListOptions{}, false
+	}
+	return ListOptions{Cursor: r.URL.Query().Get("cursor"), Limit: limit}, true
+}
+
+func positiveInt(raw string) (int, error) {
+	if raw == "" {
+		return 0, nil
+	}
+	value, err := strconv.Atoi(raw)
+	if err != nil || value < 1 {
+		return 0, errors.New("invalid limit")
+	}
+	return value, nil
+}
+
+func writeCatalogQueryError(w http.ResponseWriter, r *http.Request, err error) {
+	if errors.Is(err, ErrInvalidCursor) {
+		writeError(w, r, http.StatusBadRequest, "invalid_cursor", "cursor is invalid or expired", false)
+		return
+	}
+	writeError(w, r, http.StatusInternalServerError, "internal_error", "catalog query failed", false)
 }
 
 func writeSuccess(w http.ResponseWriter, r *http.Request, status int, data any) {
