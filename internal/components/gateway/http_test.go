@@ -124,6 +124,33 @@ func TestGatewayCancelArtifactsAndContent(t *testing.T) {
 	}
 }
 
+func TestGatewayCancelsRunningJob(t *testing.T) {
+	env := newGatewayTestEnv(t)
+	invoke := env.doJSON(http.MethodPost, "/v1/tools/cap_image_generate_gpu/invoke", map[string]any{
+		"input": map[string]any{"prompt": "red mug"},
+	}, map[string]string{"Authorization": "Bearer token_agent", "Idempotency-Key": "invoke-running-cancel"}, http.StatusCreated)
+	jobID := invoke["job_id"].(string)
+	if _, err := env.jobStore.Claim(jobID, contracts.JobClaimRequest{WorkerID: "runner_1", LeaseSeconds: 60}); err != nil {
+		t.Fatalf("claim job: %v", err)
+	}
+	if _, err := env.jobStore.Heartbeat(jobID, contracts.JobHeartbeatRequest{WorkerID: "runner_1", TransitionTo: "running"}); err != nil {
+		t.Fatalf("mark job running: %v", err)
+	}
+
+	status := env.doJSON(http.MethodGet, "/v1/agent/jobs/"+jobID, nil, map[string]string{"Authorization": "Bearer token_agent"}, http.StatusOK)
+	links := status["links"].(map[string]any)
+	if _, ok := links["cancel"]; !ok {
+		t.Fatalf("running job did not advertise cancel link: %#v", links)
+	}
+	canceled := env.doJSON(http.MethodPost, "/v1/agent/jobs/"+jobID+"/cancel", map[string]any{"reason": "stop running"}, map[string]string{
+		"Authorization":   "Bearer token_agent",
+		"Idempotency-Key": "cancel-running-1",
+	}, http.StatusOK)
+	if canceled["state"] != "canceled" || canceled["status_message"] != "stop running" {
+		t.Fatalf("running cancel = %#v", canceled)
+	}
+}
+
 func TestGatewayPersistentIdempotencyReplaysSyncAfterRestart(t *testing.T) {
 	calls := 0
 	providerServer, err := provider.NewServer(syncTestManifest("http://provider.invalid"), map[string]provider.CapabilityHandler{
@@ -221,6 +248,7 @@ func TestGatewayPersistentIdempotencyReplaysSyncAfterRestart(t *testing.T) {
 
 type gatewayTestEnv struct {
 	gateway       http.Handler
+	jobStore      *jobs.Store
 	artifactStore *artifacts.Store
 	servers       []*httptest.Server
 	t             *testing.T
@@ -264,6 +292,7 @@ func newGatewayTestEnv(t *testing.T) *gatewayTestEnv {
 	})
 	env := &gatewayTestEnv{
 		gateway:       gateway,
+		jobStore:      jobStore,
 		artifactStore: artifactStore,
 		servers:       []*httptest.Server{policyServer, catalogServer, jobsServer, artifactsServer},
 		t:             t,

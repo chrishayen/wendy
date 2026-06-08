@@ -356,9 +356,6 @@ func (s *Store) Cancel(jobID string, req contracts.CancelRequest) (contracts.Job
 	if isTerminal(rec.job.State) {
 		return cloneJob(rec.job), nil
 	}
-	if rec.job.State == contracts.JobRunning {
-		return contracts.Job{}, ErrInvalidTransition
-	}
 	rec.job.State = contracts.JobCanceled
 	rec.job.UpdatedAt = s.formatNow()
 	message := req.Reason

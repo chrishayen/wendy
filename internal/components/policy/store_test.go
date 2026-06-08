@@ -84,6 +84,23 @@ func TestStorePolicyOwnerContextAndJobState(t *testing.T) {
 		t.Fatalf("queued cancel denied: %#v", allowed)
 	}
 
+	claimed, err := store.CheckPolicy(contracts.PolicyCheckRequest{
+		SubjectID: "sub_agent",
+		Action:    "job.cancel",
+		Resource:  "job_1",
+		Context: map[string]any{
+			"owner_subject_id": "sub_agent",
+			"requester_id":     "sub_agent",
+			"job_state":        "claimed",
+		},
+	})
+	if err != nil {
+		t.Fatalf("check claimed cancel: %v", err)
+	}
+	if !claimed.Allowed {
+		t.Fatalf("claimed cancel denied: %#v", claimed)
+	}
+
 	running, err := store.CheckPolicy(contracts.PolicyCheckRequest{
 		SubjectID: "sub_agent",
 		Action:    "job.cancel",
@@ -97,8 +114,25 @@ func TestStorePolicyOwnerContextAndJobState(t *testing.T) {
 	if err != nil {
 		t.Fatalf("check running cancel: %v", err)
 	}
-	if running.Allowed || running.Reason != "policy_denied" {
+	if !running.Allowed {
 		t.Fatalf("running cancel decision = %#v", running)
+	}
+
+	succeeded, err := store.CheckPolicy(contracts.PolicyCheckRequest{
+		SubjectID: "sub_agent",
+		Action:    "job.cancel",
+		Resource:  "job_1",
+		Context: map[string]any{
+			"owner_subject_id": "sub_agent",
+			"requester_id":     "sub_agent",
+			"job_state":        "succeeded",
+		},
+	})
+	if err != nil {
+		t.Fatalf("check succeeded cancel: %v", err)
+	}
+	if succeeded.Allowed || succeeded.Reason != "policy_denied" {
+		t.Fatalf("succeeded cancel decision = %#v", succeeded)
 	}
 
 	missing, err := store.CheckPolicy(contracts.PolicyCheckRequest{

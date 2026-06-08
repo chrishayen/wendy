@@ -129,10 +129,20 @@ func (r *Runner) runJob(ctx context.Context, job contracts.Job) error {
 	if err := r.appendLog(ctx, job.JobID, "info", "running provider invocation"); err != nil {
 		return err
 	}
+	if canceled, err := r.jobCanceled(ctx, job.JobID); err != nil {
+		return err
+	} else if canceled {
+		return nil
+	}
 	response, err := r.invokeProvider(ctx, job.JobID, plan, lease)
 	if err != nil {
 		_ = r.failJob(ctx, job.JobID, "provider_unavailable", err.Error())
 		return err
+	}
+	if canceled, err := r.jobCanceled(ctx, job.JobID); err != nil {
+		return err
+	} else if canceled {
+		return nil
 	}
 	artifactIDs, err := r.uploadArtifacts(ctx, job.JobID, plan.SubjectID, response.Artifacts)
 	if err != nil {
@@ -190,6 +200,14 @@ func (r *Runner) appendLog(ctx context.Context, jobID, level, message string) er
 			Message:   message,
 		}},
 	}, "", &data)
+}
+
+func (r *Runner) jobCanceled(ctx context.Context, jobID string) (bool, error) {
+	var job contracts.Job
+	if err := r.getJSON(ctx, r.cfg.JobsURL+"/v1/jobs/"+url.PathEscape(jobID), &job); err != nil {
+		return false, err
+	}
+	return job.State == contracts.JobCanceled, nil
 }
 
 func (r *Runner) acquireLease(ctx context.Context, jobID, selector string) (*contracts.Lease, error) {

@@ -709,8 +709,12 @@ func asyncJobLinks(jobID string, includeCancel bool) map[string]any {
 }
 
 func agentJobLinks(jobID string, state contracts.JobState) map[string]any {
-	links := asyncJobLinks(jobID, state == contracts.JobQueued)
+	links := asyncJobLinks(jobID, isCancelableJobState(state))
 	return links
+}
+
+func isCancelableJobState(state contracts.JobState) bool {
+	return state == contracts.JobQueued || state == contracts.JobClaimed || state == contracts.JobRunning
 }
 
 func jobContextMap(context contracts.JobPolicyContext) map[string]any {

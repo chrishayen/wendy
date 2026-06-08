@@ -97,6 +97,116 @@ func TestRunnerCompletesJobAndUploadsArtifact(t *testing.T) {
 	}
 }
 
+func TestRunnerDoesNotCompleteOrUploadArtifactsAfterRunningCancel(t *testing.T) {
+	jobStore := jobs.NewStore()
+	jobsServer := httptest.NewServer(jobs.NewHandler(jobStore))
+	defer jobsServer.Close()
+
+	artifactStore, err := artifacts.NewStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("artifact store: %v", err)
+	}
+	artifactsServer := httptest.NewServer(artifacts.NewHandler(artifactStore))
+	defer artifactsServer.Close()
+
+	var created contracts.Job
+	providerServer, err := provider.NewServer(contracts.ProviderManifest{
+		SchemaVersion: "v1",
+		Service: contracts.Service{
+			ID:           "svc_cancel_provider",
+			Name:         "Cancel Provider",
+			Description:  "Cancel provider.",
+			Version:      "0.1.0",
+			ProviderKind: "fake",
+			Tags:         []string{"fake"},
+		},
+		Provider: contracts.Provider{Endpoint: "http://provider.invalid"},
+		Capabilities: []contracts.Capability{{
+			ID:            "cap_cancel_image",
+			Name:          "Cancel image",
+			Description:   "Cancel image.",
+			ExecutionMode: "sync",
+			InputSchema:   map[string]any{"type": "object"},
+			OutputSchema:  map[string]any{"type": "object"},
+			Examples:      []map[string]any{},
+			SideEffects:   "external",
+			ResourceHints: []contracts.ResourceHint{},
+			ArtifactHints: []contracts.ArtifactHint{{MediaType: "text/plain", Count: "one"}},
+			TimeoutHint:   "30s",
+		}},
+	}, map[string]provider.CapabilityHandler{
+		"cap_cancel_image": func(ctx context.Context, req contracts.ProviderInvokeRequest) (contracts.ProviderInvokeResponse, error) {
+			if _, err := jobStore.Cancel(created.JobID, contracts.CancelRequest{Reason: "canceled while running"}); err != nil {
+				t.Fatalf("cancel running job: %v", err)
+			}
+			body := []byte("late artifact bytes")
+			sum := sha256.Sum256(body)
+			return contracts.ProviderInvokeResponse{
+				Output: map[string]any{"artifact_count": 1},
+				Artifacts: []contracts.ProviderArtifact{{
+					Name:          "late-artifact.txt",
+					MediaType:     "text/plain",
+					ContentBase64: base64.StdEncoding.EncodeToString(body),
+					Checksum:      "sha256:" + hex.EncodeToString(sum[:]),
+				}},
+			}, nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("new provider: %v", err)
+	}
+	providerHTTP := httptest.NewServer(providerServer)
+	defer providerHTTP.Close()
+
+	route := contracts.CapabilityRoute{
+		CapabilityID:       "cap_cancel_image",
+		ServiceID:          "svc_cancel_provider",
+		ProviderEndpoint:   providerHTTP.URL,
+		ProviderHealthPath: "/v1/provider/health",
+		ProviderInvokePath: "/v1/provider/capabilities/cap_cancel_image/invoke",
+		ServiceStartMode:   "manual",
+	}
+	created, _, err = jobStore.Create(contracts.CreateJobRequest{
+		RequesterID:  "sub_agent",
+		CapabilityID: "cap_cancel_image",
+		InputSummary: map[string]any{"prompt_present": true},
+		Metadata: map[string]any{"execution_plan": map[string]any{
+			"capability_id":   "cap_cancel_image",
+			"subject_id":      "sub_agent",
+			"input":           map[string]any{"prompt": "red mug"},
+			"route":           route,
+			"timeout_seconds": 30,
+		}},
+	}, "create-cancel-job")
+	if err != nil {
+		t.Fatalf("create job: %v", err)
+	}
+
+	r := New(Config{
+		WorkerID:     "runner_test",
+		JobsURL:      jobsServer.URL,
+		ArtifactsURL: artifactsServer.URL,
+		Client:       jobsServer.Client(),
+	})
+	jobID, ok, err := r.RunOnce(context.Background())
+	if err != nil {
+		t.Fatalf("run once: %v", err)
+	}
+	if !ok || jobID != created.JobID {
+		t.Fatalf("run result jobID=%q ok=%v", jobID, ok)
+	}
+	canceled, err := jobStore.Get(created.JobID)
+	if err != nil {
+		t.Fatalf("get canceled job: %v", err)
+	}
+	if canceled.State != contracts.JobCanceled || canceled.StatusMessage != "canceled while running" || len(canceled.ArtifactRefs) != 0 {
+		t.Fatalf("canceled job = %#v", canceled)
+	}
+	if artifacts := artifactStore.ListArtifacts(artifacts.ListFilter{ProducerRef: created.JobID}); len(artifacts) != 0 {
+		t.Fatalf("late artifacts were uploaded: %#v", artifacts)
+	}
+}
+
 func TestRunnerWaitsForNodeManagedServiceStartup(t *testing.T) {
 	gets := 0
 	starts := 0

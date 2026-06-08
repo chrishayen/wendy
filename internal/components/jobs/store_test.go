@@ -99,6 +99,37 @@ func TestClaimConflictAndExpiry(t *testing.T) {
 	}
 }
 
+func TestCancelRunningJobMakesItTerminal(t *testing.T) {
+	store := NewStore()
+	job, _, err := store.Create(createRequest(), "")
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if _, err := store.Claim(job.JobID, contracts.JobClaimRequest{WorkerID: "runner_1", LeaseSeconds: 60}); err != nil {
+		t.Fatalf("claim: %v", err)
+	}
+	if _, err := store.Heartbeat(job.JobID, contracts.JobHeartbeatRequest{WorkerID: "runner_1", TransitionTo: "running"}); err != nil {
+		t.Fatalf("running heartbeat: %v", err)
+	}
+	canceled, err := store.Cancel(job.JobID, contracts.CancelRequest{Reason: "stop requested"})
+	if err != nil {
+		t.Fatalf("cancel running: %v", err)
+	}
+	if canceled.State != contracts.JobCanceled || canceled.StatusMessage != "stop requested" || canceled.Claim != nil {
+		t.Fatalf("canceled = %#v", canceled)
+	}
+	if _, err := store.Complete(job.JobID, contracts.JobCompleteRequest{WorkerID: "runner_1"}); !errors.Is(err, ErrTerminalState) {
+		t.Fatalf("complete after cancel err=%v", err)
+	}
+	replay, err := store.Cancel(job.JobID, contracts.CancelRequest{Reason: "ignored replay reason"})
+	if err != nil {
+		t.Fatalf("replay cancel: %v", err)
+	}
+	if replay.StatusMessage != "stop requested" {
+		t.Fatalf("replay changed terminal message: %#v", replay)
+	}
+}
+
 func TestPolicyAndAgentProjectionHideMetadata(t *testing.T) {
 	store := NewStore()
 	job, _, err := store.Create(createRequest(), "")
