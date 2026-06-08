@@ -631,7 +631,7 @@ func leasesReleaseCommand(cfg adminConfig, httpClient *http.Client, args []strin
 
 func artifactsCommand(cfg adminConfig, httpClient *http.Client, args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
-		return usage(stderr, "usage: pacp-admin [flags] artifacts <list|artifact|upload|create-upload|put-content|complete-upload|register-local> [id]")
+		return usage(stderr, "usage: pacp-admin [flags] artifacts <list|artifact|upload|create-upload|put-content|complete-upload|register-local|retention-sweep> [id]")
 	}
 	switch args[0] {
 	case "list":
@@ -657,8 +657,13 @@ func artifactsCommand(cfg adminConfig, httpClient *http.Client, args []string, s
 		return artifactsCompleteUploadCommand(cfg, httpClient, args[1:], stdout, stderr)
 	case "register-local":
 		return artifactsRegisterLocalCommand(cfg, httpClient, args[1:], stdout, stderr)
+	case "retention-sweep":
+		if len(args) != 1 {
+			return usage(stderr, "usage: pacp-admin [flags] artifacts retention-sweep")
+		}
+		return postJSON(cfg, httpClient, cfg.ArtifactsURL, "/v1/artifacts/retention/sweep", authorizationHeader(cfg.ComponentToken), "", stdout, stderr)
 	default:
-		return usage(stderr, "usage: pacp-admin [flags] artifacts <list|artifact|upload|create-upload|put-content|complete-upload|register-local> [id]")
+		return usage(stderr, "usage: pacp-admin [flags] artifacts <list|artifact|upload|create-upload|put-content|complete-upload|register-local|retention-sweep> [id]")
 	}
 }
 
@@ -1032,7 +1037,7 @@ func nodeCommand(cfg adminConfig, httpClient *http.Client, args []string, stdout
 		return 2
 	}
 	if len(args) == 0 {
-		return usage(stderr, "usage: pacp-admin [flags] node <resources|services|service|start|touch|stop> [id]")
+		return usage(stderr, "usage: pacp-admin [flags] node <resources|services|service|events|start|touch|stop> [id]")
 	}
 	switch args[0] {
 	case "resources":
@@ -1050,6 +1055,11 @@ func nodeCommand(cfg adminConfig, httpClient *http.Client, args []string, stdout
 			return usage(stderr, "usage: pacp-admin [flags] node service <service-id>")
 		}
 		return getJSON(cfg, httpClient, cfg.NodeURL, "/v1/node/services/"+url.PathEscape(args[1]), authorizationHeader(cfg.NodeToken), stdout, stderr)
+	case "events":
+		if len(args) != 1 {
+			return usage(stderr, "usage: pacp-admin [flags] node events")
+		}
+		return getJSON(cfg, httpClient, cfg.NodeURL, "/v1/node/events", authorizationHeader(cfg.NodeToken), stdout, stderr)
 	case "start":
 		return nodeStartCommand(cfg, httpClient, args[1:], stdout, stderr)
 	case "touch":
@@ -1057,7 +1067,7 @@ func nodeCommand(cfg adminConfig, httpClient *http.Client, args []string, stdout
 	case "stop":
 		return nodeStopCommand(cfg, httpClient, args[1:], stdout, stderr)
 	default:
-		return usage(stderr, "usage: pacp-admin [flags] node <resources|services|service|start|touch|stop> [id]")
+		return usage(stderr, "usage: pacp-admin [flags] node <resources|services|service|events|start|touch|stop> [id]")
 	}
 }
 

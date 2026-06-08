@@ -729,6 +729,36 @@ func TestNodeServicesCommandUsesNodeToken(t *testing.T) {
 	}
 }
 
+func TestNodeEventsCommandUsesNodeToken(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/v1/node/events" {
+			t.Fatalf("request = %s %s", r.Method, r.URL.Path)
+		}
+		if r.Header.Get("Authorization") != "Bearer node-token" {
+			t.Fatalf("Authorization = %q", r.Header.Get("Authorization"))
+		}
+		writeEnvelope(t, w, http.StatusOK, map[string]any{"items": []map[string]any{{
+			"event_id":   "node_evt_000001",
+			"event_type": "start",
+			"service_id": "svc_gpu",
+		}}})
+	}))
+	defer server.Close()
+
+	var stdout, stderr bytes.Buffer
+	code := run([]string{
+		"-node-url", server.URL,
+		"-node-token", "node-token",
+		"node", "events",
+	}, &stdout, &stderr, server.Client())
+	if code != 0 {
+		t.Fatalf("code=%d stderr=%s stdout=%s", code, stderr.String(), stdout.String())
+	}
+	if !strings.Contains(stdout.String(), `"event_id": "node_evt_000001"`) {
+		t.Fatalf("stdout = %s", stdout.String())
+	}
+}
+
 func writeAdminTestManifest(t *testing.T, dir, serviceID, capabilityID string) string {
 	t.Helper()
 	manifest := map[string]any{
@@ -1550,6 +1580,36 @@ func TestArtifactsRegisterLocalCommandPostsArtifact(t *testing.T) {
 		t.Fatalf("code=%d stderr=%s stdout=%s", code, stderr.String(), stdout.String())
 	}
 	if !strings.Contains(stdout.String(), `"artifact_id": "art_1"`) {
+		t.Fatalf("stdout = %s", stdout.String())
+	}
+}
+
+func TestArtifactsRetentionSweepCommandPosts(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/v1/artifacts/retention/sweep" {
+			t.Fatalf("request = %s %s", r.Method, r.URL.Path)
+		}
+		if r.Header.Get("Authorization") != "Bearer component-token" {
+			t.Fatalf("Authorization = %q", r.Header.Get("Authorization"))
+		}
+		writeEnvelope(t, w, http.StatusOK, map[string]any{
+			"expired_uploads":   1,
+			"expired_artifacts": 2,
+			"deleted_blobs":     3,
+		})
+	}))
+	defer server.Close()
+
+	var stdout, stderr bytes.Buffer
+	code := run([]string{
+		"-artifacts-url", server.URL,
+		"-component-token", "component-token",
+		"artifacts", "retention-sweep",
+	}, &stdout, &stderr, server.Client())
+	if code != 0 {
+		t.Fatalf("code=%d stderr=%s stdout=%s", code, stderr.String(), stdout.String())
+	}
+	if !strings.Contains(stdout.String(), `"deleted_blobs": 3`) {
 		t.Fatalf("stdout = %s", stdout.String())
 	}
 }
