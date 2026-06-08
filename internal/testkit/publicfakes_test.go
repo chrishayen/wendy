@@ -2,6 +2,8 @@ package testkit
 
 import (
 	"context"
+	"encoding/json"
+	"net/http"
 	"net/http/httptest"
 	"testing"
 	"time"
@@ -62,6 +64,83 @@ func TestFakeComponentHandlerRequiresCredential(t *testing.T) {
 	})
 	if !allowed.Passed() {
 		t.Fatalf("authenticated check failed: %#v", allowed)
+	}
+}
+
+func TestFakeComponentHandlerSupportsDeniedBehavior(t *testing.T) {
+	handler, err := NewFakeComponentHandler(FakeComponentConfig{
+		Kind:     "jobs",
+		Behavior: FakeComponentDenied,
+		Now:      fixedFakeClock,
+	})
+	if err != nil {
+		t.Fatalf("new fake component: %v", err)
+	}
+	server := httptest.NewServer(handler)
+	defer server.Close()
+
+	resp, err := server.Client().Get(server.URL + "/v1/jobs/health")
+	if err != nil {
+		t.Fatalf("get health: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("status = %d", resp.StatusCode)
+	}
+	var envelope rawErrorEnvelope
+	if err := json.NewDecoder(resp.Body).Decode(&envelope); err != nil {
+		t.Fatalf("decode error envelope: %v", err)
+	}
+	if envelope.OK || envelope.Error.Code != "forbidden" {
+		t.Fatalf("envelope = %#v", envelope)
+	}
+
+	report := CheckComponent(context.Background(), server.Client(), ComponentCheckOptions{
+		BaseURL:   server.URL,
+		Kind:      "jobs",
+		RequestID: "req_fake_component_denied",
+	})
+	if report.Passed() {
+		t.Fatalf("denied component check unexpectedly passed: %#v", report)
+	}
+}
+
+func TestFakeComponentHandlerSupportsUnavailableBehavior(t *testing.T) {
+	handler, err := NewFakeComponentHandler(FakeComponentConfig{
+		Kind:     "leases",
+		Behavior: FakeComponentUnavailable,
+		Now:      fixedFakeClock,
+	})
+	if err != nil {
+		t.Fatalf("new fake component: %v", err)
+	}
+	server := httptest.NewServer(handler)
+	defer server.Close()
+
+	resp, err := server.Client().Get(server.URL + "/v1/leases/metrics")
+	if err != nil {
+		t.Fatalf("get metrics: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d", resp.StatusCode)
+	}
+	var envelope rawErrorEnvelope
+	if err := json.NewDecoder(resp.Body).Decode(&envelope); err != nil {
+		t.Fatalf("decode error envelope: %v", err)
+	}
+	if envelope.OK || envelope.Error.Code != "component_unavailable" || !envelope.Error.Retryable {
+		t.Fatalf("envelope = %#v", envelope)
+	}
+}
+
+func TestFakeComponentHandlerRejectsUnknownBehavior(t *testing.T) {
+	_, err := NewFakeComponentHandler(FakeComponentConfig{
+		Kind:     "jobs",
+		Behavior: FakeComponentBehavior("strange"),
+	})
+	if err == nil {
+		t.Fatal("expected unknown behavior error")
 	}
 }
 

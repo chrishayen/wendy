@@ -37,7 +37,8 @@ Contract simulation data is kept as test input, not as product behavior.
   fake server, reusable public component/provider fakes, and fixture replay
   helpers for live handler contract tests. The reusable provider fake includes
   sync, async-acceptance, artifact-producing, validation-failure, and execution
-  failure branches.
+  failure branches; reusable component fakes can run in success, denied, or
+  unavailable modes.
 - `cmd/pacp-contract-smoke`: CLI smoke check for contract simulation packages,
   OpenAPI contracts, live component contracts, distributed component wiring,
   and live provider compliance.

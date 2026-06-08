@@ -18,10 +18,19 @@ import (
 type FakeComponentConfig struct {
 	Kind         string
 	Credential   string
+	Behavior     FakeComponentBehavior
 	HealthStatus string
 	Now          func() time.Time
 	Samples      []contracts.MetricSample
 }
+
+type FakeComponentBehavior string
+
+const (
+	FakeComponentSuccess     FakeComponentBehavior = "success"
+	FakeComponentDenied      FakeComponentBehavior = "denied"
+	FakeComponentUnavailable FakeComponentBehavior = "unavailable"
+)
 
 type FakeProviderConfig struct {
 	Endpoint   string
@@ -39,6 +48,14 @@ func NewFakeComponentHandler(cfg FakeComponentConfig) (http.Handler, error) {
 	}
 	if cfg.HealthStatus == "" {
 		cfg.HealthStatus = "healthy"
+	}
+	if cfg.Behavior == "" {
+		cfg.Behavior = FakeComponentSuccess
+	}
+	switch cfg.Behavior {
+	case FakeComponentSuccess, FakeComponentDenied, FakeComponentUnavailable:
+	default:
+		return nil, errors.New("unsupported fake component behavior: " + string(cfg.Behavior))
 	}
 	handler := &fakeComponentHandler{
 		cfg:      cfg,
@@ -113,22 +130,44 @@ func (h *fakeComponentHandler) ServeHTTP(w http.ResponseWriter, r *http.Request)
 	path := strings.TrimSuffix(r.URL.Path, "/")
 	switch {
 	case r.Method == http.MethodGet && path == h.contract.HealthPath:
+		if h.writeBlocked(w, r) {
+			return
+		}
 		health := contracts.NewComponentHealth(h.contract.Kind, nil)
 		health.Status = h.cfg.HealthStatus
 		health.CheckedAt = h.cfg.Now().UTC().Format(time.RFC3339)
 		writeFakeSuccess(w, r, http.StatusOK, health)
 	case r.Method == http.MethodGet && path == h.contract.MetricsPath:
+		if h.writeBlocked(w, r) {
+			return
+		}
 		metrics := contracts.NewComponentMetrics(h.contract.Kind, h.cfg.Samples)
 		metrics.CollectedAt = h.cfg.Now().UTC().Format(time.RFC3339)
 		writeFakeSuccess(w, r, http.StatusOK, metrics)
 	default:
 		for _, check := range h.contract.ListChecks {
 			if r.Method == http.MethodGet && path == listPathOnly(check.Path) {
+				if h.writeBlocked(w, r) {
+					return
+				}
 				writeFakeSuccess(w, r, http.StatusOK, fakeListPayload(h.contract.Kind))
 				return
 			}
 		}
 		writeFakeError(w, r, http.StatusNotFound, "not_found", "fake component route not found", false)
+	}
+}
+
+func (h *fakeComponentHandler) writeBlocked(w http.ResponseWriter, r *http.Request) bool {
+	switch h.cfg.Behavior {
+	case FakeComponentDenied:
+		writeFakeError(w, r, http.StatusForbidden, "forbidden", "fake component access denied", false)
+		return true
+	case FakeComponentUnavailable:
+		writeFakeError(w, r, http.StatusServiceUnavailable, "component_unavailable", "fake component unavailable", true)
+		return true
+	default:
+		return false
 	}
 }
 
