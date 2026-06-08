@@ -47,6 +47,8 @@ func NewFixtureServer(pkg FixturePackage) *FixtureServer {
 		for _, step := range fixture.TimeoutCleanup {
 			server.addRoute(step.Request, step.Response)
 		}
+		server.addEventListRoutes(fixture.EventList)
+		server.addEventListRoutes(fixture.LivenessEventList)
 	}
 	return server
 }
@@ -63,6 +65,97 @@ func (s *FixtureServer) addRoute(request *contracts.HTTPRequest, response *contr
 		request:  *request,
 		response: *response,
 	})
+}
+
+func (s *FixtureServer) addEventListRoutes(eventList map[string]any) {
+	if len(eventList) == 0 {
+		return
+	}
+	events, _ := eventList["events"].([]any)
+	if len(events) == 0 {
+		return
+	}
+	if requestTemplate, ok := eventList["request_template"]; ok {
+		responseTemplate, ok := eventList["response_template"]
+		if !ok {
+			return
+		}
+		for _, rawEvent := range events {
+			event, ok := rawEvent.(map[string]any)
+			if !ok {
+				continue
+			}
+			s.addTemplatedRoute(requestTemplate, responseTemplate, event)
+		}
+		return
+	}
+
+	requestTemplates, _ := eventList["request_templates"].(map[string]any)
+	responseTemplates, _ := eventList["response_templates"].(map[string]any)
+	if len(requestTemplates) == 0 || len(responseTemplates) == 0 {
+		return
+	}
+	names := make([]string, 0, len(requestTemplates))
+	for name := range requestTemplates {
+		if _, ok := responseTemplates[name]; ok {
+			names = append(names, name)
+		}
+	}
+	sort.Strings(names)
+	for _, rawEvent := range events {
+		event, ok := rawEvent.(map[string]any)
+		if !ok {
+			continue
+		}
+		for _, name := range names {
+			s.addTemplatedRoute(requestTemplates[name], responseTemplates[name], event)
+		}
+	}
+}
+
+func (s *FixtureServer) addTemplatedRoute(requestTemplate any, responseTemplate any, event map[string]any) {
+	var request contracts.HTTPRequest
+	if !decodeTemplate(requestTemplate, event, &request) {
+		return
+	}
+	var response contracts.HTTPResponse
+	if !decodeTemplate(responseTemplate, event, &response) {
+		return
+	}
+	s.addRoute(&request, &response)
+}
+
+func decodeTemplate(template any, event map[string]any, out any) bool {
+	raw, err := json.Marshal(substituteTemplate(template, event))
+	if err != nil {
+		return false
+	}
+	return json.Unmarshal(raw, out) == nil
+}
+
+func substituteTemplate(value any, event map[string]any) any {
+	switch typed := value.(type) {
+	case string:
+		out := typed
+		for key, replacement := range event {
+			out = strings.ReplaceAll(out, "${"+key+"}", fmt.Sprint(replacement))
+		}
+		return out
+	case map[string]any:
+		out := make(map[string]any, len(typed))
+		for key, item := range typed {
+			out[key] = substituteTemplate(item, event)
+		}
+		return out
+	case []any:
+		out := make([]any, len(typed))
+		for i, item := range typed {
+			out[i] = substituteTemplate(item, event)
+		}
+		return out
+	default:
+		return value
+	}
 }
 
 func (s *FixtureServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {

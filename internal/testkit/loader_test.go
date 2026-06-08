@@ -178,6 +178,24 @@ func TestFixtureServerServesNestedOrchestrationSteps(t *testing.T) {
 	}
 }
 
+func TestFixtureServerServesTemplatedLivenessEvents(t *testing.T) {
+	scenario := loadS003(t)
+	pkg, ok := FindPackage(scenario, "composition-runner")
+	if !ok {
+		t.Fatalf("composition runner package not found")
+	}
+	server := NewFixtureServer(pkg)
+
+	first := postProviderTimeoutHeartbeat(t, server)
+	second := postProviderTimeoutHeartbeat(t, server)
+	if requestID(decodeMap(t, first.Body)) != "req_s003_job_heartbeat_provider_timeout_0001" {
+		t.Fatalf("first heartbeat body=%s", first.Body.String())
+	}
+	if requestID(decodeMap(t, second.Body)) != "req_s003_job_heartbeat_provider_timeout_0002" {
+		t.Fatalf("second heartbeat body=%s", second.Body.String())
+	}
+}
+
 func postCancelFixture(t *testing.T, server *FixtureServer) *httptest.ResponseRecorder {
 	t.Helper()
 	req := httptest.NewRequest(http.MethodPost, "/v1/jobs/job_s003_0001/cancel", strings.NewReader(`{"requester_id":"sub_agent_s003","reason":"canceled by requester"}`))
@@ -187,6 +205,18 @@ func postCancelFixture(t *testing.T, server *FixtureServer) *httptest.ResponseRe
 	server.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("cancel fixture status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	return rec
+}
+
+func postProviderTimeoutHeartbeat(t *testing.T, server *FixtureServer) *httptest.ResponseRecorder {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodPost, "/v1/jobs/job_s003_0001/heartbeat", strings.NewReader(`{"worker_id":"runner_s003_0001","status_message":"waiting for provider completion"}`))
+	req.Header.Set("Authorization", "Bearer token_s003_runner")
+	rec := httptest.NewRecorder()
+	server.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("heartbeat fixture status=%d body=%s", rec.Code, rec.Body.String())
 	}
 	return rec
 }
