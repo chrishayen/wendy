@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"pacp/internal/contracts"
 )
 
 func TestDryRunTTSGeneratesAudioArtifact(t *testing.T) {
@@ -35,6 +37,50 @@ func TestDryRunTTSGeneratesAudioArtifact(t *testing.T) {
 	}
 }
 
+func TestDryRunTTSDefaultsToCatalogVoice(t *testing.T) {
+	server := newTestServer(t, Config{Endpoint: "http://provider.local", DryRun: true, VoiceCatalogPath: writeCatalog(t)})
+
+	data := invoke(t, server, DefaultTTSCapabilityID, map[string]any{"text": "hello from PACP"}, http.StatusOK)
+
+	output := data["output"].(map[string]any)
+	if output["voice"] != "narrator" || output["format"] != "wav" {
+		t.Fatalf("output = %#v", output)
+	}
+}
+
+func TestManifestPublishesSpeechCatalogSchemas(t *testing.T) {
+	server := newTestServer(t, Config{Endpoint: "http://provider.local", DryRun: true, VoiceCatalogPath: writeCatalog(t)})
+
+	manifest := providerManifest(t, server)
+	tts := capabilityByID(t, manifest, DefaultTTSCapabilityID)
+	stt := capabilityByID(t, manifest, DefaultSTTCapabilityID)
+
+	textProperty := schemaProperty(t, tts.InputSchema, "text")
+	if textProperty["maxLength"] != float64(maxTextLength) {
+		t.Fatalf("text property = %#v", textProperty)
+	}
+	voiceProperty := schemaProperty(t, tts.InputSchema, "voice")
+	if !enumEquals(voiceProperty["enum"], []string{"narrator"}) {
+		t.Fatalf("voice property = %#v", voiceProperty)
+	}
+	formatProperty := schemaProperty(t, tts.InputSchema, "format")
+	if !enumEquals(formatProperty["enum"], []string{"wav"}) {
+		t.Fatalf("format property = %#v", formatProperty)
+	}
+	if tts.Examples[0]["voice"] != "narrator" || tts.Examples[0]["format"] != "wav" {
+		t.Fatalf("tts examples = %#v", tts.Examples)
+	}
+
+	audioProperty := schemaProperty(t, stt.InputSchema, "audio_base64")
+	if audioProperty["contentEncoding"] != "base64" || audioProperty["maxLength"] != float64(base64.StdEncoding.EncodedLen(maxAudioBytes)) {
+		t.Fatalf("audio property = %#v", audioProperty)
+	}
+	mediaTypeProperty := schemaProperty(t, stt.InputSchema, "media_type")
+	if !enumEquals(mediaTypeProperty["enum"], []string{"audio/wav"}) {
+		t.Fatalf("media_type property = %#v", mediaTypeProperty)
+	}
+}
+
 func TestRejectsInvalidVoice(t *testing.T) {
 	server := newTestServer(t, Config{Endpoint: "http://provider.local", DryRun: true, VoiceCatalogPath: writeCatalog(t)})
 	envelope := invokeEnvelope(t, server, DefaultTTSCapabilityID, map[string]any{
@@ -42,7 +88,7 @@ func TestRejectsInvalidVoice(t *testing.T) {
 		"voice": "missing",
 	}, http.StatusBadRequest)
 	errObj := envelope["error"].(map[string]any)
-	if errObj["code"] != "validation_failed" || !strings.Contains(errObj["message"].(string), "missing") {
+	if errObj["code"] != "validation_failed" || !strings.Contains(errObj["message"].(string), "voice") {
 		t.Fatalf("error = %#v", errObj)
 	}
 }
@@ -72,7 +118,33 @@ func TestRejectsInvalidSTTFormat(t *testing.T) {
 		"format":       "mp3",
 	}, http.StatusBadRequest)
 	errObj := envelope["error"].(map[string]any)
-	if errObj["code"] != "validation_failed" || !strings.Contains(errObj["message"].(string), "mp3") {
+	if errObj["code"] != "validation_failed" || !strings.Contains(errObj["message"].(string), "format") {
+		t.Fatalf("error = %#v", errObj)
+	}
+}
+
+func TestRejectsInvalidSTTAudioBase64(t *testing.T) {
+	server := newTestServer(t, Config{Endpoint: "http://provider.local", DryRun: true, VoiceCatalogPath: writeCatalog(t)})
+	envelope := invokeEnvelope(t, server, DefaultSTTCapabilityID, map[string]any{
+		"audio_base64": "not base64",
+		"format":       "wav",
+	}, http.StatusBadRequest)
+	errObj := envelope["error"].(map[string]any)
+	if errObj["code"] != "validation_failed" || !strings.Contains(errObj["message"].(string), "audio_base64") {
+		t.Fatalf("error = %#v", errObj)
+	}
+}
+
+func TestRejectsMismatchedSTTMediaType(t *testing.T) {
+	server := newTestServer(t, Config{Endpoint: "http://provider.local", DryRun: true, VoiceCatalogPath: writeCatalog(t)})
+	audio := base64.StdEncoding.EncodeToString(wavSilence(defaultSampleRate, 120000000))
+	envelope := invokeEnvelope(t, server, DefaultSTTCapabilityID, map[string]any{
+		"audio_base64": audio,
+		"media_type":   "audio/mpeg",
+		"format":       "wav",
+	}, http.StatusBadRequest)
+	errObj := envelope["error"].(map[string]any)
+	if errObj["code"] != "validation_failed" || !strings.Contains(errObj["message"].(string), "media_type") {
 		t.Fatalf("error = %#v", errObj)
 	}
 }
@@ -90,6 +162,23 @@ func TestMapsTTSEngineFailureToProviderUnavailable(t *testing.T) {
 	}
 }
 
+func TestMapsSTTEngineFailureToProviderUnavailable(t *testing.T) {
+	server := newTestServer(t, Config{
+		Endpoint:   "http://provider.local",
+		TTSCommand: []string{"/bin/false"},
+		STTCommand: []string{"/bin/false"},
+	})
+	audio := base64.StdEncoding.EncodeToString(wavSilence(defaultSampleRate, 120000000))
+	envelope := invokeEnvelope(t, server, DefaultSTTCapabilityID, map[string]any{
+		"audio_base64": audio,
+		"format":       "wav",
+	}, http.StatusInternalServerError)
+	errObj := envelope["error"].(map[string]any)
+	if errObj["code"] != "provider_unavailable" {
+		t.Fatalf("error = %#v", errObj)
+	}
+}
+
 func newTestServer(t *testing.T, cfg Config) http.Handler {
 	t.Helper()
 	server, err := NewServer(cfg)
@@ -97,6 +186,61 @@ func newTestServer(t *testing.T, cfg Config) http.Handler {
 		t.Fatalf("new speech provider: %v", err)
 	}
 	return server
+}
+
+func providerManifest(t *testing.T, handler http.Handler) contracts.ProviderManifest {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodGet, "/v1/provider/manifest", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var envelope struct {
+		OK   bool                       `json:"ok"`
+		Data contracts.ProviderManifest `json:"data"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&envelope); err != nil {
+		t.Fatalf("decode manifest envelope: %v", err)
+	}
+	if !envelope.OK {
+		t.Fatalf("manifest envelope = %#v", envelope)
+	}
+	return envelope.Data
+}
+
+func capabilityByID(t *testing.T, manifest contracts.ProviderManifest, id string) contracts.Capability {
+	t.Helper()
+	for _, capability := range manifest.Capabilities {
+		if capability.ID == id {
+			return capability
+		}
+	}
+	t.Fatalf("capability %s not found in %#v", id, manifest.Capabilities)
+	return contracts.Capability{}
+}
+
+func schemaProperty(t *testing.T, schema map[string]any, key string) map[string]any {
+	t.Helper()
+	properties, _ := schema["properties"].(map[string]any)
+	property, _ := properties[key].(map[string]any)
+	if property == nil {
+		t.Fatalf("property %s not found in %#v", key, schema)
+	}
+	return property
+}
+
+func enumEquals(value any, want []string) bool {
+	values, ok := value.([]any)
+	if !ok || len(values) != len(want) {
+		return false
+	}
+	for i, item := range values {
+		if item != want[i] {
+			return false
+		}
+	}
+	return true
 }
 
 func invoke(t *testing.T, handler http.Handler, capabilityID string, input map[string]any, wantStatus int) map[string]any {

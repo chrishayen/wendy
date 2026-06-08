@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"sort"
 	"strings"
 	"time"
 
@@ -113,7 +114,7 @@ func NewServer(cfg Config) (*provider.Server, error) {
 		return nil, err
 	}
 	p := &speechProvider{cfg: normalized, voices: mapVoices(catalog.Voices), formats: mapFormats(catalog.Formats)}
-	return provider.NewServer(manifest(normalized), map[string]provider.CapabilityHandler{
+	return provider.NewServer(manifest(normalized, p.voices, p.formats), map[string]provider.CapabilityHandler{
 		normalized.TTSCapabilityID: p.tts,
 		normalized.STTCapabilityID: p.stt,
 	})
@@ -273,11 +274,11 @@ func (p *speechProvider) parseTTS(input map[string]any) (ttsRequest, AudioFormat
 	if len(text) > maxTextLength {
 		return ttsRequest{}, AudioFormat{}, fmt.Errorf("%w: text exceeds %d characters", provider.ErrValidation, maxTextLength)
 	}
-	voice := optionalStringDefault(input, "voice", defaultVoiceID)
+	voice := optionalStringDefault(input, "voice", p.defaultVoiceID())
 	if _, ok := p.voices[voice]; !ok {
 		return ttsRequest{}, AudioFormat{}, fmt.Errorf("%w: voice %s is not supported", provider.ErrValidation, voice)
 	}
-	formatID := optionalStringDefault(input, "format", defaultFormatID)
+	formatID := optionalStringDefault(input, "format", p.defaultFormatID())
 	format, ok := p.formats[formatID]
 	if !ok {
 		return ttsRequest{}, AudioFormat{}, fmt.Errorf("%w: format %s is not supported", provider.ErrValidation, formatID)
@@ -297,14 +298,31 @@ func (p *speechProvider) parseSTT(input map[string]any) (sttRequest, error) {
 	if len(audio) > base64.StdEncoding.EncodedLen(maxAudioBytes) {
 		return sttRequest{}, fmt.Errorf("%w: audio_base64 exceeds maximum supported size", provider.ErrValidation)
 	}
-	formatID := optionalStringDefault(input, "format", defaultFormatID)
+	formatID := optionalStringDefault(input, "format", p.defaultFormatID())
 	format, ok := p.formats[formatID]
 	if !ok {
 		return sttRequest{}, fmt.Errorf("%w: format %s is not supported", provider.ErrValidation, formatID)
 	}
 	mediaType := optionalStringDefault(input, "media_type", format.MediaType)
+	if format.MediaType != "" && mediaType != format.MediaType {
+		return sttRequest{}, fmt.Errorf("%w: media_type %s is not supported for format %s", provider.ErrValidation, mediaType, formatID)
+	}
 	language := optionalStringDefault(input, "language", "en")
 	return sttRequest{AudioBase64: audio, MediaType: mediaType, Format: formatID, Language: language}, nil
+}
+
+func (p *speechProvider) defaultVoiceID() string {
+	if _, ok := p.voices[defaultVoiceID]; ok {
+		return defaultVoiceID
+	}
+	return firstString(sortedVoiceIDs(p.voices), defaultVoiceID)
+}
+
+func (p *speechProvider) defaultFormatID() string {
+	if _, ok := p.formats[defaultFormatID]; ok {
+		return defaultFormatID
+	}
+	return firstString(sortedFormatIDs(p.formats), defaultFormatID)
 }
 
 func runEngine(ctx context.Context, timeout time.Duration, command []string, request any, out any) error {
@@ -392,7 +410,7 @@ func checksum(body []byte) string {
 	return "sha256:" + hex.EncodeToString(sum[:])
 }
 
-func manifest(cfg Config) contracts.ProviderManifest {
+func manifest(cfg Config, voices map[string]Voice, formats map[string]AudioFormat) contracts.ProviderManifest {
 	return contracts.ProviderManifest{
 		SchemaVersion: "v1",
 		Service: contracts.Service{
@@ -405,13 +423,15 @@ func manifest(cfg Config) contracts.ProviderManifest {
 		},
 		Provider: contracts.Provider{Endpoint: cfg.Endpoint, HealthPath: "/v1/provider/health"},
 		Capabilities: []contracts.Capability{
-			ttsCapability(cfg.TTSCapabilityID),
-			sttCapability(cfg.STTCapabilityID),
+			ttsCapability(cfg.TTSCapabilityID, voices, formats),
+			sttCapability(cfg.STTCapabilityID, formats),
 		},
 	}
 }
 
-func ttsCapability(id string) contracts.Capability {
+func ttsCapability(id string, voices map[string]Voice, formats map[string]AudioFormat) contracts.Capability {
+	voiceIDs := sortedVoiceIDs(voices)
+	formatIDs := sortedFormatIDs(formats)
 	return contracts.Capability{
 		ID:            id,
 		Name:          "Text to speech",
@@ -422,9 +442,9 @@ func ttsCapability(id string) contracts.Capability {
 			"type":     "object",
 			"required": []any{"text"},
 			"properties": map[string]any{
-				"text":   map[string]any{"type": "string"},
-				"voice":  map[string]any{"type": "string"},
-				"format": map[string]any{"type": "string"},
+				"text":   map[string]any{"type": "string", "minLength": 1, "maxLength": maxTextLength},
+				"voice":  stringProperty(voiceIDs),
+				"format": stringProperty(formatIDs),
 			},
 		},
 		OutputSchema: map[string]any{
@@ -439,7 +459,7 @@ func ttsCapability(id string) contracts.Capability {
 				"dry_run":          map[string]any{"type": "boolean"},
 			},
 		},
-		Examples:      []map[string]any{{"text": "hello", "voice": defaultVoiceID, "format": defaultFormatID}},
+		Examples:      []map[string]any{{"text": "hello", "voice": firstString(voiceIDs, defaultVoiceID), "format": firstString(formatIDs, defaultFormatID)}},
 		SideEffects:   "external",
 		ResourceHints: []contracts.ResourceHint{},
 		ArtifactHints: []contracts.ArtifactHint{{MediaType: "audio/wav", Count: "one"}},
@@ -447,7 +467,8 @@ func ttsCapability(id string) contracts.Capability {
 	}
 }
 
-func sttCapability(id string) contracts.Capability {
+func sttCapability(id string, formats map[string]AudioFormat) contracts.Capability {
+	formatIDs := sortedFormatIDs(formats)
 	return contracts.Capability{
 		ID:            id,
 		Name:          "Speech to text",
@@ -458,9 +479,9 @@ func sttCapability(id string) contracts.Capability {
 			"type":     "object",
 			"required": []any{"audio_base64"},
 			"properties": map[string]any{
-				"audio_base64": map[string]any{"type": "string"},
-				"media_type":   map[string]any{"type": "string"},
-				"format":       map[string]any{"type": "string"},
+				"audio_base64": map[string]any{"type": "string", "contentEncoding": "base64", "maxLength": base64.StdEncoding.EncodedLen(maxAudioBytes)},
+				"media_type":   stringProperty(sortedMediaTypes(formats)),
+				"format":       stringProperty(formatIDs),
 				"language":     map[string]any{"type": "string"},
 			},
 		},
@@ -474,10 +495,66 @@ func sttCapability(id string) contracts.Capability {
 				"dry_run":          map[string]any{"type": "boolean"},
 			},
 		},
-		Examples:      []map[string]any{{"audio_base64": "...", "format": defaultFormatID, "language": "en"}},
+		Examples:      []map[string]any{{"audio_base64": "...", "format": firstString(formatIDs, defaultFormatID), "language": "en"}},
 		SideEffects:   "external",
 		ResourceHints: []contracts.ResourceHint{},
 		ArtifactHints: []contracts.ArtifactHint{},
 		TimeoutHint:   "60s",
 	}
+}
+
+func stringProperty(enumValues []string) map[string]any {
+	property := map[string]any{"type": "string"}
+	if len(enumValues) > 0 {
+		property["enum"] = stringEnum(enumValues)
+	}
+	return property
+}
+
+func stringEnum(values []string) []any {
+	out := make([]any, 0, len(values))
+	for _, value := range values {
+		out = append(out, value)
+	}
+	return out
+}
+
+func sortedVoiceIDs(voices map[string]Voice) []string {
+	out := make([]string, 0, len(voices))
+	for id := range voices {
+		out = append(out, id)
+	}
+	sort.Strings(out)
+	return out
+}
+
+func sortedFormatIDs(formats map[string]AudioFormat) []string {
+	out := make([]string, 0, len(formats))
+	for id := range formats {
+		out = append(out, id)
+	}
+	sort.Strings(out)
+	return out
+}
+
+func sortedMediaTypes(formats map[string]AudioFormat) []string {
+	seen := map[string]bool{}
+	for _, format := range formats {
+		if format.MediaType != "" {
+			seen[format.MediaType] = true
+		}
+	}
+	out := make([]string, 0, len(seen))
+	for mediaType := range seen {
+		out = append(out, mediaType)
+	}
+	sort.Strings(out)
+	return out
+}
+
+func firstString(values []string, fallback string) string {
+	if len(values) == 0 {
+		return fallback
+	}
+	return values[0]
 }
