@@ -1,0 +1,13 @@
+{
+  "6": {
+    "class_type": "CLIPTextEncode",
+    "inputs": {
+      "text": "{{prompt}}",
+      "width": "{{width}}",
+      "height": "{{height}}",
+      "seed": "{{seed}}",
+      "steps": "{{steps}}",
+      "lora": "{{lora}}"
+    }
+  }
+}
