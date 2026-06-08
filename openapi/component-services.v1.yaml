@@ -79,16 +79,7 @@ paths:
       x-policy-action: catalog.read
       responses:
         "200":
-          description: Catalog export envelope.
-          content:
-            application/json:
-              schema:
-                allOf:
-                  - $ref: "#/components/schemas/SuccessEnvelope"
-                  - type: object
-                    properties:
-                      data:
-                        $ref: "#/components/schemas/CatalogExport"
+          $ref: "#/components/responses/CatalogExportResponse"
         default:
           $ref: "#/components/responses/Error"
   /v1/catalog/services:
@@ -1172,16 +1163,7 @@ paths:
       security: []
       responses:
         "200":
-          description: Provider manifest envelope.
-          content:
-            application/json:
-              schema:
-                allOf:
-                  - $ref: "#/components/schemas/SuccessEnvelope"
-                  - type: object
-                    properties:
-                      data:
-                        $ref: "#/components/schemas/ProviderManifest"
+          $ref: "#/components/responses/ProviderManifestResponse"
         default:
           $ref: "#/components/responses/Error"
   /v1/provider/health:
@@ -1225,16 +1207,7 @@ paths:
               $ref: "#/components/schemas/ProviderInvokeRequest"
       responses:
         "200":
-          description: Provider invocation result envelope.
-          content:
-            application/json:
-              schema:
-                allOf:
-                  - $ref: "#/components/schemas/SuccessEnvelope"
-                  - type: object
-                    properties:
-                      data:
-                        $ref: "#/components/schemas/ProviderInvokeResponse"
+          $ref: "#/components/responses/ProviderInvokeResultResponse"
         "504":
           description: Provider invocation timed out. Error code is `provider_timeout`.
           $ref: "#/components/responses/Error"
@@ -1397,6 +1370,17 @@ components:
                 properties:
                   data:
                     $ref: "#/components/schemas/ComponentMetrics"
+    CatalogExportResponse:
+      description: Catalog export envelope.
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: "#/components/schemas/SuccessEnvelope"
+              - type: object
+                properties:
+                  data:
+                    $ref: "#/components/schemas/CatalogExport"
     CatalogRegistrationResponse:
       description: Catalog manifest registration envelope.
       content:
@@ -1782,12 +1766,28 @@ components:
                 properties:
                   data:
                     $ref: "#/components/schemas/NodeServiceList"
-    Success:
-      description: Success envelope.
+    ProviderManifestResponse:
+      description: Provider manifest envelope.
       content:
         application/json:
           schema:
-            $ref: "#/components/schemas/SuccessEnvelope"
+            allOf:
+              - $ref: "#/components/schemas/SuccessEnvelope"
+              - type: object
+                properties:
+                  data:
+                    $ref: "#/components/schemas/ProviderManifest"
+    ProviderInvokeResultResponse:
+      description: Provider invocation result envelope.
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: "#/components/schemas/SuccessEnvelope"
+              - type: object
+                properties:
+                  data:
+                    $ref: "#/components/schemas/ProviderInvokeResponse"
   schemas:
     AnyMap:
       type: object
