@@ -138,9 +138,10 @@ func Render(bundle Bundle) (RenderedBundle, error) {
 			findings = append(findings, fmt.Sprintf("services[%d].idle_timeout_seconds must be >= 0", i))
 			continue
 		}
-		runtimeAdapter := strings.TrimSpace(service.RuntimeAdapter)
-		if runtimeAdapter == "" {
-			runtimeAdapter = defaultRuntimeAdapter
+		runtimeAdapter, runtimeFindings := serviceRuntimeAdapter(i, service)
+		findings = append(findings, runtimeFindings...)
+		if len(runtimeFindings) > 0 {
+			continue
 		}
 		initialStatus := strings.TrimSpace(service.InitialStatus)
 		if initialStatus == "" {
@@ -384,6 +385,46 @@ func cloneNodeAuth(in []contracts.NodeAuthSubject) []contracts.NodeAuthSubject {
 		out[i].AllowedActions = append([]string(nil), subject.AllowedActions...)
 	}
 	return out
+}
+
+func serviceRuntimeAdapter(serviceIndex int, service ServiceBundle) (string, []string) {
+	var findings []string
+	runtimeAdapter := strings.TrimSpace(service.RuntimeAdapter)
+	if runtimeAdapter == "" {
+		switch {
+		case service.Process != nil && service.Docker != nil:
+			findings = append(findings, fmt.Sprintf("services[%d].runtime_adapter is required when both process and docker config are present", serviceIndex))
+		case service.Process != nil:
+			runtimeAdapter = "process"
+		case service.Docker != nil:
+			runtimeAdapter = "docker"
+		default:
+			runtimeAdapter = defaultRuntimeAdapter
+		}
+	}
+	switch runtimeAdapter {
+	case "fake":
+		if service.Process != nil || service.Docker != nil {
+			findings = append(findings, fmt.Sprintf("services[%d].runtime_adapter fake must not include process or docker config", serviceIndex))
+		}
+	case "process":
+		if service.Process == nil || len(service.Process.Command) == 0 || strings.TrimSpace(service.Process.Command[0]) == "" {
+			findings = append(findings, fmt.Sprintf("services[%d].process.command is required for process runtime", serviceIndex))
+		}
+		if service.Docker != nil {
+			findings = append(findings, fmt.Sprintf("services[%d].runtime_adapter process must not include docker config", serviceIndex))
+		}
+	case "docker":
+		if service.Docker == nil || strings.TrimSpace(service.Docker.ContainerName) == "" {
+			findings = append(findings, fmt.Sprintf("services[%d].docker.container_name is required for docker runtime", serviceIndex))
+		}
+		if service.Process != nil {
+			findings = append(findings, fmt.Sprintf("services[%d].runtime_adapter docker must not include process config", serviceIndex))
+		}
+	default:
+		findings = append(findings, fmt.Sprintf("services[%d].runtime_adapter must be fake, process, or docker", serviceIndex))
+	}
+	return runtimeAdapter, findings
 }
 
 func cloneProcessConfig(in *contracts.ProcessRuntimeConfig) *contracts.ProcessRuntimeConfig {

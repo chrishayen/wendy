@@ -5,6 +5,8 @@ import (
 	"os"
 	"strings"
 	"testing"
+
+	"pacp/internal/contracts"
 )
 
 func TestRenderBundleProducesNativeComponentInputs(t *testing.T) {
@@ -148,5 +150,50 @@ func TestRenderRejectsNegativeIdleTimeout(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "idle_timeout_seconds must be >= 0") {
 		t.Fatalf("error did not mention idle timeout: %v", err)
+	}
+}
+
+func TestRenderInfersProcessRuntimeFromProcessConfig(t *testing.T) {
+	raw, err := os.ReadFile("../../testdata/deploy/generic-gpu-bundle.json")
+	if err != nil {
+		t.Fatalf("read bundle: %v", err)
+	}
+	bundle, err := Parse(raw)
+	if err != nil {
+		t.Fatalf("parse bundle: %v", err)
+	}
+	bundle.Services[0].RuntimeAdapter = ""
+	bundle.Services[0].Process = &contracts.ProcessRuntimeConfig{
+		Command: []string{"/usr/bin/true"},
+	}
+
+	rendered, err := Render(bundle)
+	if err != nil {
+		t.Fatalf("render process bundle: %v", err)
+	}
+	service := rendered.NodeConfig.Services[0]
+	if service.RuntimeAdapter != "process" || service.Process == nil || len(service.Process.Command) != 1 {
+		t.Fatalf("service runtime = %#v", service)
+	}
+}
+
+func TestRenderRejectsInvalidRuntimeConfig(t *testing.T) {
+	raw, err := os.ReadFile("../../testdata/deploy/generic-gpu-bundle.json")
+	if err != nil {
+		t.Fatalf("read bundle: %v", err)
+	}
+	bundle, err := Parse(raw)
+	if err != nil {
+		t.Fatalf("parse bundle: %v", err)
+	}
+	bundle.Services[0].RuntimeAdapter = "docker"
+	bundle.Services[0].Docker = nil
+
+	_, err = Render(bundle)
+	if err == nil {
+		t.Fatal("expected docker config error")
+	}
+	if !strings.Contains(err.Error(), "docker.container_name is required for docker runtime") {
+		t.Fatalf("error did not mention docker runtime: %v", err)
 	}
 }
