@@ -178,7 +178,12 @@ func checkProviderInvoke(ctx context.Context, httpClient *http.Client, baseURL s
 		report.add(result)
 		return false
 	}
-	request := contracts.ProviderInvokeRequest{Input: input}
+	request := contracts.ProviderInvokeRequest{
+		Input: input,
+		Context: contracts.ProviderInvokeContext{
+			RequestID: observability.RequestIDFromContext(ctx),
+		},
+	}
 	var envelope rawSuccessEnvelope
 	path := "/v1/provider/capabilities/" + url.PathEscape(capabilityID) + "/invoke"
 	status, err := postEnvelope(ctx, httpClient, joinURLPath(baseURL, path), opts.Credential, request, &envelope)
@@ -224,7 +229,12 @@ func checkProviderInvalidInput(ctx context.Context, httpClient *http.Client, bas
 	if !ok || len(requiredFields(capability.InputSchema)) == 0 {
 		return
 	}
-	request := contracts.ProviderInvokeRequest{Input: map[string]any{}}
+	request := contracts.ProviderInvokeRequest{
+		Input: map[string]any{},
+		Context: contracts.ProviderInvokeContext{
+			RequestID: observability.RequestIDFromContext(ctx),
+		},
+	}
 	var envelope rawErrorEnvelope
 	path := "/v1/provider/capabilities/" + url.PathEscape(capabilityID) + "/invoke"
 	status, err := postEnvelope(ctx, httpClient, joinURLPath(baseURL, path), credential, request, &envelope)

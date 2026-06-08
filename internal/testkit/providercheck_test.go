@@ -77,13 +77,22 @@ func TestCheckProviderInvoke(t *testing.T) {
 		case "/v1/provider/health":
 			writeTestEnvelope(t, w, http.StatusOK, map[string]any{"status": "healthy"})
 		case "/v1/provider/capabilities/cap_echo/invoke":
+			if r.Header.Get("X-Request-ID") != "req_test" {
+				t.Fatalf("invoke X-Request-ID = %q", r.Header.Get("X-Request-ID"))
+			}
 			invoked = true
 			var req contracts.ProviderInvokeRequest
 			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 				t.Fatalf("decode invoke: %v", err)
 			}
+			if req.Context.RequestID != "req_test" {
+				t.Fatalf("invoke context request id = %q", req.Context.RequestID)
+			}
 			if req.Input["message"] != "hello" {
 				if _, exists := req.Input["message"]; !exists {
+					if req.Context.RequestID != "req_test" {
+						t.Fatalf("invalid input context request id = %q", req.Context.RequestID)
+					}
 					writeTestErrorEnvelope(t, w, http.StatusBadRequest, "validation_failed", "message is required")
 					return
 				}
@@ -113,6 +122,7 @@ func TestCheckProviderInvoke(t *testing.T) {
 		CapabilityID: "cap_echo",
 		Input:        map[string]any{"message": "hello"},
 		Credential:   "Bearer provider-token",
+		RequestID:    "req_test",
 	})
 	if !report.Passed() {
 		t.Fatalf("report = %#v", report)

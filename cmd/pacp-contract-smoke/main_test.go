@@ -40,10 +40,16 @@ func TestRunProviderSmokeChecksLiveProvider(t *testing.T) {
 		case "/v1/provider/health":
 			writeSmokeEnvelope(t, w, r, http.StatusOK, map[string]any{"status": "healthy"})
 		case "/v1/provider/capabilities/cap_echo/invoke":
+			if r.Header.Get("X-Request-ID") != "req_contract_provider" {
+				t.Fatalf("invoke X-Request-ID = %q", r.Header.Get("X-Request-ID"))
+			}
 			invoked = true
 			var req contracts.ProviderInvokeRequest
 			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 				t.Fatalf("decode invoke: %v", err)
+			}
+			if req.Context.RequestID != "req_contract_provider" {
+				t.Fatalf("invoke context request id = %q", req.Context.RequestID)
 			}
 			if req.Input["message"] != "hello" {
 				if _, exists := req.Input["message"]; !exists {
