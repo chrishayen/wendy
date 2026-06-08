@@ -135,6 +135,19 @@ func TestComponentServiceAudienceMetadataForRouteAwareAuth(t *testing.T) {
 	assertOperationPolicyAction(t, doc, "/v1/node/services/{service_id}/touch", "post", "node.service.touch")
 }
 
+func TestCapabilityMetadataSchemasMatchManifestEnums(t *testing.T) {
+	publicDoc := loadOpenAPIDoc(t, filepath.Join("..", "..", "openapi", "public-gateway.v1.yaml"))
+	componentDoc := loadOpenAPIDoc(t, filepath.Join("..", "..", "openapi", "component-services.v1.yaml"))
+
+	wantExecutionModes := []string{"sync", "async", "either"}
+	wantSideEffects := []string{"none", "read", "write", "external", "destructive"}
+
+	assertSchemaPropertyEnum(t, publicDoc, "Tool", "execution_mode", wantExecutionModes)
+	assertSchemaPropertyEnum(t, publicDoc, "Tool", "side_effects", wantSideEffects)
+	assertSchemaPropertyEnum(t, componentDoc, "Capability", "execution_mode", wantExecutionModes)
+	assertSchemaPropertyEnum(t, componentDoc, "Capability", "side_effects", wantSideEffects)
+}
+
 func TestValidateFileDetectsDuplicateOperationID(t *testing.T) {
 	path := writeContract(t, `
 openapi: 3.1.0
@@ -1091,6 +1104,19 @@ func assertOperationPolicyAction(t *testing.T, doc map[string]any, path, method,
 	got, _ := operation["x-policy-action"].(string)
 	if got != want {
 		t.Fatalf("%s %s policy action=%q want=%q", method, path, got, want)
+	}
+}
+
+func assertSchemaPropertyEnum(t *testing.T, doc map[string]any, schemaName, propertyName string, want []string) {
+	t.Helper()
+	components, _ := asMap(doc["components"])
+	schemas, _ := asMap(components["schemas"])
+	schema, _ := asMap(schemas[schemaName])
+	properties, _ := asMap(schema["properties"])
+	property, _ := asMap(properties[propertyName])
+	got := stringValues(property["enum"])
+	if !sameStringSet(got, want) {
+		t.Fatalf("%s.%s enum=%#v want=%#v", schemaName, propertyName, got, want)
 	}
 }
 

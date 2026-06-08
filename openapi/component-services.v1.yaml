@@ -2091,7 +2091,7 @@ components:
             type: string
         execution_mode:
           type: string
-          enum: [sync, async]
+          enum: [sync, async, either]
         input_schema:
           $ref: "#/components/schemas/AnyMap"
         output_schema:
@@ -2102,6 +2102,7 @@ components:
             $ref: "#/components/schemas/AnyMap"
         side_effects:
           type: string
+          enum: [none, read, write, external, destructive]
         resource_hints:
           type: array
           items:

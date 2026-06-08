@@ -487,7 +487,7 @@ components:
             type: string
         execution_mode:
           type: string
-          enum: [sync, async]
+          enum: [sync, async, either]
         input_schema:
           type: object
           additionalProperties: true
@@ -496,6 +496,7 @@ components:
           additionalProperties: true
         side_effects:
           type: string
+          enum: [none, read, write, external, destructive]
         resource_hints:
           type: array
           items:
