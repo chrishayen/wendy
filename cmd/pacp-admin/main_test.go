@@ -899,6 +899,100 @@ func TestDiagnoseJobFetchesJobAndLogsWithComponentToken(t *testing.T) {
 	}
 }
 
+func TestDiagnoseResourceFetchesInspectionAndRelatedJobs(t *testing.T) {
+	now := time.Now().UTC()
+	seen := map[string]bool{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seen[r.URL.Path] = true
+		if r.Header.Get("Authorization") != "Bearer component-token" {
+			t.Fatalf("%s Authorization = %q", r.URL.Path, r.Header.Get("Authorization"))
+		}
+		switch r.URL.Path {
+		case "/v1/resources/res_gpu_0/inspection":
+			writeEnvelope(t, w, http.StatusOK, map[string]any{
+				"resource": map[string]any{
+					"resource_id":  "res_gpu_0",
+					"selector":     "gpu",
+					"display_name": "GPU 0",
+					"status":       "available",
+					"node_id":      "node_linux_gpu",
+					"links":        map[string]any{},
+				},
+				"active_lease": map[string]any{
+					"lease_id":    "lease_1",
+					"resource_id": "res_gpu_0",
+					"holder_id":   "job_running",
+					"expires_at":  now.Add(time.Minute).Format(time.RFC3339),
+					"links":       map[string]any{},
+				},
+				"queue_length": 1,
+				"queue": []map[string]any{{
+					"request_id":     "lease_req_1",
+					"requester_id":   "job_queued",
+					"priority":       0,
+					"queue_position": 1,
+				}},
+			})
+		case "/v1/jobs/job_running":
+			writeEnvelope(t, w, http.StatusOK, map[string]any{
+				"job_id":        "job_running",
+				"state":         "running",
+				"created_at":    now.Add(-time.Minute).Format(time.RFC3339),
+				"updated_at":    now.Format(time.RFC3339),
+				"artifact_refs": []any{},
+				"links":         map[string]any{},
+			})
+		case "/v1/jobs/job_queued":
+			writeEnvelope(t, w, http.StatusOK, map[string]any{
+				"job_id":        "job_queued",
+				"state":         "queued",
+				"created_at":    now.Add(-time.Minute).Format(time.RFC3339),
+				"updated_at":    now.Format(time.RFC3339),
+				"artifact_refs": []any{},
+				"links":         map[string]any{},
+			})
+		default:
+			t.Fatalf("request = %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	var stdout, stderr bytes.Buffer
+	code := run([]string{
+		"-jobs-url", server.URL,
+		"-leases-url", server.URL,
+		"-component-token", "component-token",
+		"diagnose", "resource", "res_gpu_0",
+	}, &stdout, &stderr, server.Client())
+	if code != 0 {
+		t.Fatalf("code=%d stderr=%s stdout=%s", code, stderr.String(), stdout.String())
+	}
+	for _, path := range []string{"/v1/resources/res_gpu_0/inspection", "/v1/jobs/job_running", "/v1/jobs/job_queued"} {
+		if !seen[path] {
+			t.Fatalf("missing request %s in %#v", path, seen)
+		}
+	}
+	output := stdout.String()
+	for _, expected := range []string{
+		`"admin_command": "diagnose resource"`,
+		`"code": "resource_available"`,
+		`"code": "resource_active_lease"`,
+		`"code": "resource_queue_depth"`,
+		`"code": "active_holder_job_state"`,
+		`"code": "related_job_state"`,
+		`"code": "related_jobs_available"`,
+		`"related_jobs"`,
+		`"job_running"`,
+		`"job_queued"`,
+		`"diagnose job job_running"`,
+		`"diagnose job job_queued"`,
+	} {
+		if !strings.Contains(output, expected) {
+			t.Fatalf("stdout missing %q:\n%s", expected, output)
+		}
+	}
+}
+
 func TestLeasesRegisterResourceCommandPostsResource(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost || r.URL.Path != "/v1/resources" {

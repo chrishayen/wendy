@@ -220,6 +220,13 @@ type jobDiagnosticData struct {
 	SuggestedActions []string                       `json:"suggested_actions"`
 }
 
+type resourceDiagnosticData struct {
+	Inspection       contracts.ResourceInspection `json:"inspection"`
+	RelatedJobs      []contracts.Job              `json:"related_jobs,omitempty"`
+	Findings         []diagnosticFinding          `json:"findings"`
+	SuggestedActions []string                     `json:"suggested_actions"`
+}
+
 func healthCommand(cfg adminConfig, httpClient *http.Client, args []string, stdout, stderr io.Writer) int {
 	flags := flag.NewFlagSet("health", flag.ContinueOnError)
 	flags.SetOutput(stderr)
@@ -1062,13 +1069,15 @@ func nodeStopCommand(cfg adminConfig, httpClient *http.Client, args []string, st
 
 func diagnoseCommand(cfg adminConfig, httpClient *http.Client, args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
-		return usage(stderr, "usage: pacp-admin [flags] diagnose <job> [id]")
+		return usage(stderr, "usage: pacp-admin [flags] diagnose <job|resource> [id]")
 	}
 	switch args[0] {
 	case "job":
 		return diagnoseJobCommand(cfg, httpClient, args[1:], stdout, stderr)
+	case "resource":
+		return diagnoseResourceCommand(cfg, httpClient, args[1:], stdout, stderr)
 	default:
-		return usage(stderr, "usage: pacp-admin [flags] diagnose <job> [id]")
+		return usage(stderr, "usage: pacp-admin [flags] diagnose <job|resource> [id]")
 	}
 }
 
@@ -1109,6 +1118,201 @@ func diagnoseJobCommand(cfg adminConfig, httpClient *http.Client, args []string,
 		"links": map[string]any{"job": "/v1/jobs/" + jobID, "logs": "/v1/jobs/" + jobID + "/logs"},
 		"meta":  map[string]string{"schema_version": "v1", "admin_command": "diagnose job"},
 	})
+}
+
+func diagnoseResourceCommand(cfg adminConfig, httpClient *http.Client, args []string, stdout, stderr io.Writer) int {
+	if len(args) != 1 {
+		return usage(stderr, "usage: pacp-admin [flags] diagnose resource <resource-id>")
+	}
+	resourceID := args[0]
+	var inspectionEnvelope struct {
+		OK    bool                         `json:"ok"`
+		Data  contracts.ResourceInspection `json:"data"`
+		Error contracts.ErrorObject        `json:"error"`
+	}
+	inspectionPath := "/v1/resources/" + url.PathEscape(resourceID) + "/inspection"
+	status, err := getJSONDecode(cfg, httpClient, cfg.LeasesURL, inspectionPath, authorizationHeader(cfg.ComponentToken), &inspectionEnvelope)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	if status < 200 || status >= 300 || !inspectionEnvelope.OK {
+		message := inspectionEnvelope.Error.Message
+		if message == "" {
+			message = fmt.Sprintf("lease service returned HTTP %d for resource inspection %s", status, resourceID)
+		}
+		fmt.Fprintln(stderr, message)
+		return 1
+	}
+
+	data := buildResourceDiagnostics(inspectionEnvelope.Data)
+	enrichResourceJobDiagnostics(cfg, httpClient, &data)
+	return writeCommandJSON(stdout, stderr, map[string]any{
+		"ok":   true,
+		"data": data,
+		"links": map[string]any{
+			"resource":   "/v1/resources/" + resourceID,
+			"inspection": "/v1/resources/" + resourceID + "/inspection",
+		},
+		"meta": map[string]string{"schema_version": "v1", "admin_command": "diagnose resource"},
+	})
+}
+
+func buildResourceDiagnostics(inspection contracts.ResourceInspection) resourceDiagnosticData {
+	data := resourceDiagnosticData{Inspection: inspection}
+	resource := inspection.Resource
+	resourceID := resource.ResourceID
+	if resourceID == "" {
+		resourceID = "resource"
+	}
+
+	switch resource.Status {
+	case contracts.ResourceAvailable:
+		data.Findings = append(data.Findings, diagnosticFinding{Severity: "info", Code: "resource_available", Message: "resource " + resourceID + " is available"})
+	case contracts.ResourceUnavailable:
+		data.Findings = append(data.Findings, diagnosticFinding{Severity: "warning", Code: "resource_unavailable", Message: "resource " + resourceID + " is unavailable"})
+		addSuggestedAction(&data.SuggestedActions, "enable or repair resource "+resourceID)
+	case "":
+		data.Findings = append(data.Findings, diagnosticFinding{Severity: "warning", Code: "resource_status_missing", Message: "resource " + resourceID + " has no status"})
+	default:
+		data.Findings = append(data.Findings, diagnosticFinding{Severity: "warning", Code: "unknown_resource_status", Message: "resource " + resourceID + " status is not recognized: " + string(resource.Status)})
+	}
+
+	if resource.NodeID != "" {
+		addSuggestedAction(&data.SuggestedActions, "check node health for "+resource.NodeID)
+	}
+	if inspection.ActiveLease != nil {
+		holderID := strings.TrimSpace(inspection.ActiveLease.HolderID)
+		message := "resource " + resourceID + " has an active lease"
+		if holderID != "" {
+			message += " held by " + holderID
+		}
+		data.Findings = append(data.Findings, diagnosticFinding{Severity: "info", Code: "resource_active_lease", Message: message})
+		addSuggestedAction(&data.SuggestedActions, "verify active lease heartbeat before manual release")
+		if looksLikeJobID(holderID) {
+			addSuggestedAction(&data.SuggestedActions, "diagnose job "+holderID)
+		}
+	} else if inspection.QueueLength == 0 {
+		data.Findings = append(data.Findings, diagnosticFinding{Severity: "info", Code: "resource_idle", Message: "resource " + resourceID + " has no active lease or queue"})
+	}
+
+	if inspection.QueueLength > 0 {
+		data.Findings = append(data.Findings, diagnosticFinding{Severity: "warning", Code: "resource_queue_depth", Message: fmt.Sprintf("resource %s has queue depth %d", resourceID, inspection.QueueLength)})
+		if len(inspection.Queue) == 0 {
+			data.Findings = append(data.Findings, diagnosticFinding{Severity: "warning", Code: "resource_queue_entries_missing", Message: "resource queue length is nonzero but no queue entries were returned"})
+			addSuggestedAction(&data.SuggestedActions, "inspect lease service queue state for "+resourceID)
+		}
+		for _, entry := range inspection.Queue {
+			requesterID := strings.TrimSpace(entry.RequesterID)
+			if looksLikeJobID(requesterID) {
+				addSuggestedAction(&data.SuggestedActions, "diagnose job "+requesterID)
+			}
+		}
+	}
+	return data
+}
+
+func enrichResourceJobDiagnostics(cfg adminConfig, httpClient *http.Client, data *resourceDiagnosticData) {
+	if data == nil {
+		return
+	}
+	jobIDs := resourceDiagnosticJobIDs(data.Inspection)
+	if len(jobIDs) == 0 {
+		return
+	}
+	activeHolderID := ""
+	if data.Inspection.ActiveLease != nil {
+		activeHolderID = strings.TrimSpace(data.Inspection.ActiveLease.HolderID)
+	}
+	for _, jobID := range jobIDs {
+		var jobEnvelope struct {
+			OK    bool                  `json:"ok"`
+			Data  contracts.Job         `json:"data"`
+			Error contracts.ErrorObject `json:"error"`
+		}
+		path := "/v1/jobs/" + url.PathEscape(jobID)
+		status, err := getJSONDecode(cfg, httpClient, cfg.JobsURL, path, authorizationHeader(cfg.ComponentToken), &jobEnvelope)
+		if err != nil {
+			data.Findings = append(data.Findings, diagnosticFinding{Severity: "warning", Code: "related_job_unavailable", Message: jobID + ": " + err.Error()})
+			addSuggestedAction(&data.SuggestedActions, "inspect job service health and permissions")
+			continue
+		}
+		if status < 200 || status >= 300 || !jobEnvelope.OK {
+			message := jobEnvelope.Error.Message
+			if message == "" {
+				message = fmt.Sprintf("job service returned HTTP %d for related job %s", status, jobID)
+			}
+			data.Findings = append(data.Findings, diagnosticFinding{Severity: "warning", Code: "related_job_unavailable", Message: message})
+			addSuggestedAction(&data.SuggestedActions, "inspect job service health and permissions")
+			continue
+		}
+		data.RelatedJobs = append(data.RelatedJobs, jobEnvelope.Data)
+		addRelatedJobStateFinding(data, jobEnvelope.Data, jobEnvelope.Data.JobID == activeHolderID)
+	}
+	if len(data.RelatedJobs) > 0 {
+		data.Findings = append(data.Findings, diagnosticFinding{Severity: "info", Code: "related_jobs_available", Message: fmt.Sprintf("job service returned %d related job(s)", len(data.RelatedJobs))})
+	}
+}
+
+func addRelatedJobStateFinding(data *resourceDiagnosticData, job contracts.Job, activeHolder bool) {
+	if data == nil || job.JobID == "" {
+		return
+	}
+	severity := "info"
+	switch job.State {
+	case contracts.JobFailed:
+		severity = "error"
+	case contracts.JobCanceled, contracts.JobExpired:
+		severity = "warning"
+	}
+	code := "related_job_state"
+	message := fmt.Sprintf("related job %s state is %s", job.JobID, job.State)
+	if activeHolder {
+		code = "active_holder_job_state"
+		message = fmt.Sprintf("active lease holder %s state is %s", job.JobID, job.State)
+		if isTerminalJobState(job.State) && data.Inspection.ActiveLease != nil {
+			leaseID := strings.TrimSpace(data.Inspection.ActiveLease.LeaseID)
+			if leaseID != "" {
+				addSuggestedAction(&data.SuggestedActions, "release lease "+leaseID+" after verifying no worker owns it")
+			}
+		}
+	}
+	data.Findings = append(data.Findings, diagnosticFinding{Severity: severity, Code: code, Message: message})
+}
+
+func resourceDiagnosticJobIDs(inspection contracts.ResourceInspection) []string {
+	ids := []string{}
+	seen := map[string]bool{}
+	if inspection.ActiveLease != nil {
+		appendResourceDiagnosticJobID(&ids, seen, inspection.ActiveLease.HolderID)
+	}
+	for _, entry := range inspection.Queue {
+		appendResourceDiagnosticJobID(&ids, seen, entry.RequesterID)
+	}
+	return ids
+}
+
+func appendResourceDiagnosticJobID(ids *[]string, seen map[string]bool, candidate string) {
+	candidate = strings.TrimSpace(candidate)
+	if !looksLikeJobID(candidate) || seen[candidate] {
+		return
+	}
+	seen[candidate] = true
+	*ids = append(*ids, candidate)
+}
+
+func looksLikeJobID(id string) bool {
+	id = strings.TrimSpace(id)
+	return strings.HasPrefix(id, "job_") || strings.HasPrefix(id, "job-")
+}
+
+func isTerminalJobState(state contracts.JobState) bool {
+	switch state {
+	case contracts.JobSucceeded, contracts.JobFailed, contracts.JobCanceled, contracts.JobExpired:
+		return true
+	default:
+		return false
+	}
 }
 
 func fetchJobLogs(cfg adminConfig, httpClient *http.Client, jobID string) ([]contracts.JobLogEntry, *diagnosticFinding) {
