@@ -8,6 +8,8 @@ Contract simulation data is kept as test input, not as product behavior.
 ## What Exists
 
 - `internal/contracts`: shared fixture and envelope validation helpers.
+- `internal/provider`: provider SDK helpers for manifest, health, invoke,
+  simple schema validation, and provider response envelopes.
 - `internal/components/catalog`: first isolated real component, C03 Service
   Catalog, with in-memory storage and HTTP handlers.
 - `internal/components/gateway`: agent-facing tool discovery, invocation, job,
@@ -27,6 +29,7 @@ Contract simulation data is kept as test input, not as product behavior.
 - `internal/testkit`: S003 fixture loader and fixture-backed HTTP fake server.
 - `cmd/pacp-contract-smoke`: CLI smoke check for a contract simulation package.
 - `cmd/pacp-fixture-server`: serves one fixture owner as an HTTP fake.
+- `cmd/pacp-fake-provider`: runnable sample provider using the provider SDK.
 - `cmd/pacp-catalog`: runnable catalog server that loads provider manifests.
 - `cmd/pacp-gateway`: runnable agent tool gateway.
 - `cmd/pacp-jobs`: runnable async job service.
@@ -43,6 +46,7 @@ Contract simulation data is kept as test input, not as product behavior.
 go test ./...
 go run ./cmd/pacp-contract-smoke
 go run ./cmd/pacp-fixture-server -owner c04-agent-tool-gateway -addr localhost:18080
+go run ./cmd/pacp-fake-provider -addr localhost:18088 -endpoint http://localhost:18088
 go run ./cmd/pacp-catalog -addr localhost:18081 -manifest testdata/manifests/s003-comfyui-gpu.json
 go run ./cmd/pacp-jobs -addr localhost:18082
 go run ./cmd/pacp-leases -addr localhost:18083

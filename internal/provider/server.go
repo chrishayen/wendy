@@ -1,0 +1,223 @@
+package provider
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"net/http"
+	"strings"
+	"time"
+
+	"pacp/internal/contracts"
+)
+
+var (
+	ErrValidation = errors.New("validation failed")
+	ErrNotFound   = errors.New("provider capability not found")
+)
+
+type CapabilityHandler func(context.Context, contracts.ProviderInvokeRequest) (contracts.ProviderInvokeResponse, error)
+
+type Server struct {
+	manifest contracts.ProviderManifest
+	handlers map[string]CapabilityHandler
+	now      func() time.Time
+}
+
+func NewServer(manifest contracts.ProviderManifest, handlers map[string]CapabilityHandler) (*Server, error) {
+	if errs := contracts.ValidateProviderManifest(manifest); len(errs) > 0 {
+		return nil, fmt.Errorf("%w: %s", ErrValidation, strings.Join(errs, "; "))
+	}
+	for _, capability := range manifest.Capabilities {
+		if handlers[capability.ID] == nil {
+			return nil, fmt.Errorf("%w: missing handler for %s", ErrValidation, capability.ID)
+		}
+	}
+	return &Server{manifest: manifest, handlers: handlers, now: time.Now}, nil
+}
+
+func (s *Server) SetClock(now func() time.Time) {
+	s.now = now
+}
+
+func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	path := strings.TrimSuffix(r.URL.Path, "/")
+	switch {
+	case r.Method == http.MethodGet && path == "/v1/provider/manifest":
+		writeSuccess(w, r, http.StatusOK, s.manifest)
+	case r.Method == http.MethodGet && path == "/v1/provider/health":
+		writeSuccess(w, r, http.StatusOK, contracts.ProviderHealth{
+			Status:    "healthy",
+			Version:   "v1",
+			CheckedAt: s.now().UTC().Format(time.RFC3339),
+			Details:   map[string]any{"service_id": s.manifest.Service.ID},
+		})
+	case r.Method == http.MethodPost && strings.HasPrefix(path, "/v1/provider/capabilities/") && strings.HasSuffix(path, "/invoke"):
+		capabilityID := strings.TrimSuffix(strings.TrimPrefix(path, "/v1/provider/capabilities/"), "/invoke")
+		s.invoke(w, r, capabilityID)
+	default:
+		writeError(w, r, http.StatusNotFound, "not_found", "provider route not found", false)
+	}
+}
+
+func (s *Server) invoke(w http.ResponseWriter, r *http.Request, capabilityID string) {
+	capability, ok := s.capability(capabilityID)
+	if !ok {
+		writeError(w, r, http.StatusNotFound, "not_found", "capability not found", false)
+		return
+	}
+	var req contracts.ProviderInvokeRequest
+	if !decodeBody(w, r, &req) {
+		return
+	}
+	if err := ValidateObject(req.Input, capability.InputSchema); err != nil {
+		writeError(w, r, http.StatusBadRequest, "validation_failed", err.Error(), false)
+		return
+	}
+	response, err := s.handlers[capabilityID](r.Context(), req)
+	if err != nil {
+		writeError(w, r, http.StatusInternalServerError, "provider_unavailable", err.Error(), true)
+		return
+	}
+	if err := ValidateObject(response.Output, capability.OutputSchema); err != nil {
+		writeError(w, r, http.StatusInternalServerError, "validation_failed", "provider output failed schema validation: "+err.Error(), false)
+		return
+	}
+	writeSuccess(w, r, http.StatusOK, response)
+}
+
+func (s *Server) capability(capabilityID string) (contracts.Capability, bool) {
+	for _, capability := range s.manifest.Capabilities {
+		if capability.ID == capabilityID {
+			return capability, true
+		}
+	}
+	return contracts.Capability{}, false
+}
+
+func ValidateObject(value map[string]any, schema map[string]any) error {
+	if schema == nil {
+		return nil
+	}
+	if schemaType, _ := schema["type"].(string); schemaType != "" && schemaType != "object" {
+		return fmt.Errorf("%w: only object schemas are supported", ErrValidation)
+	}
+	for _, required := range stringSlice(schema["required"]) {
+		if _, ok := value[required]; !ok {
+			return fmt.Errorf("%w: %s is required", ErrValidation, required)
+		}
+	}
+	properties, _ := schema["properties"].(map[string]any)
+	for key, rawProperty := range properties {
+		property, _ := rawProperty.(map[string]any)
+		expected, _ := property["type"].(string)
+		if expected == "" {
+			continue
+		}
+		actual, exists := value[key]
+		if !exists || actual == nil {
+			continue
+		}
+		if !matchesJSONType(actual, expected) {
+			return fmt.Errorf("%w: %s must be %s", ErrValidation, key, expected)
+		}
+	}
+	return nil
+}
+
+func stringSlice(value any) []string {
+	switch typed := value.(type) {
+	case []string:
+		return typed
+	case []any:
+		out := make([]string, 0, len(typed))
+		for _, item := range typed {
+			if text, ok := item.(string); ok {
+				out = append(out, text)
+			}
+		}
+		return out
+	default:
+		return nil
+	}
+}
+
+func matchesJSONType(value any, expected string) bool {
+	switch expected {
+	case "string":
+		_, ok := value.(string)
+		return ok
+	case "boolean":
+		_, ok := value.(bool)
+		return ok
+	case "integer":
+		switch value.(type) {
+		case int, int64, float64:
+			if number, ok := value.(float64); ok {
+				return number == float64(int64(number))
+			}
+			return true
+		default:
+			return false
+		}
+	case "number":
+		switch value.(type) {
+		case int, int64, float64:
+			return true
+		default:
+			return false
+		}
+	case "object":
+		_, ok := value.(map[string]any)
+		return ok
+	case "array":
+		_, ok := value.([]any)
+		return ok
+	default:
+		return true
+	}
+}
+
+func decodeBody(w http.ResponseWriter, r *http.Request, out any) bool {
+	defer r.Body.Close()
+	if err := json.NewDecoder(r.Body).Decode(out); err != nil {
+		writeError(w, r, http.StatusBadRequest, "validation_failed", "request body is invalid JSON", false)
+		return false
+	}
+	return true
+}
+
+func writeSuccess(w http.ResponseWriter, r *http.Request, status int, data any) {
+	writeJSON(w, status, contracts.SuccessEnvelope{
+		OK:    true,
+		Data:  data,
+		Links: map[string]any{},
+		Meta:  meta(r),
+	})
+}
+
+func writeError(w http.ResponseWriter, r *http.Request, status int, code, message string, retryable bool) {
+	writeJSON(w, status, contracts.ErrorEnvelope{
+		OK: false,
+		Error: contracts.ErrorObject{
+			Code: code, Message: message, Retryable: retryable,
+		},
+		Links: map[string]any{},
+		Meta:  meta(r),
+	})
+}
+
+func writeJSON(w http.ResponseWriter, status int, body any) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(body)
+}
+
+func meta(r *http.Request) map[string]string {
+	requestID := r.Header.Get("X-Request-ID")
+	if requestID == "" {
+		requestID = "req_provider"
+	}
+	return map[string]string{"request_id": requestID, "schema_version": "v1"}
+}
