@@ -180,11 +180,22 @@ func (h Handler) registerLocalArtifact(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h Handler) listArtifacts(w http.ResponseWriter, r *http.Request) {
-	items := h.store.ListArtifacts(ListFilter{
+	limit, err := positiveInt(r.URL.Query().Get("limit"))
+	if err != nil {
+		writeError(w, r, http.StatusBadRequest, "validation_failed", "limit must be a positive integer", false)
+		return
+	}
+	items, next, err := h.store.ListArtifacts(ListFilter{
 		ProducerRef:    r.URL.Query().Get("producer_ref"),
 		OwnerSubjectID: r.URL.Query().Get("owner_subject_id"),
+		Cursor:         r.URL.Query().Get("cursor"),
+		Limit:          limit,
 	})
-	writeSuccess(w, r, http.StatusOK, map[string]any{"items": items, "next_cursor": nil})
+	if err != nil {
+		writeStoreError(w, r, err)
+		return
+	}
+	writeSuccess(w, r, http.StatusOK, map[string]any{"items": items, "next_cursor": next})
 }
 
 func (h Handler) sweepRetention(w http.ResponseWriter, r *http.Request) {
@@ -254,6 +265,8 @@ func writeStoreError(w http.ResponseWriter, r *http.Request, err error) {
 		writeError(w, r, http.StatusGone, "artifact_expired", "artifact has expired", false)
 	case errors.Is(err, ErrExpired):
 		writeError(w, r, http.StatusGone, "artifact_expired", "artifact resource has expired", false)
+	case errors.Is(err, ErrInvalidCursor):
+		writeError(w, r, http.StatusBadRequest, "invalid_cursor", "cursor is invalid or expired", false)
 	case errors.Is(err, ErrInvalidTransition):
 		writeError(w, r, http.StatusConflict, "invalid_transition", "artifact upload cannot transition from its current state", false)
 	case errors.Is(err, ErrDisallowedPath):
@@ -269,6 +282,17 @@ func writeStoreError(w http.ResponseWriter, r *http.Request, err error) {
 
 func validationMessage(err error) string {
 	return strings.TrimPrefix(err.Error(), ErrValidation.Error()+": ")
+}
+
+func positiveInt(raw string) (int, error) {
+	if raw == "" {
+		return 0, nil
+	}
+	value, err := strconv.Atoi(raw)
+	if err != nil || value < 1 {
+		return 0, ErrValidation
+	}
+	return value, nil
 }
 
 func writeSuccess(w http.ResponseWriter, r *http.Request, status int, data any) {

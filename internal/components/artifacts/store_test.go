@@ -92,7 +92,10 @@ func TestStoreUploadCompleteAndReadArtifact(t *testing.T) {
 		t.Fatalf("content = %#v", content)
 	}
 
-	list := store.ListArtifacts(ListFilter{ProducerRef: "job_1"})
+	list, _, err := store.ListArtifacts(ListFilter{ProducerRef: "job_1"})
+	if err != nil {
+		t.Fatalf("list artifacts: %v", err)
+	}
 	if len(list) != 1 || list[0].ArtifactID != artifact.ArtifactID {
 		t.Fatalf("artifact list = %#v", list)
 	}
@@ -151,7 +154,7 @@ func TestStoreExpiresArtifactsByRetentionPolicy(t *testing.T) {
 	if beforeExpiry.ArtifactID != artifact.ArtifactID {
 		t.Fatalf("before expiry = %#v", beforeExpiry)
 	}
-	if list := store.ListArtifacts(ListFilter{ProducerRef: "job_retained"}); len(list) != 1 {
+	if list, _, err := store.ListArtifacts(ListFilter{ProducerRef: "job_retained"}); err != nil || len(list) != 1 {
 		t.Fatalf("list before expiry = %#v", list)
 	}
 	context, err := store.PolicyContext(artifact.ArtifactID)
@@ -168,7 +171,7 @@ func TestStoreExpiresArtifactsByRetentionPolicy(t *testing.T) {
 	if !errors.Is(err, ErrArtifactExpired) || !errors.Is(err, ErrExpired) {
 		t.Fatalf("expected expired artifact metadata, got %v", err)
 	}
-	if list := store.ListArtifacts(ListFilter{ProducerRef: "job_retained"}); len(list) != 0 {
+	if list, _, err := store.ListArtifacts(ListFilter{ProducerRef: "job_retained"}); err != nil || len(list) != 0 {
 		t.Fatalf("list after expiry = %#v", list)
 	}
 	context, err = store.PolicyContext(artifact.ArtifactID)
@@ -481,7 +484,10 @@ func TestPersistentStoreReloadsUploadAndArtifactState(t *testing.T) {
 	if replayCreated || completeReplay.ArtifactID != artifact.ArtifactID {
 		t.Fatalf("complete replay = %#v created=%v", completeReplay, replayCreated)
 	}
-	list := reloadedAgain.ListArtifacts(ListFilter{ProducerRef: "job_1"})
+	list, _, err := reloadedAgain.ListArtifacts(ListFilter{ProducerRef: "job_1"})
+	if err != nil {
+		t.Fatalf("list after reload: %v", err)
+	}
 	if len(list) != 1 || list[0].ArtifactID != artifact.ArtifactID {
 		t.Fatalf("persisted artifact list = %#v", list)
 	}
@@ -494,6 +500,37 @@ func TestPersistentStoreReloadsUploadAndArtifactState(t *testing.T) {
 	}
 }
 
+func TestStoreListArtifactsPaginatesWithOpaqueCursor(t *testing.T) {
+	store := newTestStore(t)
+	first := registerTestArtifact(t, store, "first.txt", "job_page", "sub_agent", []byte("first"))
+	second := registerTestArtifact(t, store, "second.txt", "job_page", "sub_agent", []byte("second"))
+
+	firstPage, next, err := store.ListArtifacts(ListFilter{ProducerRef: "job_page", Limit: 1})
+	if err != nil {
+		t.Fatalf("list first page: %v", err)
+	}
+	if len(firstPage) != 1 || firstPage[0].ArtifactID != first.ArtifactID || next == nil {
+		t.Fatalf("first page items=%#v next=%v", firstPage, next)
+	}
+	secondPage, next, err := store.ListArtifacts(ListFilter{ProducerRef: "job_page", Limit: 1, Cursor: *next})
+	if err != nil {
+		t.Fatalf("list second page: %v", err)
+	}
+	if len(secondPage) != 1 || secondPage[0].ArtifactID != second.ArtifactID || next != nil {
+		t.Fatalf("second page items=%#v next=%v", secondPage, next)
+	}
+}
+
+func TestStoreListArtifactsRejectsInvalidCursor(t *testing.T) {
+	store := newTestStore(t)
+	if _, _, err := store.ListArtifacts(ListFilter{Cursor: "cursor_jobs_list_000001"}); !errors.Is(err, ErrInvalidCursor) {
+		t.Fatalf("invalid cursor error = %v", err)
+	}
+	if _, _, err := store.ListArtifacts(ListFilter{Cursor: artifactListCursor(1)}); !errors.Is(err, ErrInvalidCursor) {
+		t.Fatalf("past-end cursor error = %v", err)
+	}
+}
+
 func newTestStore(t *testing.T) *Store {
 	t.Helper()
 	store, err := NewStore(t.TempDir())
@@ -501,6 +538,39 @@ func newTestStore(t *testing.T) *Store {
 		t.Fatalf("new store: %v", err)
 	}
 	return store
+}
+
+func registerTestArtifact(t *testing.T, store *Store, name, producerRef, ownerSubjectID string, body []byte) contracts.Artifact {
+	t.Helper()
+	checksum, digest := checksumAndDigest(body)
+	size := int64(len(body))
+	session, _, err := store.CreateUpload(contracts.CreateArtifactUploadRequest{
+		Name:             name,
+		MediaType:        "text/plain",
+		ProducerRef:      producerRef,
+		OwnerSubjectID:   ownerSubjectID,
+		ExpectedSize:     &size,
+		ExpectedChecksum: checksum,
+	}, "create-"+name)
+	if err != nil {
+		t.Fatalf("create upload %s: %v", name, err)
+	}
+	if _, err := store.PutContent(session.UploadID, ContentUpload{
+		Body:          body,
+		ContentType:   "text/plain",
+		ContentLength: strconv.FormatInt(size, 10),
+		Digest:        digest,
+	}, "content-"+name); err != nil {
+		t.Fatalf("put content %s: %v", name, err)
+	}
+	artifact, _, err := store.CompleteUpload(session.UploadID, contracts.CompleteArtifactUploadRequest{
+		Checksum: checksum,
+		Size:     size,
+	}, "complete-"+name)
+	if err != nil {
+		t.Fatalf("complete upload %s: %v", name, err)
+	}
+	return artifact
 }
 
 func validContentUpload(body []byte, mediaType string) ContentUpload {

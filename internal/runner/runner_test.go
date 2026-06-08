@@ -1421,7 +1421,7 @@ func TestRunnerDoesNotCompleteOrUploadArtifactsAfterJobBecomesTerminal(t *testin
 	if terminal.State != contracts.JobFailed || terminal.TerminalError == nil || terminal.TerminalError.Code != "external_terminal" || len(terminal.ArtifactRefs) != 0 {
 		t.Fatalf("terminal job = %#v", terminal)
 	}
-	if artifacts := artifactStore.ListArtifacts(artifacts.ListFilter{ProducerRef: created.JobID}); len(artifacts) != 0 {
+	if artifacts, _, err := artifactStore.ListArtifacts(artifacts.ListFilter{ProducerRef: created.JobID}); err != nil || len(artifacts) != 0 {
 		t.Fatalf("late artifacts were uploaded: %#v", artifacts)
 	}
 }

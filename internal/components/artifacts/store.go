@@ -29,6 +29,7 @@ var (
 	ErrExpired                = errors.New("artifact expired")
 	ErrUploadExpired          = fmt.Errorf("%w: upload session expired", ErrExpired)
 	ErrArtifactExpired        = fmt.Errorf("%w: completed artifact expired", ErrExpired)
+	ErrInvalidCursor          = errors.New("invalid cursor")
 	ErrInvalidTransition      = errors.New("invalid artifact transition")
 	ErrDisallowedPath         = errors.New("artifact path is outside the configured root")
 	ErrAlreadyCompleted       = errors.New("upload is already completed")
@@ -126,6 +127,8 @@ type ArtifactContent struct {
 type ListFilter struct {
 	ProducerRef    string
 	OwnerSubjectID string
+	Cursor         string
+	Limit          int
 }
 
 func NewPersistentStore(root, statePath string) (*Store, error) {
@@ -579,7 +582,16 @@ func (s *Store) GetArtifact(artifactID string) (contracts.Artifact, error) {
 	return cloneArtifact(rec.artifact), nil
 }
 
-func (s *Store) ListArtifacts(filter ListFilter) []contracts.Artifact {
+func (s *Store) ListArtifacts(filter ListFilter) ([]contracts.Artifact, *string, error) {
+	start := 0
+	if filter.Cursor != "" {
+		parsed, err := parseArtifactListCursor(filter.Cursor)
+		if err != nil {
+			return nil, nil, ErrInvalidCursor
+		}
+		start = parsed
+	}
+
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	ids := make([]string, 0, len(s.artifacts))
@@ -602,7 +614,32 @@ func (s *Store) ListArtifacts(filter ListFilter) []contracts.Artifact {
 		}
 		items = append(items, cloneArtifact(artifact))
 	}
-	return items
+	if start > len(items) {
+		return nil, nil, ErrInvalidCursor
+	}
+	end := len(items)
+	var next *string
+	if filter.Limit > 0 && start+filter.Limit < end {
+		end = start + filter.Limit
+		cursor := artifactListCursor(end)
+		next = &cursor
+	}
+	return items[start:end], next, nil
+}
+
+func artifactListCursor(index int) string {
+	return fmt.Sprintf("cursor_artifacts_list_%06d", index)
+}
+
+func parseArtifactListCursor(cursor string) (int, error) {
+	var index int
+	if _, err := fmt.Sscanf(cursor, "cursor_artifacts_list_%06d", &index); err != nil {
+		return 0, err
+	}
+	if index < 0 {
+		return 0, ErrInvalidCursor
+	}
+	return index, nil
 }
 
 func (s *Store) SweepExpired() (contracts.ArtifactRetentionSweepResult, error) {

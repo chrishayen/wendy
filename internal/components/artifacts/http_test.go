@@ -87,6 +87,38 @@ func TestHandlerUploadLifecycleAndContentRead(t *testing.T) {
 	assertMetric(t, metrics, "http_requests_total", map[string]string{"method": "GET", "route_group": "/v1/artifacts/{artifact_id}/content", "status_class": "2xx"}, 1)
 }
 
+func TestHandlerListArtifactsPaginates(t *testing.T) {
+	store := newTestStore(t)
+	first := registerTestArtifact(t, store, "http-first.txt", "job_http_page", "sub_agent", []byte("first"))
+	second := registerTestArtifact(t, store, "http-second.txt", "job_http_page", "sub_agent", []byte("second"))
+	handler := NewHandler(store)
+
+	firstPage := doJSON(t, handler, http.MethodGet, "/v1/artifacts?producer_ref=job_http_page&limit=1", nil, nil, http.StatusOK)
+	firstItems := firstPage["items"].([]any)
+	cursor, _ := firstPage["next_cursor"].(string)
+	if len(firstItems) != 1 || firstItems[0].(map[string]any)["artifact_id"] != first.ArtifactID || cursor == "" {
+		t.Fatalf("first page = %#v", firstPage)
+	}
+
+	secondPage := doJSON(t, handler, http.MethodGet, "/v1/artifacts?producer_ref=job_http_page&limit=1&cursor="+cursor, nil, nil, http.StatusOK)
+	secondItems := secondPage["items"].([]any)
+	if len(secondItems) != 1 || secondItems[0].(map[string]any)["artifact_id"] != second.ArtifactID || secondPage["next_cursor"] != nil {
+		t.Fatalf("second page = %#v", secondPage)
+	}
+}
+
+func TestHandlerListArtifactsRejectsInvalidPaginationInput(t *testing.T) {
+	handler := NewHandler(newTestStore(t))
+	limitEnvelope := doJSONEnvelope(t, handler, http.MethodGet, "/v1/artifacts?limit=0", nil, nil, http.StatusBadRequest)
+	if limitEnvelope["error"].(map[string]any)["code"] != "validation_failed" {
+		t.Fatalf("limit error = %#v", limitEnvelope)
+	}
+	cursorEnvelope := doJSONEnvelope(t, handler, http.MethodGet, "/v1/artifacts?cursor=cursor_jobs_list_000001", nil, nil, http.StatusBadRequest)
+	if cursorEnvelope["error"].(map[string]any)["code"] != "invalid_cursor" {
+		t.Fatalf("cursor error = %#v", cursorEnvelope)
+	}
+}
+
 func TestHandlerMissingIdempotencyEnvelope(t *testing.T) {
 	handler := NewHandler(newTestStore(t))
 	envelope := doJSONEnvelope(t, handler, http.MethodPost, "/v1/artifact-uploads", map[string]any{
