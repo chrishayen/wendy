@@ -25,6 +25,7 @@ import (
 	"pacp/internal/components/leases"
 	"pacp/internal/components/policy"
 	"pacp/internal/contracts"
+	"pacp/internal/observability"
 	"pacp/internal/provider"
 	"pacp/internal/runner"
 )
@@ -144,7 +145,7 @@ func runDevStack(ctx context.Context, cfg devConfig) error {
 			ArtifactsURL:        artifactsURL,
 			ComponentCredential: authorizationHeader(cfg.WorkerToken),
 		})
-		go runnerLoop(ctx, r, cfg.PollInterval)
+		go runnerLoop(ctx, r, cfg.PollInterval, cfg.WorkerToken)
 	}
 
 	log.Printf("dev stack ready gateway=%s state_dir=%s tools=cap_dev_echo,cap_dev_artifact", gatewayURL, cfg.StateDir)
@@ -341,18 +342,20 @@ func shutdownServers(ctx context.Context, servers []*http.Server) {
 	}
 }
 
-func runnerLoop(ctx context.Context, r *runner.Runner, interval time.Duration) {
+func runnerLoop(ctx context.Context, r *runner.Runner, interval time.Duration, redactionValues ...string) {
 	if interval <= 0 {
 		interval = time.Second
 	}
+	logger := observability.NewStructuredLogger(os.Stderr, "runner", observability.WithRedactionValues(redactionValues...))
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {
-		jobID, ok, err := r.RunOnce(ctx)
+		runCtx := observability.WithRequestID(ctx, observability.NewRequestID("req_runner"))
+		jobID, ok, err := r.RunOnce(runCtx)
 		if err != nil {
-			log.Printf("runner error job_id=%s err=%v", jobID, err)
+			logger.Error(runCtx, "runner iteration failed", err, observability.Field("job_id", jobID))
 		} else if ok {
-			log.Printf("runner processed job_id=%s", jobID)
+			logger.Info(runCtx, "processed job", observability.Field("job_id", jobID))
 		}
 		select {
 		case <-ctx.Done():

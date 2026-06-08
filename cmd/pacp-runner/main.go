@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"pacp/internal/observability"
 	"pacp/internal/runner"
 	"pacp/internal/transportauth"
 )
@@ -52,26 +53,32 @@ func main() {
 		ComponentCredential: authorizationHeader(*credential),
 		WorkerSubjectID:     *workerSubjectID,
 	})
+	logger := observability.NewStructuredLogger(os.Stderr, "runner", observability.WithRedactionValues(*credential, *monitorToken))
 	if strings.TrimSpace(*addr) != "" {
 		go func() {
-			log.Printf("serving runner monitor addr=%s", *addr)
-			log.Fatal(http.ListenAndServe(*addr, transportauth.RequireBearer(runner.NewHandler(r), *monitorToken)))
+			ctx := observability.EnsureContextRequestID(context.Background(), "req_runner")
+			logger.Info(ctx, "serving runner monitor", observability.Field("addr", *addr))
+			if err := http.ListenAndServe(*addr, transportauth.RequireBearer(runner.NewHandler(r), *monitorToken)); err != nil {
+				logger.Error(ctx, "runner monitor failed", err, observability.Field("addr", *addr))
+				os.Exit(1)
+			}
 		}()
 	}
 	for {
-		jobID, ok, err := r.RunOnce(context.Background())
+		ctx := observability.EnsureContextRequestID(context.Background(), "req_runner")
+		jobID, ok, err := r.RunOnce(ctx)
 		if err != nil {
-			log.Printf("runner error job_id=%s err=%v", jobID, err)
+			logger.Error(ctx, "runner iteration failed", err, observability.Field("job_id", jobID))
 			if *once {
 				return
 			}
 		} else if ok {
-			log.Printf("processed job_id=%s", jobID)
+			logger.Info(ctx, "processed job", observability.Field("job_id", jobID))
 			if *once {
 				return
 			}
 		} else if *once {
-			log.Print("no queued job")
+			logger.Info(ctx, "no queued job")
 			return
 		}
 		time.Sleep(*poll)

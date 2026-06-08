@@ -239,6 +239,8 @@ Provider metrics additionally expose invocation count, error count, and average
 duration by service id, capability id, status, and error code.
 Runner metrics expose active job count, run loop results, successful heartbeat
 timestamps, and dependency reachability for configured primary APIs and nodes.
+Runner operational logs are JSON records with request id, job id when present,
+and configured credentials redacted.
 Gateway and runner requests propagate `X-Request-ID` to downstream component,
 node, artifact, and provider calls so logs and response metadata can be
 correlated across the distributed flow.
