@@ -210,10 +210,13 @@ type diagnosticFinding struct {
 }
 
 type jobDiagnosticData struct {
-	Job              contracts.Job           `json:"job"`
-	Logs             []contracts.JobLogEntry `json:"logs"`
-	Findings         []diagnosticFinding     `json:"findings"`
-	SuggestedActions []string                `json:"suggested_actions"`
+	Job              contracts.Job                  `json:"job"`
+	Logs             []contracts.JobLogEntry        `json:"logs"`
+	LeaseResources   []contracts.ResourceRecord     `json:"lease_resources,omitempty"`
+	LeaseInspections []contracts.ResourceInspection `json:"lease_inspections,omitempty"`
+	NodeService      *contracts.NodeService         `json:"node_service,omitempty"`
+	Findings         []diagnosticFinding            `json:"findings"`
+	SuggestedActions []string                       `json:"suggested_actions"`
 }
 
 func healthCommand(cfg adminConfig, httpClient *http.Client, args []string, stdout, stderr io.Writer) int {
@@ -1098,6 +1101,7 @@ func diagnoseJobCommand(cfg adminConfig, httpClient *http.Client, args []string,
 		data.Findings = append(data.Findings, *logFinding)
 		addSuggestedAction(&data.SuggestedActions, "retry log fetch or inspect job service health")
 	}
+	enrichJobDiagnostics(cfg, httpClient, &data)
 	return writeCommandJSON(stdout, stderr, map[string]any{
 		"ok":    true,
 		"data":  data,
@@ -1196,6 +1200,167 @@ func buildJobDiagnostics(job contracts.Job, logs []contracts.JobLogEntry) jobDia
 		addSuggestedAction(&data.SuggestedActions, "verify runner log appends can reach the job service")
 	}
 	return data
+}
+
+func enrichJobDiagnostics(cfg adminConfig, httpClient *http.Client, data *jobDiagnosticData) {
+	if data == nil {
+		return
+	}
+	plan := executionPlanMap(data.Job.Metadata)
+	resourceSelector, _ := plan["resource_selector"].(string)
+	if resourceSelector != "" {
+		enrichLeaseDiagnostics(cfg, httpClient, resourceSelector, data)
+	}
+
+	route, _ := plan["route"].(map[string]any)
+	nodeManaged, _ := route["node_managed"].(bool)
+	if !nodeManaged {
+		return
+	}
+	nodeID, _ := route["node_id"].(string)
+	serviceID, _ := route["service_id"].(string)
+	enrichNodeServiceDiagnostics(cfg, httpClient, nodeID, serviceID, data)
+}
+
+func enrichLeaseDiagnostics(cfg adminConfig, httpClient *http.Client, resourceSelector string, data *jobDiagnosticData) {
+	var resourcesEnvelope struct {
+		OK   bool `json:"ok"`
+		Data struct {
+			Items []contracts.ResourceRecord `json:"items"`
+		} `json:"data"`
+		Error contracts.ErrorObject `json:"error"`
+	}
+	path := "/v1/resources?selector=" + url.QueryEscape(resourceSelector)
+	status, err := getJSONDecode(cfg, httpClient, cfg.LeasesURL, path, authorizationHeader(cfg.ComponentToken), &resourcesEnvelope)
+	if err != nil {
+		data.Findings = append(data.Findings, diagnosticFinding{Severity: "warning", Code: "lease_context_unavailable", Message: err.Error()})
+		addSuggestedAction(&data.SuggestedActions, "inspect lease service health")
+		return
+	}
+	if status < 200 || status >= 300 || !resourcesEnvelope.OK {
+		message := resourcesEnvelope.Error.Message
+		if message == "" {
+			message = fmt.Sprintf("lease service returned HTTP %d for resource selector %s", status, resourceSelector)
+		}
+		data.Findings = append(data.Findings, diagnosticFinding{Severity: "warning", Code: "lease_context_unavailable", Message: message})
+		addSuggestedAction(&data.SuggestedActions, "inspect lease service health")
+		return
+	}
+	data.LeaseResources = resourcesEnvelope.Data.Items
+	if len(data.LeaseResources) == 0 {
+		data.Findings = append(data.Findings, diagnosticFinding{Severity: "warning", Code: "no_matching_resources", Message: "lease service returned no resources for selector " + resourceSelector})
+		addSuggestedAction(&data.SuggestedActions, "register or enable a resource for selector "+resourceSelector)
+		return
+	}
+	data.Findings = append(data.Findings, diagnosticFinding{Severity: "info", Code: "lease_resources_found", Message: fmt.Sprintf("lease service returned %d resource(s) for selector %s", len(data.LeaseResources), resourceSelector)})
+
+	for _, resource := range data.LeaseResources {
+		enrichResourceInspection(cfg, httpClient, resource.ResourceID, data)
+	}
+}
+
+func enrichResourceInspection(cfg adminConfig, httpClient *http.Client, resourceID string, data *jobDiagnosticData) {
+	if resourceID == "" {
+		return
+	}
+	var inspectionEnvelope struct {
+		OK    bool                         `json:"ok"`
+		Data  contracts.ResourceInspection `json:"data"`
+		Error contracts.ErrorObject        `json:"error"`
+	}
+	path := "/v1/resources/" + url.PathEscape(resourceID) + "/inspection"
+	status, err := getJSONDecode(cfg, httpClient, cfg.LeasesURL, path, authorizationHeader(cfg.ComponentToken), &inspectionEnvelope)
+	if err != nil {
+		data.Findings = append(data.Findings, diagnosticFinding{Severity: "warning", Code: "resource_inspection_unavailable", Message: resourceID + ": " + err.Error()})
+		return
+	}
+	if status < 200 || status >= 300 || !inspectionEnvelope.OK {
+		message := inspectionEnvelope.Error.Message
+		if message == "" {
+			message = fmt.Sprintf("lease service returned HTTP %d for resource inspection %s", status, resourceID)
+		}
+		data.Findings = append(data.Findings, diagnosticFinding{Severity: "warning", Code: "resource_inspection_unavailable", Message: message})
+		return
+	}
+	data.LeaseInspections = append(data.LeaseInspections, inspectionEnvelope.Data)
+	if inspectionEnvelope.Data.QueueLength > 0 {
+		data.Findings = append(data.Findings, diagnosticFinding{Severity: "info", Code: "resource_queue_depth", Message: fmt.Sprintf("resource %s has queue depth %d", resourceID, inspectionEnvelope.Data.QueueLength)})
+	}
+	if inspectionEnvelope.Data.ActiveLease != nil {
+		data.Findings = append(data.Findings, diagnosticFinding{Severity: "info", Code: "resource_active_lease", Message: fmt.Sprintf("resource %s is leased by %s", resourceID, inspectionEnvelope.Data.ActiveLease.HolderID)})
+	}
+}
+
+func enrichNodeServiceDiagnostics(cfg adminConfig, httpClient *http.Client, nodeID, serviceID string, data *jobDiagnosticData) {
+	if serviceID == "" {
+		data.Findings = append(data.Findings, diagnosticFinding{Severity: "warning", Code: "node_service_missing", Message: "node-managed route does not name service_id"})
+		addSuggestedAction(&data.SuggestedActions, "verify catalog route metadata for this capability")
+		return
+	}
+	nodeURL, ok := diagnosticNodeURL(cfg, nodeID)
+	if !ok {
+		message := "node URL is not configured"
+		if nodeID != "" {
+			message = "node URL is not configured for " + nodeID
+		}
+		data.Findings = append(data.Findings, diagnosticFinding{Severity: "warning", Code: "node_context_unavailable", Message: message})
+		target := nodeID
+		if target == "" {
+			target = "node_id"
+		}
+		addSuggestedAction(&data.SuggestedActions, "configure -node-urls with "+target+"=<url>")
+		return
+	}
+	var serviceEnvelope struct {
+		OK    bool                  `json:"ok"`
+		Data  contracts.NodeService `json:"data"`
+		Error contracts.ErrorObject `json:"error"`
+	}
+	path := "/v1/node/services/" + url.PathEscape(serviceID)
+	status, err := getJSONDecode(cfg, httpClient, nodeURL, path, authorizationHeader(cfg.NodeToken), &serviceEnvelope)
+	if err != nil {
+		data.Findings = append(data.Findings, diagnosticFinding{Severity: "warning", Code: "node_context_unavailable", Message: err.Error()})
+		addSuggestedAction(&data.SuggestedActions, "inspect node health for "+nodeID)
+		return
+	}
+	if status < 200 || status >= 300 || !serviceEnvelope.OK {
+		message := serviceEnvelope.Error.Message
+		if message == "" {
+			message = fmt.Sprintf("node returned HTTP %d for service %s", status, serviceID)
+		}
+		data.Findings = append(data.Findings, diagnosticFinding{Severity: "warning", Code: "node_context_unavailable", Message: message})
+		addSuggestedAction(&data.SuggestedActions, "inspect node health for "+nodeID)
+		return
+	}
+	data.NodeService = &serviceEnvelope.Data
+	severity := "info"
+	if serviceEnvelope.Data.Status != "running" {
+		severity = "warning"
+		addSuggestedAction(&data.SuggestedActions, "start or inspect node service "+serviceID)
+	}
+	data.Findings = append(data.Findings, diagnosticFinding{Severity: severity, Code: "node_service_status", Message: fmt.Sprintf("node service %s status is %s", serviceID, serviceEnvelope.Data.Status)})
+}
+
+func diagnosticNodeURL(cfg adminConfig, nodeID string) (string, bool) {
+	nodeID = strings.TrimSpace(nodeID)
+	for _, entry := range splitCSV(cfg.NodeURLs) {
+		id, rawURL, ok := strings.Cut(entry, "=")
+		if !ok {
+			continue
+		}
+		id = strings.TrimSpace(id)
+		rawURL = strings.TrimSpace(rawURL)
+		if id == "" || rawURL == "" {
+			continue
+		}
+		if nodeID == "" || id == nodeID {
+			return strings.TrimRight(rawURL, "/"), true
+		}
+	}
+	if strings.TrimSpace(cfg.NodeURL) != "" {
+		return strings.TrimRight(strings.TrimSpace(cfg.NodeURL), "/"), true
+	}
+	return "", false
 }
 
 func claimFinding(job contracts.Job) diagnosticFinding {

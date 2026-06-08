@@ -742,11 +742,11 @@ func TestDiagnoseJobFetchesJobAndLogsWithComponentToken(t *testing.T) {
 	seen := map[string]bool{}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		seen[r.URL.Path] = true
-		if r.Header.Get("Authorization") != "Bearer component-token" {
-			t.Fatalf("%s Authorization = %q", r.URL.Path, r.Header.Get("Authorization"))
-		}
 		switch r.URL.Path {
 		case "/v1/jobs/job_1":
+			if r.Header.Get("Authorization") != "Bearer component-token" {
+				t.Fatalf("%s Authorization = %q", r.URL.Path, r.Header.Get("Authorization"))
+			}
 			writeEnvelope(t, w, http.StatusOK, map[string]any{
 				"job_id":     "job_1",
 				"state":      "running",
@@ -771,6 +771,9 @@ func TestDiagnoseJobFetchesJobAndLogsWithComponentToken(t *testing.T) {
 				"links":         map[string]any{},
 			})
 		case "/v1/jobs/job_1/logs":
+			if r.Header.Get("Authorization") != "Bearer component-token" {
+				t.Fatalf("%s Authorization = %q", r.URL.Path, r.Header.Get("Authorization"))
+			}
 			if r.URL.Query().Get("limit") != "20" {
 				t.Fatalf("logs query = %s", r.URL.RawQuery)
 			}
@@ -782,6 +785,55 @@ func TestDiagnoseJobFetchesJobAndLogsWithComponentToken(t *testing.T) {
 				}},
 				"next_cursor": nil,
 			})
+		case "/v1/resources":
+			if r.Header.Get("Authorization") != "Bearer component-token" {
+				t.Fatalf("%s Authorization = %q", r.URL.Path, r.Header.Get("Authorization"))
+			}
+			if r.URL.Query().Get("selector") != "gpu" {
+				t.Fatalf("resources query = %s", r.URL.RawQuery)
+			}
+			writeEnvelope(t, w, http.StatusOK, map[string]any{
+				"items": []map[string]any{{
+					"resource_id":  "res_gpu_0",
+					"selector":     "gpu",
+					"display_name": "GPU 0",
+					"status":       "available",
+					"node_id":      "node_linux_gpu",
+					"links":        map[string]any{},
+				}},
+				"next_cursor": nil,
+			})
+		case "/v1/resources/res_gpu_0/inspection":
+			if r.Header.Get("Authorization") != "Bearer component-token" {
+				t.Fatalf("%s Authorization = %q", r.URL.Path, r.Header.Get("Authorization"))
+			}
+			writeEnvelope(t, w, http.StatusOK, map[string]any{
+				"resource": map[string]any{
+					"resource_id": "res_gpu_0",
+					"selector":    "gpu",
+					"status":      "available",
+					"node_id":     "node_linux_gpu",
+				},
+				"active_lease": nil,
+				"queue_length": 1,
+				"queue": []map[string]any{{
+					"request_id":     "lease_req_1",
+					"requester_id":   "job_1",
+					"priority":       0,
+					"queue_position": 1,
+				}},
+			})
+		case "/v1/node/services/svc_comfyui_gpu":
+			if r.Header.Get("Authorization") != "Bearer node-token" {
+				t.Fatalf("%s Authorization = %q", r.URL.Path, r.Header.Get("Authorization"))
+			}
+			writeEnvelope(t, w, http.StatusOK, map[string]any{
+				"service_id":        "svc_comfyui_gpu",
+				"status":            "running",
+				"runtime_adapter":   "fake",
+				"provider_endpoint": "http://node-linux:8188",
+				"links":             map[string]any{},
+			})
 		default:
 			t.Fatalf("request = %s %s", r.Method, r.URL.Path)
 		}
@@ -791,6 +843,9 @@ func TestDiagnoseJobFetchesJobAndLogsWithComponentToken(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	code := run([]string{
 		"-jobs-url", server.URL,
+		"-leases-url", server.URL,
+		"-node-urls", "node_linux_gpu=" + server.URL,
+		"-node-token", "node-token",
 		"-component-token", "component-token",
 		"diagnose", "job", "job_1",
 	}, &stdout, &stderr, server.Client())
@@ -800,12 +855,21 @@ func TestDiagnoseJobFetchesJobAndLogsWithComponentToken(t *testing.T) {
 	if !seen["/v1/jobs/job_1"] || !seen["/v1/jobs/job_1/logs"] {
 		t.Fatalf("seen requests = %#v", seen)
 	}
+	if !seen["/v1/resources"] || !seen["/v1/resources/res_gpu_0/inspection"] || !seen["/v1/node/services/svc_comfyui_gpu"] {
+		t.Fatalf("seen requests = %#v", seen)
+	}
 	output := stdout.String()
 	for _, expected := range []string{
 		`"admin_command": "diagnose job"`,
 		`"code": "job_running"`,
 		`"code": "resource_selector"`,
 		`"code": "node_managed_route"`,
+		`"code": "lease_resources_found"`,
+		`"code": "resource_queue_depth"`,
+		`"code": "node_service_status"`,
+		`"lease_resources"`,
+		`"lease_inspections"`,
+		`"node_service"`,
 		`"check node health and service status"`,
 	} {
 		if !strings.Contains(output, expected) {
