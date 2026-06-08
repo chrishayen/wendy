@@ -22,6 +22,8 @@ Contract simulation data is kept as test input, not as product behavior.
   local filesystem root.
 - `internal/components/policy`: API key verification, policy decision, secret
   reference, and redaction service.
+- `internal/components/node`: runtime node agent with local auth, resource
+  advertisement, fake service lifecycle, health, and service status APIs.
 - `internal/testkit`: S003 fixture loader and fixture-backed HTTP fake server.
 - `cmd/pacp-contract-smoke`: CLI smoke check for a contract simulation package.
 - `cmd/pacp-fixture-server`: serves one fixture owner as an HTTP fake.
@@ -31,6 +33,7 @@ Contract simulation data is kept as test input, not as product behavior.
 - `cmd/pacp-leases`: runnable resource lease service.
 - `cmd/pacp-artifacts`: runnable artifact store.
 - `cmd/pacp-policy`: runnable access policy and secrets service.
+- `cmd/pacp-node`: runnable runtime node agent for one configured service node.
 - `testdata/contract-sim`: accepted role-play fixtures copied from the vault.
 - `testdata/manifests`: sample provider manifests used by tests and examples.
 
@@ -46,6 +49,7 @@ go run ./cmd/pacp-leases -addr localhost:18083
 go run ./cmd/pacp-artifacts -addr localhost:18084 -root /tmp/pacp-artifacts
 go run ./cmd/pacp-policy -addr localhost:18085
 go run ./cmd/pacp-gateway -addr localhost:18086 -catalog-url http://localhost:18081 -jobs-url http://localhost:18082 -artifacts-url http://localhost:18084 -policy-url http://localhost:18085
+go run ./cmd/pacp-node -addr localhost:18087 -config testdata/node/linux-gpu-fake.json
 ```
 
 The catalog can then be queried:
