@@ -261,9 +261,14 @@ func (s *Store) Create(req contracts.CreateJobRequest, idempotencyKey string) (c
 	return cloneJob(job), true, nil
 }
 
-func (s *Store) List(filter ListFilter) ([]contracts.Job, error) {
+func (s *Store) List(filter ListFilter) ([]contracts.Job, *string, error) {
+	start := 0
 	if filter.Cursor != "" {
-		return nil, ErrInvalidCursor
+		parsed, err := parseListCursor(filter.Cursor)
+		if err != nil {
+			return nil, nil, ErrInvalidCursor
+		}
+		start = parsed
 	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -285,10 +290,17 @@ func (s *Store) List(filter ListFilter) ([]contracts.Job, error) {
 		}
 		jobs = append(jobs, cloneJob(rec.job))
 	}
-	if filter.Limit > 0 && len(jobs) > filter.Limit {
-		jobs = jobs[:filter.Limit]
+	if start > len(jobs) {
+		return nil, nil, ErrInvalidCursor
 	}
-	return jobs, nil
+	end := len(jobs)
+	var next *string
+	if filter.Limit > 0 && start+filter.Limit < end {
+		end = start + filter.Limit
+		cursor := listCursor(end)
+		next = &cursor
+	}
+	return jobs[start:end], next, nil
 }
 
 func (s *Store) Get(jobID string) (contracts.Job, error) {
@@ -705,12 +717,27 @@ func logCursor(index int) string {
 	return fmt.Sprintf("cursor_jobs_logs_%06d", index)
 }
 
+func listCursor(index int) string {
+	return fmt.Sprintf("cursor_jobs_list_%06d", index)
+}
+
 func parseCursor(cursor string) (int, error) {
 	if cursor == "" {
 		return 0, nil
 	}
 	var index int
 	if _, err := fmt.Sscanf(cursor, "cursor_jobs_logs_%06d", &index); err != nil {
+		return 0, ErrInvalidCursor
+	}
+	return index, nil
+}
+
+func parseListCursor(cursor string) (int, error) {
+	var index int
+	if _, err := fmt.Sscanf(cursor, "cursor_jobs_list_%06d", &index); err != nil {
+		return 0, err
+	}
+	if index < 0 {
 		return 0, ErrInvalidCursor
 	}
 	return index, nil

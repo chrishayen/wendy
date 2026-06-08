@@ -163,6 +163,33 @@ func TestCancelRunningJobIsRejected(t *testing.T) {
 	}
 }
 
+func TestListJobsSupportsCursors(t *testing.T) {
+	store := NewStore()
+	for i := 0; i < 3; i++ {
+		if _, _, err := store.Create(createRequest(), "idem_list_cursor_"+string(rune('a'+i))); err != nil {
+			t.Fatalf("create job %d: %v", i, err)
+		}
+	}
+
+	first, next, err := store.List(ListFilter{Limit: 2})
+	if err != nil {
+		t.Fatalf("list first page: %v", err)
+	}
+	if len(first) != 2 || next == nil {
+		t.Fatalf("first page len=%d next=%v", len(first), next)
+	}
+	second, next, err := store.List(ListFilter{Cursor: *next, Limit: 2})
+	if err != nil {
+		t.Fatalf("list second page: %v", err)
+	}
+	if len(second) != 1 || next != nil {
+		t.Fatalf("second page len=%d next=%v", len(second), next)
+	}
+	if _, _, err := store.List(ListFilter{Cursor: "cursor_jobs_logs_000001"}); !errors.Is(err, ErrInvalidCursor) {
+		t.Fatalf("invalid cursor err=%v", err)
+	}
+}
+
 func TestPolicyAndAgentProjectionHideMetadata(t *testing.T) {
 	store := NewStore()
 	job, _, err := store.Create(createRequest(), "idem_policy_projection")

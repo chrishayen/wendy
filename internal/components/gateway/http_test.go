@@ -200,7 +200,7 @@ func TestGatewayRejectsInvalidInputTypeBeforeJobCreation(t *testing.T) {
 	if errObj["code"] != "validation_failed" || !strings.Contains(errObj["message"].(string), "input.prompt must be string") {
 		t.Fatalf("error = %#v", errObj)
 	}
-	created, err := env.jobStore.List(jobs.ListFilter{})
+	created, _, err := env.jobStore.List(jobs.ListFilter{})
 	if err != nil {
 		t.Fatalf("list jobs: %v", err)
 	}

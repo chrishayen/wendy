@@ -136,6 +136,34 @@ func TestHTTPHealth(t *testing.T) {
 	}
 }
 
+func TestHTTPListJobsCursor(t *testing.T) {
+	handler := NewHandler(NewStore())
+	for i := 0; i < 3; i++ {
+		resp := requestJSON(t, handler, http.MethodPost, "/v1/jobs", createRequest(), map[string]string{"Idempotency-Key": "create-http-list-" + string(rune('a'+i))})
+		if resp.Code != http.StatusCreated {
+			t.Fatalf("create status=%d body=%s", resp.Code, resp.Body.String())
+		}
+	}
+	first := requestJSON(t, handler, http.MethodGet, "/v1/jobs?limit=2", nil)
+	if first.Code != http.StatusOK {
+		t.Fatalf("list status=%d body=%s", first.Code, first.Body.String())
+	}
+	firstData := responseData(t, first)
+	items := firstData["items"].([]any)
+	cursor, _ := firstData["next_cursor"].(string)
+	if len(items) != 2 || cursor == "" {
+		t.Fatalf("first page = %#v", firstData)
+	}
+	second := requestJSON(t, handler, http.MethodGet, "/v1/jobs?limit=2&cursor="+cursor, nil)
+	if second.Code != http.StatusOK {
+		t.Fatalf("second list status=%d body=%s", second.Code, second.Body.String())
+	}
+	secondData := responseData(t, second)
+	if len(secondData["items"].([]any)) != 1 || secondData["next_cursor"] != nil {
+		t.Fatalf("second page = %#v", secondData)
+	}
+}
+
 func TestHTTPMetrics(t *testing.T) {
 	handler := NewHandler(NewStore())
 	createResp := requestJSON(t, handler, http.MethodPost, "/v1/jobs", createRequest(), map[string]string{"Idempotency-Key": "create-http-metrics"})

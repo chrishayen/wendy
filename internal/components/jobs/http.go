@@ -92,7 +92,7 @@ func (h Handler) listJobs(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, http.StatusBadRequest, "validation_failed", "limit must be a positive integer", false)
 		return
 	}
-	jobs, err := h.store.List(ListFilter{
+	jobs, next, err := h.store.List(ListFilter{
 		State:        contracts.JobState(r.URL.Query().Get("state")),
 		CapabilityID: r.URL.Query().Get("capability_id"),
 		Cursor:       r.URL.Query().Get("cursor"),
@@ -102,7 +102,7 @@ func (h Handler) listJobs(w http.ResponseWriter, r *http.Request) {
 		writeStoreError(w, r, err)
 		return
 	}
-	writeSuccess(w, r, http.StatusOK, map[string]any{"items": jobs, "next_cursor": nil})
+	writeSuccess(w, r, http.StatusOK, map[string]any{"items": jobs, "next_cursor": next})
 }
 
 func (h Handler) createJob(w http.ResponseWriter, r *http.Request) {
