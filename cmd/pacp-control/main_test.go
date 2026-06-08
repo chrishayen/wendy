@@ -260,6 +260,77 @@ func TestArtifactContentWritesOutputFile(t *testing.T) {
 	}
 }
 
+func TestArtifactsDownloadsJobArtifacts(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("Authorization"); got != "Bearer token_agent" {
+			t.Fatalf("Authorization = %q", got)
+		}
+		switch r.URL.Path {
+		case "/v1/agent/jobs/job_1/artifacts":
+			if r.Method != http.MethodGet {
+				t.Fatalf("method = %s", r.Method)
+			}
+			writeTestJSON(t, w, http.StatusOK, map[string]any{
+				"ok": true,
+				"data": map[string]any{
+					"items": []map[string]any{
+						{"artifact_id": "art_1", "name": "result.txt"},
+						{"artifact_id": "art_2", "name": "../result.txt"},
+					},
+					"next_cursor": nil,
+				},
+			})
+		case "/v1/artifacts/art_1/content":
+			w.Header().Set("Content-Type", "text/plain")
+			w.Header().Set("Digest", "sha256=one")
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte("one"))
+		case "/v1/artifacts/art_2/content":
+			w.Header().Set("Content-Type", "text/plain")
+			w.Header().Set("Digest", "sha256=two")
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte("two"))
+		default:
+			t.Fatalf("request = %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	outDir := t.TempDir()
+	var stdout, stderr bytes.Buffer
+	code := run([]string{
+		"-gateway-url", server.URL,
+		"-token", "token_agent",
+		"artifacts", "job_1",
+		"-out-dir", outDir,
+	}, &stdout, &stderr, server.Client())
+	if code != 0 {
+		t.Fatalf("code=%d stderr=%s", code, stderr.String())
+	}
+	first, err := os.ReadFile(filepath.Join(outDir, "result.txt"))
+	if err != nil {
+		t.Fatalf("read first artifact: %v", err)
+	}
+	second, err := os.ReadFile(filepath.Join(outDir, "result-2.txt"))
+	if err != nil {
+		t.Fatalf("read second artifact: %v", err)
+	}
+	if string(first) != "one" || string(second) != "two" {
+		t.Fatalf("downloads = %q %q", string(first), string(second))
+	}
+	output := stdout.String()
+	for _, expected := range []string{
+		`"job_id": "job_1"`,
+		`"artifact_id": "art_1"`,
+		`"artifact_id": "art_2"`,
+		`"path": "` + filepath.Join(outDir, "result-2.txt") + `"`,
+	} {
+		if !strings.Contains(output, expected) {
+			t.Fatalf("stdout missing %q:\n%s", expected, output)
+		}
+	}
+}
+
 func TestWaitPollsUntilTerminalJob(t *testing.T) {
 	requests := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

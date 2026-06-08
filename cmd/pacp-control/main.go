@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 )
@@ -87,10 +88,7 @@ func runCommand(client gatewayClient, args []string, stdout, stderr io.Writer) (
 	case "logs":
 		return logsCommand(client, args[1:], stdout, stderr)
 	case "artifacts":
-		if len(args) != 2 {
-			return 2, errors.New("usage: pacp-control artifacts <job-id>")
-		}
-		return runJSONCommand(client, http.MethodGet, "/v1/agent/jobs/"+url.PathEscape(args[1])+"/artifacts", nil, "", stdout, nil)
+		return artifactsCommand(client, args[1:], stdout, stderr)
 	case "artifact-content":
 		return contentCommand(client, args[1:], stdout, stderr)
 	default:
@@ -277,6 +275,73 @@ func logsCommand(client gatewayClient, args []string, stdout, stderr io.Writer) 
 	return runJSONCommand(client, http.MethodGet, path, nil, "", stdout, nil)
 }
 
+func artifactsCommand(client gatewayClient, args []string, stdout, stderr io.Writer) (int, error) {
+	flags := flag.NewFlagSet("artifacts", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	outDir := flags.String("out-dir", "", "download artifact bytes into this directory")
+	remaining, err := parseCommandFlags(flags, args)
+	if err != nil {
+		return 2, err
+	}
+	if len(remaining) != 1 {
+		return 2, errors.New("usage: pacp-control artifacts <job-id> [-out-dir dir]")
+	}
+	jobID := remaining[0]
+	path := "/v1/agent/jobs/" + url.PathEscape(jobID) + "/artifacts"
+	if *outDir == "" {
+		return runJSONCommand(client, http.MethodGet, path, nil, "", stdout, nil)
+	}
+
+	status, raw, err := requestRaw(client, http.MethodGet, path, nil, "")
+	if err != nil {
+		return 1, err
+	}
+	if status < 200 || status >= 300 {
+		if err := writePrettyJSON(stdout, raw); err != nil {
+			return 1, err
+		}
+		return 1, fmt.Errorf("gateway returned HTTP %d", status)
+	}
+	artifacts, err := artifactListFromEnvelope(raw)
+	if err != nil {
+		return 1, err
+	}
+	if err := os.MkdirAll(*outDir, 0o700); err != nil {
+		return 1, err
+	}
+
+	usedNames := map[string]int{}
+	results := make([]map[string]any, 0, len(artifacts))
+	for _, artifact := range artifacts {
+		filename := uniqueArtifactFilename(artifact, usedNames)
+		outPath := filepath.Join(*outDir, filename)
+		result, err := downloadArtifactToFile(client, artifact.ArtifactID, outPath)
+		if err != nil {
+			return 1, err
+		}
+		result["name"] = artifact.Name
+		results = append(results, result)
+	}
+	report := map[string]any{
+		"ok": true,
+		"data": map[string]any{
+			"job_id": jobID,
+			"items":  results,
+		},
+		"links": map[string]any{},
+		"meta":  map[string]string{"schema_version": "v1"},
+	}
+	encoded, err := json.MarshalIndent(report, "", "  ")
+	if err != nil {
+		return 1, err
+	}
+	_, err = fmt.Fprintln(stdout, string(encoded))
+	if err != nil {
+		return 1, err
+	}
+	return 0, nil
+}
+
 func contentCommand(client gatewayClient, args []string, stdout, stderr io.Writer) (int, error) {
 	flags := flag.NewFlagSet("artifact-content", flag.ContinueOnError)
 	flags.SetOutput(stderr)
@@ -341,6 +406,86 @@ func writeArtifactFileResult(stdout io.Writer, artifactID, path string, size int
 		return 1, err
 	}
 	return 0, nil
+}
+
+func downloadArtifactToFile(client gatewayClient, artifactID, outPath string) (map[string]any, error) {
+	resp, err := client.do(context.Background(), http.MethodGet, "/v1/artifacts/"+url.PathEscape(artifactID)+"/content", nil, "")
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		raw, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("artifact %s content request returned HTTP %d: %s", artifactID, resp.StatusCode, strings.TrimSpace(string(raw)))
+	}
+	file, err := os.OpenFile(outPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
+	if err != nil {
+		return nil, err
+	}
+	bytesWritten, copyErr := io.Copy(file, resp.Body)
+	closeErr := file.Close()
+	if copyErr != nil {
+		return nil, copyErr
+	}
+	if closeErr != nil {
+		return nil, closeErr
+	}
+	return map[string]any{
+		"artifact_id":  artifactID,
+		"path":         outPath,
+		"bytes":        bytesWritten,
+		"content_type": resp.Header.Get("Content-Type"),
+		"digest":       resp.Header.Get("Digest"),
+	}, nil
+}
+
+type listedArtifact struct {
+	ArtifactID string `json:"artifact_id"`
+	Name       string `json:"name"`
+}
+
+func artifactListFromEnvelope(raw []byte) ([]listedArtifact, error) {
+	var envelope struct {
+		OK   bool `json:"ok"`
+		Data struct {
+			Items []listedArtifact `json:"items"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(raw, &envelope); err != nil {
+		return nil, fmt.Errorf("decode artifact list: %w", err)
+	}
+	if !envelope.OK {
+		return nil, errors.New("artifact list response was not ok")
+	}
+	for _, artifact := range envelope.Data.Items {
+		if artifact.ArtifactID == "" {
+			return nil, errors.New("artifact list item missing artifact_id")
+		}
+	}
+	return envelope.Data.Items, nil
+}
+
+func uniqueArtifactFilename(artifact listedArtifact, used map[string]int) string {
+	name := safeArtifactFilename(artifact)
+	used[name]++
+	if used[name] == 1 {
+		return name
+	}
+	ext := filepath.Ext(name)
+	stem := strings.TrimSuffix(name, ext)
+	return fmt.Sprintf("%s-%d%s", stem, used[name], ext)
+}
+
+func safeArtifactFilename(artifact listedArtifact) string {
+	name := strings.TrimSpace(artifact.Name)
+	if name == "" {
+		name = artifact.ArtifactID
+	}
+	name = filepath.Base(name)
+	if name == "." || name == string(filepath.Separator) || name == "" {
+		return artifact.ArtifactID
+	}
+	return name
 }
 
 func requestRaw(client gatewayClient, method, path string, body any, idempotencyKey string) (int, []byte, error) {
