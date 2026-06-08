@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -10,6 +12,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -425,7 +428,7 @@ func leasesReleaseCommand(cfg adminConfig, httpClient *http.Client, args []strin
 
 func artifactsCommand(cfg adminConfig, httpClient *http.Client, args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
-		return usage(stderr, "usage: pacp-admin [flags] artifacts <list|artifact|upload> [id]")
+		return usage(stderr, "usage: pacp-admin [flags] artifacts <list|artifact|upload|create-upload|put-content|complete-upload|register-local> [id]")
 	}
 	switch args[0] {
 	case "list":
@@ -443,9 +446,180 @@ func artifactsCommand(cfg adminConfig, httpClient *http.Client, args []string, s
 			return usage(stderr, "usage: pacp-admin [flags] artifacts upload <upload-id>")
 		}
 		return getJSON(cfg, httpClient, cfg.ArtifactsURL, "/v1/artifact-uploads/"+url.PathEscape(args[1]), authorizationHeader(cfg.ComponentToken), stdout, stderr)
+	case "create-upload":
+		return artifactsCreateUploadCommand(cfg, httpClient, args[1:], stdout, stderr)
+	case "put-content":
+		return artifactsPutContentCommand(cfg, httpClient, args[1:], stdout, stderr)
+	case "complete-upload":
+		return artifactsCompleteUploadCommand(cfg, httpClient, args[1:], stdout, stderr)
+	case "register-local":
+		return artifactsRegisterLocalCommand(cfg, httpClient, args[1:], stdout, stderr)
 	default:
-		return usage(stderr, "usage: pacp-admin [flags] artifacts <list|artifact|upload> [id]")
+		return usage(stderr, "usage: pacp-admin [flags] artifacts <list|artifact|upload|create-upload|put-content|complete-upload|register-local> [id]")
 	}
+}
+
+func artifactsCreateUploadCommand(cfg adminConfig, httpClient *http.Client, args []string, stdout, stderr io.Writer) int {
+	flags := flag.NewFlagSet("artifacts create-upload", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	name := flags.String("name", "", "artifact name")
+	mediaType := flags.String("media-type", "", "artifact media type")
+	producerRef := flags.String("producer-ref", "", "producer reference, usually a job id")
+	ownerSubjectID := flags.String("owner-subject-id", "", "artifact owner subject id")
+	expectedSize := flags.Int64("expected-size", -1, "expected artifact size in bytes")
+	expectedChecksum := flags.String("expected-checksum", "", "expected sha256:<hex> checksum")
+	metadata := flags.String("metadata", "", "JSON object metadata")
+	idempotencyKey := flags.String("idempotency-key", "", "idempotency key for upload creation")
+	remaining, err := parseSubcommandFlags(flags, args)
+	if err != nil {
+		return 2
+	}
+	if len(remaining) != 0 {
+		return usage(stderr, "usage: pacp-admin [flags] artifacts create-upload -name <name> -media-type <type> -owner-subject-id <subject> -idempotency-key <key> [-producer-ref ref] [-expected-size bytes] [-expected-checksum sha256:hex] [-metadata JSON]")
+	}
+	if *name == "" {
+		return usage(stderr, "name is required for artifacts create-upload")
+	}
+	if *mediaType == "" {
+		return usage(stderr, "media-type is required for artifacts create-upload")
+	}
+	if *ownerSubjectID == "" {
+		return usage(stderr, "owner-subject-id is required for artifacts create-upload")
+	}
+	if *idempotencyKey == "" {
+		return usage(stderr, "idempotency-key is required for artifacts create-upload")
+	}
+	if *expectedSize < -1 {
+		return usage(stderr, "expected-size must be zero or greater")
+	}
+	metadataObject, err := optionalJSONObject(*metadata)
+	if err != nil {
+		fmt.Fprintf(stderr, "metadata: %v\n", err)
+		return 2
+	}
+	req := contracts.CreateArtifactUploadRequest{
+		Name:             *name,
+		MediaType:        *mediaType,
+		ProducerRef:      *producerRef,
+		OwnerSubjectID:   *ownerSubjectID,
+		ExpectedChecksum: *expectedChecksum,
+		Metadata:         metadataObject,
+	}
+	if *expectedSize >= 0 {
+		req.ExpectedSize = expectedSize
+	}
+	return postJSONBody(cfg, httpClient, cfg.ArtifactsURL, "/v1/artifact-uploads", authorizationHeader(cfg.ComponentToken), *idempotencyKey, req, stdout, stderr)
+}
+
+func artifactsPutContentCommand(cfg adminConfig, httpClient *http.Client, args []string, stdout, stderr io.Writer) int {
+	flags := flag.NewFlagSet("artifacts put-content", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	filePath := flags.String("file", "", "file containing artifact bytes")
+	mediaType := flags.String("media-type", "", "content media type")
+	digest := flags.String("digest", "", "optional sha256:<hex> digest; computed from file when omitted")
+	idempotencyKey := flags.String("idempotency-key", "", "idempotency key for content upload")
+	remaining, err := parseSubcommandFlags(flags, args)
+	if err != nil {
+		return 2
+	}
+	if len(remaining) != 1 {
+		return usage(stderr, "usage: pacp-admin [flags] artifacts put-content <upload-id> -file <path> -media-type <type> -idempotency-key <key> [-digest sha256:hex]")
+	}
+	if *filePath == "" {
+		return usage(stderr, "file is required for artifacts put-content")
+	}
+	if *mediaType == "" {
+		return usage(stderr, "media-type is required for artifacts put-content")
+	}
+	if *idempotencyKey == "" {
+		return usage(stderr, "idempotency-key is required for artifacts put-content")
+	}
+	path := "/v1/artifact-uploads/" + url.PathEscape(remaining[0]) + "/content"
+	return putFile(cfg, httpClient, cfg.ArtifactsURL, path, authorizationHeader(cfg.ComponentToken), *idempotencyKey, *filePath, *mediaType, *digest, stdout, stderr)
+}
+
+func artifactsCompleteUploadCommand(cfg adminConfig, httpClient *http.Client, args []string, stdout, stderr io.Writer) int {
+	flags := flag.NewFlagSet("artifacts complete-upload", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	checksum := flags.String("checksum", "", "sha256:<hex> artifact checksum")
+	size := flags.Int64("size", -1, "artifact size in bytes")
+	filePath := flags.String("file", "", "optional file used to derive checksum and size when omitted")
+	idempotencyKey := flags.String("idempotency-key", "", "idempotency key for upload completion")
+	remaining, err := parseSubcommandFlags(flags, args)
+	if err != nil {
+		return 2
+	}
+	if len(remaining) != 1 {
+		return usage(stderr, "usage: pacp-admin [flags] artifacts complete-upload <upload-id> -idempotency-key <key> [-file path] [-checksum sha256:hex -size bytes]")
+	}
+	checksumValue := *checksum
+	sizeValue := *size
+	if *filePath != "" && (checksumValue == "" || sizeValue < 0) {
+		derivedChecksum, derivedSize, err := fileChecksumAndSize(*filePath)
+		if err != nil {
+			fmt.Fprintln(stderr, err)
+			return 1
+		}
+		if checksumValue == "" {
+			checksumValue = derivedChecksum
+		}
+		if sizeValue < 0 {
+			sizeValue = derivedSize
+		}
+	}
+	if checksumValue == "" {
+		return usage(stderr, "checksum is required for artifacts complete-upload")
+	}
+	if sizeValue < 0 {
+		return usage(stderr, "size is required for artifacts complete-upload")
+	}
+	if *idempotencyKey == "" {
+		return usage(stderr, "idempotency-key is required for artifacts complete-upload")
+	}
+	req := contracts.CompleteArtifactUploadRequest{Checksum: checksumValue, Size: sizeValue}
+	path := "/v1/artifact-uploads/" + url.PathEscape(remaining[0]) + "/complete"
+	return postJSONBody(cfg, httpClient, cfg.ArtifactsURL, path, authorizationHeader(cfg.ComponentToken), *idempotencyKey, req, stdout, stderr)
+}
+
+func artifactsRegisterLocalCommand(cfg adminConfig, httpClient *http.Client, args []string, stdout, stderr io.Writer) int {
+	flags := flag.NewFlagSet("artifacts register-local", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	pathFlag := flags.String("path", "", "artifact path under the artifact store root")
+	name := flags.String("name", "", "artifact name")
+	mediaType := flags.String("media-type", "", "artifact media type")
+	producerRef := flags.String("producer-ref", "", "producer reference, usually a job id")
+	ownerSubjectID := flags.String("owner-subject-id", "", "artifact owner subject id")
+	metadata := flags.String("metadata", "", "JSON object metadata")
+	remaining, err := parseSubcommandFlags(flags, args)
+	if err != nil {
+		return 2
+	}
+	if len(remaining) != 0 {
+		return usage(stderr, "usage: pacp-admin [flags] artifacts register-local -path <store-relative-path> -media-type <type> -owner-subject-id <subject> [-name name] [-producer-ref ref] [-metadata JSON]")
+	}
+	if *pathFlag == "" {
+		return usage(stderr, "path is required for artifacts register-local")
+	}
+	if *mediaType == "" {
+		return usage(stderr, "media-type is required for artifacts register-local")
+	}
+	if *ownerSubjectID == "" {
+		return usage(stderr, "owner-subject-id is required for artifacts register-local")
+	}
+	metadataObject, err := optionalJSONObject(*metadata)
+	if err != nil {
+		fmt.Fprintf(stderr, "metadata: %v\n", err)
+		return 2
+	}
+	req := contracts.RegisterLocalArtifactRequest{
+		Path:           *pathFlag,
+		Name:           *name,
+		MediaType:      *mediaType,
+		ProducerRef:    *producerRef,
+		OwnerSubjectID: *ownerSubjectID,
+		Metadata:       metadataObject,
+	}
+	return postJSONBody(cfg, httpClient, cfg.ArtifactsURL, "/v1/artifacts/register-local", authorizationHeader(cfg.ComponentToken), "", req, stdout, stderr)
 }
 
 func policyCommand(cfg adminConfig, httpClient *http.Client, args []string, stdout, stderr io.Writer) int {
@@ -831,6 +1005,109 @@ func getJSON(cfg adminConfig, httpClient *http.Client, baseURL, path, credential
 
 func postJSON(cfg adminConfig, httpClient *http.Client, baseURL, path, credential, idempotencyKey string, stdout, stderr io.Writer) int {
 	return postJSONBody(cfg, httpClient, baseURL, path, credential, idempotencyKey, nil, stdout, stderr)
+}
+
+func putFile(cfg adminConfig, httpClient *http.Client, baseURL, path, credential, idempotencyKey, filePath, mediaType, digest string, stdout, stderr io.Writer) int {
+	baseURL = strings.TrimRight(strings.TrimSpace(baseURL), "/")
+	if baseURL == "" {
+		fmt.Fprintf(stderr, "service URL is required for %s\n", path)
+		return 2
+	}
+	file, err := os.Open(filePath)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	defer file.Close()
+	info, err := file.Stat()
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	if info.IsDir() {
+		fmt.Fprintf(stderr, "file %s is a directory\n", filePath)
+		return 2
+	}
+	if digest == "" {
+		digest, err = sha256Digest(file)
+		if err != nil {
+			fmt.Fprintln(stderr, err)
+			return 1
+		}
+		if _, err := file.Seek(0, io.SeekStart); err != nil {
+			fmt.Fprintln(stderr, err)
+			return 1
+		}
+	}
+	ctx := context.Background()
+	if cfg.Timeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, cfg.Timeout)
+		defer cancel()
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPut, baseURL+path, file)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 2
+	}
+	req.ContentLength = info.Size()
+	req.Header.Set("Content-Type", mediaType)
+	req.Header.Set("Content-Length", strconv.FormatInt(info.Size(), 10))
+	req.Header.Set("Digest", digest)
+	if credential != "" {
+		req.Header.Set("Authorization", credential)
+	}
+	if idempotencyKey != "" {
+		req.Header.Set("Idempotency-Key", idempotencyKey)
+	}
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	defer resp.Body.Close()
+	raw, err := io.ReadAll(resp.Body)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	if err := writePrettyJSON(stdout, raw); err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		fmt.Fprintf(stderr, "component returned HTTP %d\n", resp.StatusCode)
+		return 1
+	}
+	return 0
+}
+
+func sha256Digest(reader io.Reader) (string, error) {
+	hash := sha256.New()
+	if _, err := io.Copy(hash, reader); err != nil {
+		return "", err
+	}
+	return "sha256:" + hex.EncodeToString(hash.Sum(nil)), nil
+}
+
+func fileChecksumAndSize(filePath string) (string, int64, error) {
+	file, err := os.Open(filePath)
+	if err != nil {
+		return "", 0, err
+	}
+	defer file.Close()
+	info, err := file.Stat()
+	if err != nil {
+		return "", 0, err
+	}
+	if info.IsDir() {
+		return "", 0, fmt.Errorf("file %s is a directory", filePath)
+	}
+	checksum, err := sha256Digest(file)
+	if err != nil {
+		return "", 0, err
+	}
+	return checksum, info.Size(), nil
 }
 
 func postJSONBody(cfg adminConfig, httpClient *http.Client, baseURL, path, credential, idempotencyKey string, body any, stdout, stderr io.Writer) int {

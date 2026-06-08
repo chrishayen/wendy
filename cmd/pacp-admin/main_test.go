@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -485,6 +486,214 @@ func TestLeasesReleaseRequiresIdempotencyKey(t *testing.T) {
 	}
 	if !strings.Contains(stderr.String(), "idempotency-key is required") {
 		t.Fatalf("stderr = %s", stderr.String())
+	}
+}
+
+func TestArtifactsCreateUploadCommandPostsUpload(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/v1/artifact-uploads" {
+			t.Fatalf("request = %s %s", r.Method, r.URL.Path)
+		}
+		if r.Header.Get("Authorization") != "Bearer component-token" {
+			t.Fatalf("Authorization = %q", r.Header.Get("Authorization"))
+		}
+		if r.Header.Get("Idempotency-Key") != "upload-create-1" {
+			t.Fatalf("Idempotency-Key = %q", r.Header.Get("Idempotency-Key"))
+		}
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatalf("decode body: %v", err)
+		}
+		if body["name"] != "image.png" || body["media_type"] != "image/png" || body["owner_subject_id"] != "sub_agent" || body["producer_ref"] != "job_1" {
+			t.Fatalf("body = %#v", body)
+		}
+		if body["expected_size"].(float64) != 42 {
+			t.Fatalf("expected_size = %#v", body["expected_size"])
+		}
+		metadata := body["metadata"].(map[string]any)
+		if metadata["kind"] != "preview" {
+			t.Fatalf("metadata = %#v", metadata)
+		}
+		writeEnvelope(t, w, http.StatusCreated, map[string]any{"upload_id": "upload_1", "state": "created"})
+	}))
+	defer server.Close()
+
+	var stdout, stderr bytes.Buffer
+	code := run([]string{
+		"-artifacts-url", server.URL,
+		"-component-token", "component-token",
+		"artifacts", "create-upload",
+		"-name", "image.png",
+		"-media-type", "image/png",
+		"-owner-subject-id", "sub_agent",
+		"-producer-ref", "job_1",
+		"-expected-size", "42",
+		"-metadata", `{"kind":"preview"}`,
+		"-idempotency-key", "upload-create-1",
+	}, &stdout, &stderr, server.Client())
+	if code != 0 {
+		t.Fatalf("code=%d stderr=%s stdout=%s", code, stderr.String(), stdout.String())
+	}
+	if !strings.Contains(stdout.String(), `"upload_id": "upload_1"`) {
+		t.Fatalf("stdout = %s", stdout.String())
+	}
+}
+
+func TestArtifactsPutContentCommandUploadsFileWithDigest(t *testing.T) {
+	body := "hello artifact"
+	filePath := filepath.Join(t.TempDir(), "artifact.txt")
+	if err := os.WriteFile(filePath, []byte(body), 0o600); err != nil {
+		t.Fatalf("write artifact file: %v", err)
+	}
+	expectedDigest, err := sha256Digest(strings.NewReader(body))
+	if err != nil {
+		t.Fatalf("digest: %v", err)
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPut || r.URL.Path != "/v1/artifact-uploads/upload_1/content" {
+			t.Fatalf("request = %s %s", r.Method, r.URL.Path)
+		}
+		if r.Header.Get("Authorization") != "Bearer component-token" {
+			t.Fatalf("Authorization = %q", r.Header.Get("Authorization"))
+		}
+		if r.Header.Get("Idempotency-Key") != "upload-content-1" {
+			t.Fatalf("Idempotency-Key = %q", r.Header.Get("Idempotency-Key"))
+		}
+		if r.Header.Get("Content-Type") != "text/plain" {
+			t.Fatalf("Content-Type = %q", r.Header.Get("Content-Type"))
+		}
+		if r.ContentLength != int64(len(body)) {
+			t.Fatalf("ContentLength = %d", r.ContentLength)
+		}
+		if r.Header.Get("Digest") != expectedDigest {
+			t.Fatalf("Digest = %q want %q", r.Header.Get("Digest"), expectedDigest)
+		}
+		raw, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Fatalf("read body: %v", err)
+		}
+		if string(raw) != body {
+			t.Fatalf("body = %q", string(raw))
+		}
+		writeEnvelope(t, w, http.StatusOK, map[string]any{"upload_id": "upload_1", "state": "received"})
+	}))
+	defer server.Close()
+
+	var stdout, stderr bytes.Buffer
+	code := run([]string{
+		"-artifacts-url", server.URL,
+		"-component-token", "component-token",
+		"artifacts", "put-content", "upload_1",
+		"-file", filePath,
+		"-media-type", "text/plain",
+		"-idempotency-key", "upload-content-1",
+	}, &stdout, &stderr, server.Client())
+	if code != 0 {
+		t.Fatalf("code=%d stderr=%s stdout=%s", code, stderr.String(), stdout.String())
+	}
+	if !strings.Contains(stdout.String(), `"state": "received"`) {
+		t.Fatalf("stdout = %s", stdout.String())
+	}
+}
+
+func TestArtifactsPutContentRequiresIdempotencyKey(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := run([]string{
+		"-artifacts-url", "http://artifacts.invalid",
+		"artifacts", "put-content", "upload_1",
+		"-file", "artifact.txt",
+		"-media-type", "text/plain",
+	}, &stdout, &stderr, http.DefaultClient)
+	if code != 2 {
+		t.Fatalf("code=%d stderr=%s", code, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "idempotency-key is required") {
+		t.Fatalf("stderr = %s", stderr.String())
+	}
+}
+
+func TestArtifactsCompleteUploadCommandPostsComplete(t *testing.T) {
+	body := "complete bytes"
+	filePath := filepath.Join(t.TempDir(), "artifact.txt")
+	if err := os.WriteFile(filePath, []byte(body), 0o600); err != nil {
+		t.Fatalf("write artifact file: %v", err)
+	}
+	expectedDigest, err := sha256Digest(strings.NewReader(body))
+	if err != nil {
+		t.Fatalf("digest: %v", err)
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/v1/artifact-uploads/upload_1/complete" {
+			t.Fatalf("request = %s %s", r.Method, r.URL.Path)
+		}
+		if r.Header.Get("Idempotency-Key") != "upload-complete-1" {
+			t.Fatalf("Idempotency-Key = %q", r.Header.Get("Idempotency-Key"))
+		}
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatalf("decode body: %v", err)
+		}
+		if body["checksum"] != expectedDigest || body["size"].(float64) != 14 {
+			t.Fatalf("body = %#v", body)
+		}
+		writeEnvelope(t, w, http.StatusCreated, map[string]any{"artifact_id": "art_1", "checksum": expectedDigest})
+	}))
+	defer server.Close()
+
+	var stdout, stderr bytes.Buffer
+	code := run([]string{
+		"-artifacts-url", server.URL,
+		"artifacts", "complete-upload", "upload_1",
+		"-file", filePath,
+		"-idempotency-key", "upload-complete-1",
+	}, &stdout, &stderr, server.Client())
+	if code != 0 {
+		t.Fatalf("code=%d stderr=%s stdout=%s", code, stderr.String(), stdout.String())
+	}
+	if !strings.Contains(stdout.String(), `"artifact_id": "art_1"`) {
+		t.Fatalf("stdout = %s", stdout.String())
+	}
+}
+
+func TestArtifactsRegisterLocalCommandPostsArtifact(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/v1/artifacts/register-local" {
+			t.Fatalf("request = %s %s", r.Method, r.URL.Path)
+		}
+		if r.Header.Get("Authorization") != "Bearer component-token" {
+			t.Fatalf("Authorization = %q", r.Header.Get("Authorization"))
+		}
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatalf("decode body: %v", err)
+		}
+		if body["path"] != "blobs/artifact.bin" || body["name"] != "artifact.bin" || body["media_type"] != "application/octet-stream" || body["owner_subject_id"] != "sub_admin" {
+			t.Fatalf("body = %#v", body)
+		}
+		metadata := body["metadata"].(map[string]any)
+		if metadata["source"] != "operator" {
+			t.Fatalf("metadata = %#v", metadata)
+		}
+		writeEnvelope(t, w, http.StatusCreated, map[string]any{"artifact_id": "art_1", "name": "artifact.bin"})
+	}))
+	defer server.Close()
+
+	var stdout, stderr bytes.Buffer
+	code := run([]string{
+		"-artifacts-url", server.URL,
+		"-component-token", "component-token",
+		"artifacts", "register-local",
+		"-path", "blobs/artifact.bin",
+		"-name", "artifact.bin",
+		"-media-type", "application/octet-stream",
+		"-owner-subject-id", "sub_admin",
+		"-metadata", `{"source":"operator"}`,
+	}, &stdout, &stderr, server.Client())
+	if code != 0 {
+		t.Fatalf("code=%d stderr=%s stdout=%s", code, stderr.String(), stdout.String())
+	}
+	if !strings.Contains(stdout.String(), `"artifact_id": "art_1"`) {
+		t.Fatalf("stdout = %s", stdout.String())
 	}
 }
 

@@ -89,6 +89,10 @@ go run ./cmd/pacp-admin leases create-request -requester-id job_manual -selector
 go run ./cmd/pacp-admin leases cancel-request lease_req_000001 -reason "operator cleanup"
 go run ./cmd/pacp-admin leases release lease_000001 -holder-id job_manual -idempotency-key release-1 -actor-subject-id sub_admin -reason "operator release"
 go run ./cmd/pacp-admin artifacts list
+go run ./cmd/pacp-admin artifacts create-upload -name output.txt -media-type text/plain -owner-subject-id sub_admin -producer-ref job_manual -idempotency-key upload-create-1
+go run ./cmd/pacp-admin artifacts put-content upload_000001 -file /tmp/output.txt -media-type text/plain -idempotency-key upload-content-1
+go run ./cmd/pacp-admin artifacts complete-upload upload_000001 -file /tmp/output.txt -idempotency-key upload-complete-1
+go run ./cmd/pacp-admin artifacts register-local -path blobs/output.txt -name output.txt -media-type text/plain -owner-subject-id sub_admin
 go run ./cmd/pacp-admin policy create-key -subject-id sub_admin -scopes admin,component
 go run ./cmd/pacp-admin policy check -subject-id sub_agent -action tool.invoke -resource cap_image_generate
 PACP_PROVIDER_TOKEN='secret-value' go run ./cmd/pacp-admin policy create-secret -name provider_token -value-env PACP_PROVIDER_TOKEN
@@ -196,4 +200,4 @@ This is not the full production control plane yet. It is a usable service stack
 with public HTTP boundaries, file-backed local durability, a provider SDK, a
 generic HTTP provider bridge, a composition runner, runtime node adapters, and a
 gateway control CLI. Production databases, richer provider-specific wrappers,
-broader mutating admin commands, and hardening remain.
+broader workflow automation, and hardening remain.

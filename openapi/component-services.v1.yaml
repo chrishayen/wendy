@@ -537,12 +537,18 @@ paths:
         - $ref: "#/components/parameters/IdempotencyKeyRequired"
         - name: Content-Type
           in: header
-          required: false
+          required: true
           schema:
             type: string
+        - name: Content-Length
+          in: header
+          required: true
+          schema:
+            type: integer
+            format: int64
         - name: Digest
           in: header
-          required: false
+          required: true
           schema:
             type: string
       requestBody:
