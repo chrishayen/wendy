@@ -1,0 +1,141 @@
+package main
+
+import (
+	"bytes"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"pacp/internal/contracts"
+)
+
+func TestRunScenarioSmokeStillPasses(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := run([]string{
+		"-root", filepath.Join("..", "..", "testdata", "contract-sim"),
+		"-manifest", filepath.Join("fixtures", "S003", "manifest.json"),
+	}, &stdout, &stderr, http.DefaultClient)
+	if code != 0 {
+		t.Fatalf("code=%d stderr=%s stdout=%s", code, stderr.String(), stdout.String())
+	}
+	if !strings.Contains(stdout.String(), "contract-smoke=pass") {
+		t.Fatalf("stdout = %s", stdout.String())
+	}
+}
+
+func TestRunProviderSmokeChecksLiveProvider(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/provider/manifest":
+			writeSmokeEnvelope(t, w, http.StatusOK, smokeProviderManifest("http://"+r.Host))
+		case "/v1/provider/health":
+			writeSmokeEnvelope(t, w, http.StatusOK, map[string]any{"status": "healthy"})
+		case "/v1/provider/capabilities/cap_echo/invoke":
+			var req contracts.ProviderInvokeRequest
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				t.Fatalf("decode invoke: %v", err)
+			}
+			if req.Input["message"] != "hello" {
+				t.Fatalf("input = %#v", req.Input)
+			}
+			writeSmokeEnvelope(t, w, http.StatusOK, contracts.ProviderInvokeResponse{
+				Output: map[string]any{"reply": "hello"},
+			})
+		default:
+			t.Fatalf("unexpected request = %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	var stdout, stderr bytes.Buffer
+	code := run([]string{
+		"-provider-url", server.URL,
+		"-capability-id", "cap_echo",
+		"-input", `{"message":"hello"}`,
+	}, &stdout, &stderr, server.Client())
+	if code != 0 {
+		t.Fatalf("code=%d stderr=%s stdout=%s", code, stderr.String(), stdout.String())
+	}
+	for _, expected := range []string{
+		"check=provider.manifest status=pass",
+		"check=provider.health status=pass",
+		"check=provider.invoke status=pass",
+		"contract-smoke=pass",
+	} {
+		if !strings.Contains(stdout.String(), expected) {
+			t.Fatalf("stdout missing %q:\n%s", expected, stdout.String())
+		}
+	}
+}
+
+func TestRunProviderSmokeRejectsInvalidInputJSON(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := run([]string{
+		"-provider-url", "http://provider.invalid",
+		"-capability-id", "cap_echo",
+		"-input", `[]`,
+	}, &stdout, &stderr, http.DefaultClient)
+	if code != 2 {
+		t.Fatalf("code=%d stderr=%s stdout=%s", code, stderr.String(), stdout.String())
+	}
+	if !strings.Contains(stderr.String(), "must be a JSON object") {
+		t.Fatalf("stderr = %s", stderr.String())
+	}
+}
+
+func smokeProviderManifest(endpoint string) contracts.ProviderManifest {
+	return contracts.ProviderManifest{
+		SchemaVersion: "v1",
+		Service: contracts.Service{
+			ID:           "svc_smoke_provider",
+			Name:         "Smoke Provider",
+			Description:  "Provider used by the smoke command tests.",
+			Version:      "v1",
+			ProviderKind: "test",
+		},
+		Provider: contracts.Provider{
+			Endpoint:   endpoint,
+			HealthPath: "/v1/provider/health",
+		},
+		Capabilities: []contracts.Capability{{
+			ID:            "cap_echo",
+			Name:          "Echo",
+			Description:   "Echoes a message.",
+			ExecutionMode: "sync",
+			InputSchema: map[string]any{
+				"type":     "object",
+				"required": []any{"message"},
+				"properties": map[string]any{
+					"message": map[string]any{"type": "string"},
+				},
+			},
+			OutputSchema: map[string]any{
+				"type":     "object",
+				"required": []any{"reply"},
+				"properties": map[string]any{
+					"reply": map[string]any{"type": "string"},
+				},
+			},
+			Examples:    []map[string]any{},
+			SideEffects: "none",
+			TimeoutHint: "30s",
+		}},
+	}
+}
+
+func writeSmokeEnvelope(t *testing.T, w http.ResponseWriter, status int, data any) {
+	t.Helper()
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	if err := json.NewEncoder(w).Encode(map[string]any{
+		"ok":    status >= 200 && status < 300,
+		"data":  data,
+		"links": map[string]any{},
+		"meta":  map[string]any{"request_id": "req_test", "schema_version": "v1"},
+	}); err != nil {
+		t.Fatalf("encode envelope: %v", err)
+	}
+}

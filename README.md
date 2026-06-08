@@ -84,6 +84,7 @@ Contract simulation data is kept as test input, not as product behavior.
 ```sh
 go test ./...
 go run ./cmd/pacp-contract-smoke
+go run ./cmd/pacp-contract-smoke -provider-url http://localhost:18088 -capability-id cap_dev_echo -input '{"message":"hello"}'
 go run ./cmd/pacp-dev
 go run ./cmd/pacp-dev -state-dir /tmp/pacp-dev-state
 PACP_HTTP_ECHO_TOKEN='Bearer dev-token' go run ./cmd/pacp-http-provider -addr localhost:18088 -manifest testdata/http-provider/echo-manifest.json -routes testdata/http-provider/echo-routes.json -endpoint http://localhost:18088
