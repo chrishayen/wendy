@@ -103,6 +103,16 @@ func runDevStack(ctx context.Context, cfg devConfig) error {
 	if err != nil {
 		return err
 	}
+	gatewayHandler, err := gateway.NewPersistentHandler(gateway.Config{
+		CatalogURL:        catalogURL,
+		PolicyURL:         policyURL,
+		JobsURL:           jobsURL,
+		ArtifactsURL:      artifactsURL,
+		GatewayCredential: authorizationHeader(cfg.ComponentToken),
+	}, statePath(cfg, "gateway-idempotency"))
+	if err != nil {
+		return err
+	}
 
 	servers := []*http.Server{}
 	for _, svc := range []struct {
@@ -116,13 +126,7 @@ func runDevStack(ctx context.Context, cfg devConfig) error {
 		{name: "artifacts", addr: cfg.ArtifactsAddr, handler: artifacts.NewHandler(stores.artifactStore)},
 		{name: "policy", addr: cfg.PolicyAddr, handler: policy.NewHandler(stores.policyStore)},
 		{name: "provider", addr: cfg.ProviderAddr, handler: providerServer},
-		{name: "gateway", addr: cfg.GatewayAddr, handler: gateway.NewHandler(gateway.Config{
-			CatalogURL:        catalogURL,
-			PolicyURL:         policyURL,
-			JobsURL:           jobsURL,
-			ArtifactsURL:      artifactsURL,
-			GatewayCredential: authorizationHeader(cfg.ComponentToken),
-		})},
+		{name: "gateway", addr: cfg.GatewayAddr, handler: gatewayHandler},
 	} {
 		server, err := serve(ctx, svc.name, svc.addr, svc.handler)
 		if err != nil {

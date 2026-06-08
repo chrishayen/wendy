@@ -65,8 +65,8 @@ go run ./cmd/pacp-control -gateway-url http://localhost:18086 -token token_agent
 ```
 
 Use `pacp-dev -state-dir` when local jobs, catalog entries, leases, artifact
-metadata, and policy credentials should survive a restart. Artifact bytes are
-stored under `-artifact-root`.
+metadata, policy credentials, and gateway invocation idempotency should survive
+a restart. Artifact bytes are stored under `-artifact-root`.
 
 The services can also be run separately for distributed testing:
 
@@ -77,7 +77,7 @@ go run ./cmd/pacp-jobs -addr localhost:18082 -state-file /tmp/pacp-jobs-state.js
 go run ./cmd/pacp-leases -addr localhost:18083 -state-file /tmp/pacp-leases-state.json
 go run ./cmd/pacp-artifacts -addr localhost:18084 -root /tmp/pacp-artifacts -state-file /tmp/pacp-artifacts-state.json
 go run ./cmd/pacp-policy -addr localhost:18085 -state-file /tmp/pacp-policy-state.json
-go run ./cmd/pacp-gateway -addr localhost:18086 -catalog-url http://localhost:18081 -jobs-url http://localhost:18082 -artifacts-url http://localhost:18084 -policy-url http://localhost:18085
+go run ./cmd/pacp-gateway -addr localhost:18086 -catalog-url http://localhost:18081 -jobs-url http://localhost:18082 -artifacts-url http://localhost:18084 -policy-url http://localhost:18085 -idempotency-state-file /tmp/pacp-gateway-idempotency-state.json
 go run ./cmd/pacp-node -addr localhost:18087 -config testdata/node/linux-gpu-fake.json
 go run ./cmd/pacp-runner -once -worker-id runner_local -jobs-url http://localhost:18082 -leases-url http://localhost:18083 -artifacts-url http://localhost:18084
 ```

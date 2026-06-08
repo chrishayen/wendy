@@ -12,7 +12,6 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"pacp/internal/contracts"
@@ -39,8 +38,7 @@ type Config struct {
 type Handler struct {
 	cfg         Config
 	client      *http.Client
-	mu          sync.Mutex
-	idempotency map[string]invokeRecord
+	idempotency *idempotencyStore
 }
 
 type invokeRecord struct {
@@ -65,6 +63,14 @@ func (e downstreamError) Error() string {
 }
 
 func NewHandler(cfg Config) http.Handler {
+	handler, err := NewPersistentHandler(cfg, "")
+	if err != nil {
+		panic(err)
+	}
+	return handler
+}
+
+func NewPersistentHandler(cfg Config, idempotencyStatePath string) (http.Handler, error) {
 	client := cfg.Client
 	if client == nil {
 		client = &http.Client{Timeout: 10 * time.Second}
@@ -73,7 +79,11 @@ func NewHandler(cfg Config) http.Handler {
 	cfg.PolicyURL = strings.TrimRight(cfg.PolicyURL, "/")
 	cfg.JobsURL = strings.TrimRight(cfg.JobsURL, "/")
 	cfg.ArtifactsURL = strings.TrimRight(cfg.ArtifactsURL, "/")
-	return &Handler{cfg: cfg, client: client, idempotency: map[string]invokeRecord{}}
+	idempotency, err := newPersistentIdempotencyStore(idempotencyStatePath)
+	if err != nil {
+		return nil, err
+	}
+	return &Handler{cfg: cfg, client: client, idempotency: idempotency}, nil
 }
 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -229,7 +239,7 @@ func (h *Handler) invokeTool(w http.ResponseWriter, r *http.Request, capabilityI
 		return
 	}
 	if shouldRunSync(record.Capability, req) {
-		h.invokeSyncProvider(w, r, sub, record.Route, req)
+		h.invokeSyncProvider(w, r, sub, record.Route, req, idempotencyKey, fp)
 		return
 	}
 	job, err := h.createJob(r.Context(), sub.ID, record, req, idempotencyKey)
@@ -239,7 +249,10 @@ func (h *Handler) invokeTool(w http.ResponseWriter, r *http.Request, capabilityI
 	}
 	response := contracts.InvokeToolResponse{Mode: "async", JobID: job.JobID}
 	links := asyncJobLinks(job.JobID, true)
-	h.storeIdempotency(idempotencyKey, fp, response, links)
+	if err := h.storeIdempotency(idempotencyKey, fp, response, links); err != nil {
+		writeError(w, r, http.StatusInternalServerError, "internal_error", "gateway idempotency record could not be stored", true)
+		return
+	}
 	writeJSON(w, http.StatusCreated, contracts.SuccessEnvelope{OK: true, Data: response, Links: links, Meta: meta(r)})
 }
 
@@ -491,7 +504,7 @@ func (h *Handler) createJob(ctx context.Context, subjectID string, record contra
 	return job, err
 }
 
-func (h *Handler) invokeSyncProvider(w http.ResponseWriter, r *http.Request, sub subject, route contracts.CapabilityRoute, req contracts.InvokeToolRequest) {
+func (h *Handler) invokeSyncProvider(w http.ResponseWriter, r *http.Request, sub subject, route contracts.CapabilityRoute, req contracts.InvokeToolRequest, idempotencyKey, fingerprint string) {
 	body := map[string]any{
 		"input": req.Input,
 		"context": map[string]any{
@@ -509,7 +522,12 @@ func (h *Handler) invokeSyncProvider(w http.ResponseWriter, r *http.Request, sub
 		h.writeGatewayError(w, r, err)
 		return
 	}
-	writeSuccess(w, r, http.StatusOK, contracts.InvokeToolResponse{Mode: "sync", Output: provider.Output, Artifacts: provider.Artifacts})
+	response := contracts.InvokeToolResponse{Mode: "sync", Output: provider.Output, Artifacts: provider.Artifacts}
+	if err := h.storeIdempotency(idempotencyKey, fingerprint, response, map[string]any{}); err != nil {
+		writeError(w, r, http.StatusInternalServerError, "internal_error", "gateway idempotency record could not be stored", true)
+		return
+	}
+	writeSuccess(w, r, http.StatusOK, response)
 }
 
 func (h *Handler) getJSON(ctx context.Context, target string, out any) error {
@@ -615,26 +633,15 @@ func (h *Handler) writeGatewayError(w http.ResponseWriter, r *http.Request, err 
 }
 
 func (h *Handler) idempotencyReplay(key, fp string) (invokeRecord, bool) {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	record, ok := h.idempotency[key]
-	if !ok || record.fingerprint != fp {
-		return invokeRecord{}, false
-	}
-	return record, true
+	return h.idempotency.replay(key, fp)
 }
 
 func (h *Handler) idempotencyConflict(key, fp string) bool {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	record, ok := h.idempotency[key]
-	return ok && record.fingerprint != fp
+	return h.idempotency.hasConflict(key, fp)
 }
 
-func (h *Handler) storeIdempotency(key, fp string, response contracts.InvokeToolResponse, links map[string]any) {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	h.idempotency[key] = invokeRecord{fingerprint: fp, response: response, links: links}
+func (h *Handler) storeIdempotency(key, fp string, response contracts.InvokeToolResponse, links map[string]any) error {
+	return h.idempotency.store(key, fp, response, links)
 }
 
 func projectTool(capability contracts.Capability) contracts.Tool {

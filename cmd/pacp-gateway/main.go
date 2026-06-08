@@ -16,19 +16,23 @@ func main() {
 	jobsURL := flag.String("jobs-url", os.Getenv("PACP_JOBS_URL"), "jobs service base URL")
 	artifactsURL := flag.String("artifacts-url", os.Getenv("PACP_ARTIFACTS_URL"), "artifact service base URL")
 	gatewayCredential := flag.String("gateway-credential", "", "component credential for downstream calls")
+	idempotencyStateFile := flag.String("idempotency-state-file", "", "optional JSON state file for public invocation idempotency")
 	flag.Parse()
 	requireURL("catalog-url", *catalogURL)
 	requireURL("policy-url", *policyURL)
 	requireURL("jobs-url", *jobsURL)
 	requireURL("artifacts-url", *artifactsURL)
 
-	handler := gateway.NewHandler(gateway.Config{
+	handler, err := gateway.NewPersistentHandler(gateway.Config{
 		CatalogURL:        *catalogURL,
 		PolicyURL:         *policyURL,
 		JobsURL:           *jobsURL,
 		ArtifactsURL:      *artifactsURL,
 		GatewayCredential: *gatewayCredential,
-	})
+	}, *idempotencyStateFile)
+	if err != nil {
+		log.Fatal(err)
+	}
 	log.Printf("serving gateway addr=%s", *addr)
 	if err := http.ListenAndServe(*addr, handler); err != nil {
 		log.Fatal(err)

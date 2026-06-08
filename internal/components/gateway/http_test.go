@@ -2,12 +2,14 @@ package gateway
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"testing"
 
 	"pacp/internal/components/artifacts"
@@ -15,6 +17,7 @@ import (
 	"pacp/internal/components/jobs"
 	"pacp/internal/components/policy"
 	"pacp/internal/contracts"
+	"pacp/internal/provider"
 )
 
 func TestGatewayDiscoveryInvokeAndJobProjection(t *testing.T) {
@@ -98,6 +101,101 @@ func TestGatewayCancelArtifactsAndContent(t *testing.T) {
 	}
 	if rec.Body.String() != "artifact bytes" || rec.Header().Get("Digest") == "" {
 		t.Fatalf("content response headers=%#v body=%q", rec.Header(), rec.Body.String())
+	}
+}
+
+func TestGatewayPersistentIdempotencyReplaysSyncAfterRestart(t *testing.T) {
+	calls := 0
+	providerServer, err := provider.NewServer(syncTestManifest("http://provider.invalid"), map[string]provider.CapabilityHandler{
+		"cap_sync_echo": func(ctx context.Context, req contracts.ProviderInvokeRequest) (contracts.ProviderInvokeResponse, error) {
+			calls++
+			return contracts.ProviderInvokeResponse{
+				Output: map[string]any{
+					"message": req.Input["message"],
+					"calls":   calls,
+				},
+			}, nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("new provider: %v", err)
+	}
+	providerHTTP := httptest.NewServer(providerServer)
+
+	policyStore := policy.NewStore()
+	if _, err := policyStore.CreateAPIKey(contracts.CreateAPIKeyRequest{SubjectID: "sub_agent", Scopes: []string{"agent"}, Token: "token_agent"}); err != nil {
+		t.Fatalf("create agent key: %v", err)
+	}
+	if _, err := policyStore.CreateAPIKey(contracts.CreateAPIKeyRequest{SubjectID: "sub_gateway", Scopes: []string{"component"}, Token: "token_gateway"}); err != nil {
+		t.Fatalf("create gateway key: %v", err)
+	}
+	policyServer := httptest.NewServer(policy.NewHandler(policyStore))
+
+	catalogStore := catalog.NewStore()
+	if _, err := catalogStore.RegisterManifest(syncTestManifest(providerHTTP.URL)); err != nil {
+		t.Fatalf("register manifest: %v", err)
+	}
+	catalogServer := httptest.NewServer(catalog.NewHandler(catalogStore))
+	jobsServer := httptest.NewServer(jobs.NewHandler(jobs.NewStore()))
+	artifactStore, err := artifacts.NewStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("new artifact store: %v", err)
+	}
+	artifactsServer := httptest.NewServer(artifacts.NewHandler(artifactStore))
+
+	stateFile := filepath.Join(t.TempDir(), "gateway-idempotency.json")
+	newGateway := func() http.Handler {
+		t.Helper()
+		handler, err := NewPersistentHandler(Config{
+			CatalogURL:        catalogServer.URL,
+			PolicyURL:         policyServer.URL,
+			JobsURL:           jobsServer.URL,
+			ArtifactsURL:      artifactsServer.URL,
+			GatewayCredential: "Bearer token_gateway",
+			Client:            providerHTTP.Client(),
+		}, stateFile)
+		if err != nil {
+			t.Fatalf("new persistent gateway: %v", err)
+		}
+		return handler
+	}
+	env := &gatewayTestEnv{
+		gateway: newGateway(),
+		servers: []*httptest.Server{providerHTTP, policyServer, catalogServer, jobsServer, artifactsServer},
+		t:       t,
+	}
+	t.Cleanup(func() {
+		for _, server := range env.servers {
+			server.Close()
+		}
+	})
+
+	first := env.doJSON(http.MethodPost, "/v1/tools/cap_sync_echo/invoke", map[string]any{
+		"input": map[string]any{"message": "hello"},
+	}, map[string]string{"Authorization": "Bearer token_agent", "Idempotency-Key": "sync-1"}, http.StatusOK)
+	if first["mode"] != "sync" || first["output"].(map[string]any)["calls"].(float64) != 1 {
+		t.Fatalf("first sync invoke = %#v", first)
+	}
+	if calls != 1 {
+		t.Fatalf("provider calls after first invoke = %d", calls)
+	}
+
+	env.gateway = newGateway()
+	replay := env.doJSON(http.MethodPost, "/v1/tools/cap_sync_echo/invoke", map[string]any{
+		"input": map[string]any{"message": "hello"},
+	}, map[string]string{"Authorization": "Bearer token_agent", "Idempotency-Key": "sync-1"}, http.StatusOK)
+	if replay["mode"] != "sync" || replay["output"].(map[string]any)["calls"].(float64) != 1 {
+		t.Fatalf("sync replay = %#v", replay)
+	}
+	if calls != 1 {
+		t.Fatalf("provider calls after replay = %d", calls)
+	}
+
+	env.doJSONEnvelope(http.MethodPost, "/v1/tools/cap_sync_echo/invoke", map[string]any{
+		"input": map[string]any{"message": "different"},
+	}, map[string]string{"Authorization": "Bearer token_agent", "Idempotency-Key": "sync-1"}, http.StatusConflict)
+	if calls != 1 {
+		t.Fatalf("provider calls after conflict = %d", calls)
 	}
 }
 
@@ -223,6 +321,48 @@ func testManifest() contracts.ProviderManifest {
 			}},
 			ArtifactHints: []contracts.ArtifactHint{{MediaType: "image/png", Count: "one"}},
 			TimeoutHint:   "900s",
+		}},
+	}
+}
+
+func syncTestManifest(endpoint string) contracts.ProviderManifest {
+	return contracts.ProviderManifest{
+		SchemaVersion: "v1",
+		Service: contracts.Service{
+			ID:           "svc_sync_echo",
+			Name:         "Sync Echo",
+			Description:  "Synchronous echo service",
+			Version:      "0.1.0",
+			ProviderKind: "test",
+			Tags:         []string{"sync"},
+		},
+		Provider: contracts.Provider{Endpoint: endpoint},
+		Capabilities: []contracts.Capability{{
+			ID:            "cap_sync_echo",
+			Name:          "Sync echo",
+			Description:   "Echo a message synchronously.",
+			Tags:          []string{"sync"},
+			ExecutionMode: "sync",
+			InputSchema: map[string]any{
+				"type":     "object",
+				"required": []any{"message"},
+				"properties": map[string]any{
+					"message": map[string]any{"type": "string"},
+				},
+			},
+			OutputSchema: map[string]any{
+				"type":     "object",
+				"required": []any{"message", "calls"},
+				"properties": map[string]any{
+					"message": map[string]any{"type": "string"},
+					"calls":   map[string]any{"type": "integer"},
+				},
+			},
+			Examples:      []map[string]any{{"message": "hello"}},
+			SideEffects:   "external",
+			ResourceHints: []contracts.ResourceHint{},
+			ArtifactHints: []contracts.ArtifactHint{},
+			TimeoutHint:   "30s",
 		}},
 	}
 }
