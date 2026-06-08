@@ -135,6 +135,11 @@ func checkComponentHealth(ctx context.Context, httpClient *http.Client, baseURL,
 		report.add(result)
 		return
 	}
+	if err := validateEnvelopeMeta(envelope.Meta); err != nil {
+		result.Error = "health envelope " + err.Error()
+		report.add(result)
+		return
+	}
 	var health contracts.ComponentHealth
 	if err := json.Unmarshal(envelope.Data, &health); err != nil {
 		result.Error = "decode health: " + err.Error()
@@ -184,6 +189,11 @@ func checkComponentMetrics(ctx context.Context, httpClient *http.Client, baseURL
 		report.add(result)
 		return
 	}
+	if err := validateEnvelopeMeta(envelope.Meta); err != nil {
+		result.Error = "metrics envelope " + err.Error()
+		report.add(result)
+		return
+	}
 	var metrics contracts.ComponentMetrics
 	if err := json.Unmarshal(envelope.Data, &metrics); err != nil {
 		result.Error = "decode metrics: " + err.Error()
@@ -230,6 +240,11 @@ func checkComponentListEndpoint(ctx context.Context, httpClient *http.Client, ba
 	}
 	if !envelope.OK {
 		result.Error = "list response was not ok"
+		report.add(result)
+		return
+	}
+	if err := validateEnvelopeMeta(envelope.Meta); err != nil {
+		result.Error = "list envelope " + err.Error()
 		report.add(result)
 		return
 	}

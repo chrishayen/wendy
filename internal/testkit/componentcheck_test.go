@@ -2,8 +2,10 @@ package testkit
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"pacp/internal/contracts"
@@ -56,6 +58,41 @@ func TestCheckComponentRejectsUnknownKind(t *testing.T) {
 	})
 	if report.Passed() || len(report.Checks) != 1 || report.Checks[0].Name != "component.kind" {
 		t.Fatalf("report = %#v", report)
+	}
+}
+
+func TestCheckComponentFailsWhenEnvelopeMetaMissing(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/jobs/health":
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			if err := json.NewEncoder(w).Encode(map[string]any{
+				"ok":    true,
+				"data":  contracts.NewComponentHealth("jobs", nil),
+				"links": map[string]any{},
+			}); err != nil {
+				t.Fatalf("encode envelope: %v", err)
+			}
+		case "/v1/jobs/metrics":
+			writeTestEnvelope(t, w, http.StatusOK, contracts.NewComponentMetrics("jobs", []contracts.MetricSample{}))
+		case "/v1/jobs":
+			writeTestEnvelope(t, w, http.StatusOK, map[string]any{"items": []any{}, "next_cursor": nil})
+		default:
+			t.Fatalf("unexpected request %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	report := CheckComponent(context.Background(), server.Client(), ComponentCheckOptions{
+		BaseURL: server.URL,
+		Kind:    "jobs",
+	})
+	if report.Passed() || len(report.Checks) == 0 || report.Checks[0].Name != "component.health" {
+		t.Fatalf("report = %#v", report)
+	}
+	if !strings.Contains(report.Checks[0].Error, "meta is required") {
+		t.Fatalf("health error = %q", report.Checks[0].Error)
 	}
 }
 

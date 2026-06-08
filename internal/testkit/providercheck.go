@@ -84,6 +84,11 @@ func checkProviderManifest(ctx context.Context, httpClient *http.Client, baseURL
 		report.add(result)
 		return contracts.ProviderManifest{}, false
 	}
+	if err := validateEnvelopeMeta(envelope.Meta); err != nil {
+		result.Error = "manifest envelope " + err.Error()
+		report.add(result)
+		return contracts.ProviderManifest{}, false
+	}
 	var manifest contracts.ProviderManifest
 	if err := json.Unmarshal(envelope.Data, &manifest); err != nil {
 		result.Error = "decode manifest: " + err.Error()
@@ -105,12 +110,7 @@ func checkProviderHealth(ctx context.Context, httpClient *http.Client, baseURL, 
 	if healthPath == "" {
 		healthPath = "/v1/provider/health"
 	}
-	var envelope struct {
-		OK   bool `json:"ok"`
-		Data struct {
-			Status string `json:"status"`
-		} `json:"data"`
-	}
+	var envelope rawSuccessEnvelope
 	status, err := getEnvelope(ctx, httpClient, joinURLPath(baseURL, healthPath), credential, &envelope)
 	result := ProviderCheckResult{Name: "provider.health", HTTPStatus: status}
 	if err != nil {
@@ -123,13 +123,31 @@ func checkProviderHealth(ctx context.Context, httpClient *http.Client, baseURL, 
 		report.add(result)
 		return
 	}
-	if !envelope.OK || envelope.Data.Status == "" {
+	if !envelope.OK {
 		result.Error = "health response was not ok"
 		report.add(result)
 		return
 	}
-	if envelope.Data.Status != "healthy" {
-		result.Error = "reported status " + envelope.Data.Status
+	if err := validateEnvelopeMeta(envelope.Meta); err != nil {
+		result.Error = "health envelope " + err.Error()
+		report.add(result)
+		return
+	}
+	var health struct {
+		Status string `json:"status"`
+	}
+	if err := json.Unmarshal(envelope.Data, &health); err != nil {
+		result.Error = "decode health: " + err.Error()
+		report.add(result)
+		return
+	}
+	if health.Status == "" {
+		result.Error = "health response was not ok"
+		report.add(result)
+		return
+	}
+	if health.Status != "healthy" {
+		result.Error = "reported status " + health.Status
 		report.add(result)
 		return
 	}
@@ -175,6 +193,11 @@ func checkProviderInvoke(ctx context.Context, httpClient *http.Client, baseURL s
 		report.add(result)
 		return false
 	}
+	if err := validateEnvelopeMeta(envelope.Meta); err != nil {
+		result.Error = "invoke envelope " + err.Error()
+		report.add(result)
+		return false
+	}
 	var response contracts.ProviderInvokeResponse
 	if err := json.Unmarshal(envelope.Data, &response); err != nil {
 		result.Error = "decode invoke response: " + err.Error()
@@ -216,6 +239,11 @@ func checkProviderInvalidInput(ctx context.Context, httpClient *http.Client, bas
 		report.add(result)
 		return
 	}
+	if err := validateEnvelopeMeta(envelope.Meta); err != nil {
+		result.Error = "invalid input envelope " + err.Error()
+		report.add(result)
+		return
+	}
 	if envelope.Error.Code != "validation_failed" {
 		result.Error = "invalid input error code was " + envelope.Error.Code
 		report.add(result)
@@ -241,6 +269,11 @@ func checkProviderMetrics(ctx context.Context, httpClient *http.Client, baseURL,
 	}
 	if !envelope.OK {
 		result.Error = "metrics response was not ok"
+		report.add(result)
+		return
+	}
+	if err := validateEnvelopeMeta(envelope.Meta); err != nil {
+		result.Error = "metrics envelope " + err.Error()
 		report.add(result)
 		return
 	}
@@ -310,11 +343,28 @@ func (r *ProviderCheckReport) add(result ProviderCheckResult) {
 type rawSuccessEnvelope struct {
 	OK   bool            `json:"ok"`
 	Data json.RawMessage `json:"data"`
+	Meta map[string]any  `json:"meta"`
 }
 
 type rawErrorEnvelope struct {
 	OK    bool                  `json:"ok"`
 	Error contracts.ErrorObject `json:"error"`
+	Meta  map[string]any        `json:"meta"`
+}
+
+func validateEnvelopeMeta(meta map[string]any) error {
+	if meta == nil {
+		return fmt.Errorf("meta is required")
+	}
+	requestID, _ := meta["request_id"].(string)
+	if strings.TrimSpace(requestID) == "" {
+		return fmt.Errorf("meta.request_id is required")
+	}
+	schemaVersion, _ := meta["schema_version"].(string)
+	if strings.TrimSpace(schemaVersion) == "" {
+		return fmt.Errorf("meta.schema_version is required")
+	}
+	return nil
 }
 
 func requiredFields(schema map[string]any) []string {

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"pacp/internal/contracts"
@@ -31,6 +32,32 @@ func TestCheckProviderManifestAndHealth(t *testing.T) {
 	}
 	if len(report.Checks) != 3 {
 		t.Fatalf("checks = %#v", report.Checks)
+	}
+}
+
+func TestCheckProviderFailsWhenEnvelopeMetaMissing(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/provider/manifest" {
+			t.Fatalf("unexpected request = %s %s", r.Method, r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		if err := json.NewEncoder(w).Encode(map[string]any{
+			"ok":    true,
+			"data":  testProviderManifest(serverURL(r)),
+			"links": map[string]any{},
+		}); err != nil {
+			t.Fatalf("encode envelope: %v", err)
+		}
+	}))
+	defer server.Close()
+
+	report := CheckProvider(context.Background(), server.Client(), ProviderCheckOptions{BaseURL: server.URL})
+	if report.Passed() || len(report.Checks) != 1 || report.Checks[0].Name != "provider.manifest" {
+		t.Fatalf("report = %#v", report)
+	}
+	if !strings.Contains(report.Checks[0].Error, "meta is required") {
+		t.Fatalf("manifest error = %q", report.Checks[0].Error)
 	}
 }
 
