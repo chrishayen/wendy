@@ -4,13 +4,16 @@ import (
 	"flag"
 	"log"
 	"net/http"
+	"os"
 
 	"pacp/internal/components/policy"
+	"pacp/internal/transportauth"
 )
 
 func main() {
 	addr := flag.String("addr", "localhost:18085", "listen address")
 	stateFile := flag.String("state-file", "", "optional JSON state file for durable policy storage; contains API tokens and secret values")
+	componentToken := flag.String("component-token", os.Getenv("PACP_COMPONENT_TOKEN"), "optional bearer token required for component API calls")
 	flag.Parse()
 
 	store := policy.NewStore()
@@ -22,7 +25,7 @@ func main() {
 		store = persistent
 	}
 	log.Printf("serving policy addr=%s state_file=%s", *addr, *stateFile)
-	if err := http.ListenAndServe(*addr, policy.NewHandler(store)); err != nil {
+	if err := http.ListenAndServe(*addr, transportauth.RequireBearer(policy.NewHandler(store), *componentToken)); err != nil {
 		log.Fatal(err)
 	}
 }

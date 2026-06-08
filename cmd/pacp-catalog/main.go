@@ -5,14 +5,17 @@ import (
 	"flag"
 	"log"
 	"net/http"
+	"os"
 
 	"pacp/internal/components/catalog"
+	"pacp/internal/transportauth"
 )
 
 func main() {
 	addr := flag.String("addr", "localhost:18081", "HTTP listen address")
 	manifestPath := flag.String("manifest", "", "provider manifest file or directory to load at startup")
 	stateFile := flag.String("state-file", "", "optional JSON state file for durable catalog registrations")
+	componentToken := flag.String("component-token", os.Getenv("PACP_COMPONENT_TOKEN"), "optional bearer token required for component API calls")
 	flag.Parse()
 
 	store := catalog.NewStore()
@@ -42,5 +45,5 @@ func main() {
 	}
 
 	log.Printf("serving catalog addr=%s manifests_loaded=%d state_file=%s", *addr, loaded, *stateFile)
-	log.Fatal(http.ListenAndServe(*addr, catalog.NewHandler(store)))
+	log.Fatal(http.ListenAndServe(*addr, transportauth.RequireBearer(catalog.NewHandler(store), *componentToken)))
 }

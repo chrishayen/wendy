@@ -85,6 +85,12 @@ go run ./cmd/pacp-node -addr localhost:18087 -config testdata/node/linux-gpu-fak
 go run ./cmd/pacp-runner -once -worker-id runner_local -jobs-url http://localhost:18082 -leases-url http://localhost:18083 -artifacts-url http://localhost:18084 -node-url http://localhost:18087 -node-start-timeout 30s
 ```
 
+For distributed deployments, set `PACP_COMPONENT_TOKEN` or `-component-token`
+on catalog, jobs, leases, artifacts, and policy services. Then pass the same
+credential to `pacp-gateway -gateway-credential` and `pacp-runner -credential`.
+Leaving the token unset keeps local service endpoints open for quick isolated
+testing.
+
 HTTP provider bridge route files can set literal `headers` for non-secret
 values and `headers_from_env` for backend credentials that must not be stored in
 JSON config.
