@@ -29,8 +29,8 @@ Contract simulation data is kept as test input, not as product behavior.
 - `internal/components/policy`: API key verification, policy decision, secret
   reference, and redaction service.
 - `internal/components/node`: runtime node agent with local auth, resource
-  advertisement, fake and process service lifecycle adapters, health, and
-  service status APIs.
+  advertisement, fake, process, and Docker service lifecycle adapters, health,
+  and service status APIs.
 - `internal/testkit`: contract-simulation fixture loader and fixture-backed
   HTTP fake server.
 - `cmd/pacp-contract-smoke`: CLI smoke check for a contract simulation package.

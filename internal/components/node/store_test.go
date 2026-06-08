@@ -2,7 +2,10 @@ package node
 
 import (
 	"errors"
+	"fmt"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"testing"
 
 	"pacp/internal/contracts"
@@ -123,6 +126,62 @@ func TestStoreProcessRuntimeLifecycle(t *testing.T) {
 	}
 }
 
+func TestStoreDockerRuntimeLifecycle(t *testing.T) {
+	dockerPath, statePath := writeFakeDocker(t)
+	cfg := testConfig()
+	cfg.Services = []contracts.NodeServiceConfig{{
+		ServiceID:        "svc_docker_provider",
+		RuntimeAdapter:   "docker",
+		ProviderEndpoint: "http://localhost:18088",
+		InitialStatus:    "stopped",
+		Docker: &contracts.DockerRuntimeConfig{
+			Binary:             dockerPath,
+			ContainerName:      "provider-dev",
+			StopTimeoutSeconds: 1,
+		},
+	}}
+	store, err := NewStore(cfg)
+	if err != nil {
+		t.Fatalf("new docker store: %v", err)
+	}
+
+	starting, status, err := store.StartService("svc_docker_provider", "start-docker-1")
+	if err != nil {
+		t.Fatalf("start docker service: %v", err)
+	}
+	if status != 202 || starting.Status != "starting" {
+		t.Fatalf("start response status=%d service=%#v", status, starting)
+	}
+	running, err := store.GetService("svc_docker_provider")
+	if err != nil {
+		t.Fatalf("poll docker service: %v", err)
+	}
+	if running.Status != "running" {
+		t.Fatalf("running docker service = %#v", running)
+	}
+	replay, status, err := store.StartService("svc_docker_provider", "start-docker-1")
+	if err != nil {
+		t.Fatalf("replay docker start: %v", err)
+	}
+	if status != 200 || replay.Status != "running" {
+		t.Fatalf("replay status=%d service=%#v", status, replay)
+	}
+	stopped, err := store.StopService("svc_docker_provider")
+	if err != nil {
+		t.Fatalf("stop docker service: %v", err)
+	}
+	if stopped.Status != "stopped" {
+		t.Fatalf("stopped docker service = %#v", stopped)
+	}
+	state, err := os.ReadFile(statePath)
+	if err != nil {
+		t.Fatalf("read docker state: %v", err)
+	}
+	if string(state) != "stopped\n" {
+		t.Fatalf("docker state = %q", state)
+	}
+}
+
 func TestStoreRejectsInvalidProcessRuntimeConfig(t *testing.T) {
 	cfg := testConfig()
 	cfg.Services = []contracts.NodeServiceConfig{{
@@ -136,6 +195,19 @@ func TestStoreRejectsInvalidProcessRuntimeConfig(t *testing.T) {
 	}
 }
 
+func TestStoreRejectsInvalidDockerRuntimeConfig(t *testing.T) {
+	cfg := testConfig()
+	cfg.Services = []contracts.NodeServiceConfig{{
+		ServiceID:        "svc_docker_provider",
+		RuntimeAdapter:   "docker",
+		ProviderEndpoint: "http://localhost:18088",
+		Docker:           &contracts.DockerRuntimeConfig{},
+	}}
+	if _, err := NewStore(cfg); !errors.Is(err, ErrValidation) {
+		t.Fatalf("expected validation error, got %v", err)
+	}
+}
+
 func newTestStore(t *testing.T) *Store {
 	t.Helper()
 	store, err := NewStore(testConfig())
@@ -143,6 +215,40 @@ func newTestStore(t *testing.T) *Store {
 		t.Fatalf("new store: %v", err)
 	}
 	return store
+}
+
+func writeFakeDocker(t *testing.T) (string, string) {
+	t.Helper()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "docker")
+	statePath := filepath.Join(dir, "state")
+	script := fmt.Sprintf(`#!/bin/sh
+state=%q
+case "$1" in
+  start)
+    echo running > "$state"
+    exit 0
+    ;;
+  inspect)
+    if [ -f "$state" ] && [ "$(cat "$state")" = "running" ]; then
+      echo true
+    else
+      echo false
+    fi
+    exit 0
+    ;;
+  stop)
+    echo stopped > "$state"
+    exit 0
+    ;;
+esac
+echo "unexpected docker args: $*" >&2
+exit 2
+`, statePath)
+	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
+		t.Fatalf("write fake docker: %v", err)
+	}
+	return path, statePath
 }
 
 func testConfig() contracts.NodeConfig {

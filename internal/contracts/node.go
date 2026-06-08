@@ -29,6 +29,7 @@ type NodeServiceConfig struct {
 	InitialStatus    string                `json:"initial_status,omitempty"`
 	Manifest         *ProviderManifest     `json:"manifest,omitempty"`
 	Process          *ProcessRuntimeConfig `json:"process,omitempty"`
+	Docker           *DockerRuntimeConfig  `json:"docker,omitempty"`
 	Metadata         map[string]any        `json:"metadata,omitempty"`
 }
 
@@ -39,6 +40,14 @@ type ProcessRuntimeConfig struct {
 	ReadyURL            string            `json:"ready_url,omitempty"`
 	ReadyTimeoutSeconds int               `json:"ready_timeout_seconds,omitempty"`
 	StopTimeoutSeconds  int               `json:"stop_timeout_seconds,omitempty"`
+}
+
+type DockerRuntimeConfig struct {
+	ContainerName       string `json:"container_name"`
+	Binary              string `json:"binary,omitempty"`
+	ReadyURL            string `json:"ready_url,omitempty"`
+	ReadyTimeoutSeconds int    `json:"ready_timeout_seconds,omitempty"`
+	StopTimeoutSeconds  int    `json:"stop_timeout_seconds,omitempty"`
 }
 
 type NodeHealth struct {

@@ -1,0 +1,34 @@
+{
+  "node_id": "node_linux_gpu",
+  "display_name": "Linux GPU",
+  "resources": [
+    {
+      "resource_id": "res_gpu_0",
+      "tags": ["gpu", "gpu:0"],
+      "metadata": {"kind": "gpu"}
+    }
+  ],
+  "auth": [
+    {
+      "token": "token_runner_smoke",
+      "subject_id": "sub_runner_smoke",
+      "scopes": ["worker"],
+      "allowed_actions": ["node.read", "node.service.start", "node.service.stop"]
+    }
+  ],
+  "services": [
+    {
+      "service_id": "svc_docker_provider",
+      "display_name": "Docker Provider",
+      "runtime_adapter": "docker",
+      "provider_endpoint": "http://localhost:8188",
+      "initial_status": "stopped",
+      "docker": {
+        "container_name": "provider-container",
+        "ready_url": "http://localhost:8188/v1/provider/health",
+        "ready_timeout_seconds": 60,
+        "stop_timeout_seconds": 10
+      }
+    }
+  ]
+}

@@ -35,9 +35,10 @@ type Store struct {
 }
 
 type serviceRecord struct {
-	config  contracts.NodeServiceConfig
-	status  string
-	process *processRuntime
+	config              contracts.NodeServiceConfig
+	status              string
+	process             *processRuntime
+	dockerReadyDeadline time.Time
 }
 
 type idempotentStart struct {
@@ -187,7 +188,7 @@ func (s *Store) StartService(serviceID, idempotencyKey string) (contracts.NodeSe
 	s.advanceRuntimeLocked(rec)
 	status := 200
 	switch rec.config.RuntimeAdapter {
-	case "fake", "docker":
+	case "fake":
 		switch rec.status {
 		case "running":
 			status = 200
@@ -195,6 +196,21 @@ func (s *Store) StartService(serviceID, idempotencyKey string) (contracts.NodeSe
 			status = 202
 		default:
 			rec.status = "starting"
+			status = 202
+		}
+	case "docker":
+		switch rec.status {
+		case "running":
+			status = 200
+		case "starting":
+			status = 202
+		default:
+			if err := startDockerRuntime(rec.config); err != nil {
+				rec.status = "failed"
+				return contracts.NodeService{}, 0, err
+			}
+			rec.status = "starting"
+			rec.dockerReadyDeadline = s.now().Add(dockerReadyTimeout(rec.config))
 			status = 202
 		}
 	case "process":
@@ -230,6 +246,20 @@ func (s *Store) StopService(serviceID string) (contracts.NodeService, error) {
 		return contracts.NodeService{}, ErrNotFound
 	}
 	s.advanceRuntimeLocked(rec)
+	if rec.config.RuntimeAdapter == "docker" {
+		config := rec.config
+		s.mu.Unlock()
+		if err := stopDockerRuntime(config); err != nil {
+			return contracts.NodeService{}, err
+		}
+		s.mu.Lock()
+		rec = s.services[serviceID]
+		rec.status = "stopped"
+		rec.dockerReadyDeadline = time.Time{}
+		service := serviceProjection(rec)
+		s.mu.Unlock()
+		return service, nil
+	}
 	process := rec.process
 	rec.process = nil
 	rec.status = "stopped"
@@ -242,12 +272,41 @@ func (s *Store) StopService(serviceID string) (contracts.NodeService, error) {
 
 func (s *Store) advanceRuntimeLocked(rec *serviceRecord) {
 	switch rec.config.RuntimeAdapter {
-	case "fake", "docker":
+	case "fake":
 		if rec.status == "starting" {
 			rec.status = "running"
 		}
+	case "docker":
+		s.advanceDockerRuntimeLocked(rec)
 	case "process":
 		s.advanceProcessRuntimeLocked(rec)
+	}
+}
+
+func (s *Store) advanceDockerRuntimeLocked(rec *serviceRecord) {
+	if rec.status != "starting" && rec.status != "running" {
+		return
+	}
+	running, err := dockerContainerRunning(rec.config)
+	if err != nil {
+		if rec.status == "starting" && !rec.dockerReadyDeadline.IsZero() && s.now().After(rec.dockerReadyDeadline) {
+			rec.status = "failed"
+		}
+		return
+	}
+	if !running {
+		rec.status = "stopped"
+		return
+	}
+	if rec.status == "running" {
+		return
+	}
+	if rec.config.Docker == nil || rec.config.Docker.ReadyURL == "" || processReady(rec.config.Docker.ReadyURL) {
+		rec.status = "running"
+		return
+	}
+	if !rec.dockerReadyDeadline.IsZero() && s.now().After(rec.dockerReadyDeadline) {
+		rec.status = "failed"
 	}
 }
 
@@ -302,7 +361,12 @@ func parseBearer(credential string) (string, error) {
 
 func validateRuntimeConfig(service contracts.NodeServiceConfig) error {
 	switch service.RuntimeAdapter {
-	case "fake", "docker":
+	case "fake":
+		return nil
+	case "docker":
+		if service.Docker == nil || service.Docker.ContainerName == "" {
+			return fmt.Errorf("%w: docker container_name is required", ErrValidation)
+		}
 		return nil
 	case "process":
 		if service.Process == nil || len(service.Process.Command) == 0 || service.Process.Command[0] == "" {
@@ -381,6 +445,67 @@ func processStopTimeout(service contracts.NodeServiceConfig) time.Duration {
 		return 5 * time.Second
 	}
 	return time.Duration(service.Process.StopTimeoutSeconds) * time.Second
+}
+
+func startDockerRuntime(service contracts.NodeServiceConfig) error {
+	cfg := service.Docker
+	if cfg == nil || cfg.ContainerName == "" {
+		return fmt.Errorf("%w: docker container_name is required", ErrRuntimeUnavailable)
+	}
+	if _, err := runDockerCommand(service, "start", cfg.ContainerName); err != nil {
+		return err
+	}
+	return nil
+}
+
+func stopDockerRuntime(service contracts.NodeServiceConfig) error {
+	cfg := service.Docker
+	if cfg == nil || cfg.ContainerName == "" {
+		return fmt.Errorf("%w: docker container_name is required", ErrRuntimeUnavailable)
+	}
+	args := []string{"stop"}
+	if cfg.StopTimeoutSeconds > 0 {
+		args = append(args, "--time", fmt.Sprintf("%d", cfg.StopTimeoutSeconds))
+	}
+	args = append(args, cfg.ContainerName)
+	_, err := runDockerCommand(service, args...)
+	return err
+}
+
+func dockerContainerRunning(service contracts.NodeServiceConfig) (bool, error) {
+	cfg := service.Docker
+	if cfg == nil || cfg.ContainerName == "" {
+		return false, fmt.Errorf("%w: docker container_name is required", ErrRuntimeUnavailable)
+	}
+	output, err := runDockerCommand(service, "inspect", "--format", "{{.State.Running}}", cfg.ContainerName)
+	if err != nil {
+		return false, err
+	}
+	return strings.TrimSpace(output) == "true", nil
+}
+
+func runDockerCommand(service contracts.NodeServiceConfig, args ...string) (string, error) {
+	binary := "docker"
+	if service.Docker != nil && service.Docker.Binary != "" {
+		binary = service.Docker.Binary
+	}
+	cmd := exec.Command(binary, args...)
+	raw, err := cmd.CombinedOutput()
+	output := strings.TrimSpace(string(raw))
+	if err != nil {
+		if output == "" {
+			output = err.Error()
+		}
+		return "", fmt.Errorf("%w: docker %s failed: %s", ErrRuntimeUnavailable, strings.Join(args, " "), output)
+	}
+	return output, nil
+}
+
+func dockerReadyTimeout(service contracts.NodeServiceConfig) time.Duration {
+	if service.Docker == nil || service.Docker.ReadyTimeoutSeconds <= 0 {
+		return 30 * time.Second
+	}
+	return time.Duration(service.Docker.ReadyTimeoutSeconds) * time.Second
 }
 
 func serviceProjection(rec *serviceRecord) contracts.NodeService {
