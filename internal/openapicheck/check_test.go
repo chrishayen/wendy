@@ -146,6 +146,7 @@ func TestCapabilityMetadataSchemasMatchManifestEnums(t *testing.T) {
 	assertSchemaPropertyEnum(t, publicDoc, "Tool", "side_effects", wantSideEffects)
 	assertSchemaPropertyEnum(t, componentDoc, "Capability", "execution_mode", wantExecutionModes)
 	assertSchemaPropertyEnum(t, componentDoc, "Capability", "side_effects", wantSideEffects)
+	assertOperationQueryParameterEnum(t, componentDoc, "/v1/catalog/capabilities", "get", "execution_mode", wantExecutionModes)
 }
 
 func TestValidateFileDetectsDuplicateOperationID(t *testing.T) {
@@ -1105,6 +1106,25 @@ func assertOperationPolicyAction(t *testing.T, doc map[string]any, path, method,
 	if got != want {
 		t.Fatalf("%s %s policy action=%q want=%q", method, path, got, want)
 	}
+}
+
+func assertOperationQueryParameterEnum(t *testing.T, doc map[string]any, path, method, parameterName string, want []string) {
+	t.Helper()
+	operation := openAPIOperation(t, doc, path, method)
+	parameters, _ := operation["parameters"].([]any)
+	for _, rawParameter := range parameters {
+		parameter, _ := asMap(rawParameter)
+		if parameter == nil || parameter["name"] != parameterName || parameter["in"] != "query" {
+			continue
+		}
+		schema, _ := asMap(parameter["schema"])
+		got := stringValues(schema["enum"])
+		if !sameStringSet(got, want) {
+			t.Fatalf("%s %s query parameter %s enum=%#v want=%#v", method, path, parameterName, got, want)
+		}
+		return
+	}
+	t.Fatalf("%s %s query parameter %s not found", method, path, parameterName)
 }
 
 func assertSchemaPropertyEnum(t *testing.T, doc map[string]any, schemaName, propertyName string, want []string) {

@@ -164,6 +164,7 @@ paths:
           in: query
           schema:
             type: string
+            enum: [sync, async, either]
         - name: resource_selector
           in: query
           schema:
