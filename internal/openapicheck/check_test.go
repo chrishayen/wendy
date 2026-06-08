@@ -3,7 +3,10 @@ package openapicheck
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+
+	"gopkg.in/yaml.v3"
 )
 
 func TestValidateRepositoryOpenAPIContracts(t *testing.T) {
@@ -16,6 +19,29 @@ func TestValidateRepositoryOpenAPIContracts(t *testing.T) {
 	}
 	if report.Operations == 0 || report.Schemas == 0 || report.References == 0 {
 		t.Fatalf("report did not count contract contents: %#v", report)
+	}
+}
+
+func TestPublicGatewayCancelSummaryDocumentsQueuedOnly(t *testing.T) {
+	path := filepath.Join("..", "..", "openapi", "public-gateway.v1.yaml")
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read public gateway OpenAPI: %v", err)
+	}
+	var doc map[string]any
+	if err := yaml.Unmarshal(raw, &doc); err != nil {
+		t.Fatalf("parse public gateway OpenAPI: %v", err)
+	}
+	paths, _ := asMap(doc["paths"])
+	pathItem, _ := asMap(paths["/v1/agent/jobs/{job_id}/cancel"])
+	post, _ := asMap(pathItem["post"])
+	summary, _ := post["summary"].(string)
+	normalized := strings.ToLower(summary)
+	if !strings.Contains(normalized, "queued job") {
+		t.Fatalf("cancel summary does not document queued-only cancellation: %q", summary)
+	}
+	if strings.Contains(normalized, "claimed") || strings.Contains(normalized, "running") {
+		t.Fatalf("cancel summary advertises unsupported cancellation states: %q", summary)
 	}
 }
 

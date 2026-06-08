@@ -111,7 +111,7 @@ paths:
   /v1/agent/jobs/{job_id}/cancel:
     post:
       operationId: cancelAgentJob
-      summary: Cancel a queued, claimed, or running job owned by the authenticated agent.
+      summary: Cancel a queued job owned by the authenticated agent.
       parameters:
         - $ref: "#/components/parameters/JobID"
         - $ref: "#/components/parameters/IdempotencyKey"
