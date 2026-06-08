@@ -188,6 +188,7 @@ func runFakePublicAPISmoke(timeout time.Duration, stdout, stderr io.Writer) int 
 		server.Close()
 	}
 
+	appendFakeNodeChecks(ctx, &checks)
 	appendFakePolicyChecks(ctx, &checks)
 
 	passed := true
@@ -221,6 +222,159 @@ type fakePolicyEnvelope struct {
 	OK    bool                  `json:"ok"`
 	Data  json.RawMessage       `json:"data"`
 	Error contracts.ErrorObject `json:"error"`
+}
+
+func appendFakeNodeChecks(ctx context.Context, checks *[]fakePublicAPICheck) {
+	handler, err := testkit.NewFakeNodeHandler(testkit.FakeNodeConfig{})
+	if err != nil {
+		*checks = append(*checks, fakePublicAPICheck{Name: "fake.node.create", Error: err.Error()})
+		return
+	}
+	server := httptest.NewServer(handler)
+	defer server.Close()
+	*checks = append(*checks,
+		checkFakeNodeServiceStates(ctx, server.Client(), server.URL),
+		checkFakeNodeServiceDetail(ctx, server.Client(), server.URL),
+		checkFakeNodeMissingIdempotency(ctx, server.Client(), server.URL),
+		checkFakeNodeLifecycle(ctx, server.Client(), server.URL, "start"),
+		checkFakeNodeLifecycle(ctx, server.Client(), server.URL, "stop"),
+	)
+
+	unavailable, err := testkit.NewFakeNodeHandler(testkit.FakeNodeConfig{Behavior: testkit.FakeComponentUnavailable})
+	if err != nil {
+		*checks = append(*checks, fakePublicAPICheck{Name: "fake.node.unreachable.create", Error: err.Error()})
+		return
+	}
+	unavailableServer := httptest.NewServer(unavailable)
+	defer unavailableServer.Close()
+	*checks = append(*checks, requestFakeNodeExpectedError(ctx, unavailableServer.Client(), unavailableServer.URL, http.MethodGet, "/v1/node/health", "fake.node.unreachable.component_unavailable", http.StatusServiceUnavailable, "component_unavailable", nil))
+}
+
+func checkFakeNodeServiceStates(ctx context.Context, client *http.Client, baseURL string) fakePublicAPICheck {
+	var list struct {
+		Items []contracts.NodeService `json:"items"`
+	}
+	check := requestFakeNodeJSON(ctx, client, baseURL, http.MethodGet, "/v1/node/services", "fake.node.services.states", nil, &list)
+	if !check.OK {
+		return check
+	}
+	statuses := map[string]bool{}
+	for _, service := range list.Items {
+		statuses[service.Status] = true
+	}
+	for _, want := range []string{"running", "stopped", "starting", "failed"} {
+		if !statuses[want] {
+			check.OK = false
+			check.Error = "service status missing: " + want
+			return check
+		}
+	}
+	return check
+}
+
+func checkFakeNodeServiceDetail(ctx context.Context, client *http.Client, baseURL string) fakePublicAPICheck {
+	var service contracts.NodeService
+	check := requestFakeNodeJSON(ctx, client, baseURL, http.MethodGet, "/v1/node/services/svc_fake_failed", "fake.node.service.failed_detail", nil, &service)
+	if !check.OK {
+		return check
+	}
+	if service.ServiceID != "svc_fake_failed" || service.Status != "failed" {
+		check.OK = false
+		check.Error = fmt.Sprintf("service = %#v", service)
+	}
+	return check
+}
+
+func checkFakeNodeMissingIdempotency(ctx context.Context, client *http.Client, baseURL string) fakePublicAPICheck {
+	return requestFakeNodeExpectedError(ctx, client, baseURL, http.MethodPost, "/v1/node/services/svc_fake_stopped/start", "fake.node.lifecycle.missing_idempotency", http.StatusBadRequest, "missing_idempotency_key", nil)
+}
+
+func checkFakeNodeLifecycle(ctx context.Context, client *http.Client, baseURL, operation string) fakePublicAPICheck {
+	path := "/v1/node/services/svc_fake_stopped/" + operation
+	wantStatus := "starting"
+	if operation == "stop" {
+		wantStatus = "stopped"
+	}
+	var service contracts.NodeService
+	check := requestFakeNodeJSON(ctx, client, baseURL, http.MethodPost, path, "fake.node.lifecycle."+operation, map[string]string{
+		"Idempotency-Key": "fake-node-" + operation,
+	}, &service)
+	if !check.OK {
+		return check
+	}
+	if service.Status != wantStatus {
+		check.OK = false
+		check.Error = fmt.Sprintf("service status = %q, want %q", service.Status, wantStatus)
+	}
+	return check
+}
+
+func requestFakeNodeJSON(ctx context.Context, client *http.Client, baseURL, method, path, name string, headers map[string]string, out any) fakePublicAPICheck {
+	req, err := http.NewRequestWithContext(ctx, method, baseURL+path, nil)
+	if err != nil {
+		return fakePublicAPICheck{Name: name, Error: err.Error()}
+	}
+	req.Header.Set("X-Request-ID", "req_contract_fake_node")
+	for key, value := range headers {
+		req.Header.Set(key, value)
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return fakePublicAPICheck{Name: name, Error: err.Error()}
+	}
+	defer resp.Body.Close()
+	check := fakePublicAPICheck{Name: name, HTTPStatus: resp.StatusCode}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		check.Error = fmt.Sprintf("HTTP %d", resp.StatusCode)
+		return check
+	}
+	var envelope fakePolicyEnvelope
+	if err := json.NewDecoder(resp.Body).Decode(&envelope); err != nil {
+		check.Error = err.Error()
+		return check
+	}
+	if !envelope.OK {
+		check.Error = envelope.Error.Message
+		return check
+	}
+	if err := json.Unmarshal(envelope.Data, out); err != nil {
+		check.Error = err.Error()
+		return check
+	}
+	check.OK = true
+	return check
+}
+
+func requestFakeNodeExpectedError(ctx context.Context, client *http.Client, baseURL, method, path, name string, wantStatus int, wantCode string, headers map[string]string) fakePublicAPICheck {
+	req, err := http.NewRequestWithContext(ctx, method, baseURL+path, nil)
+	if err != nil {
+		return fakePublicAPICheck{Name: name, Error: err.Error()}
+	}
+	req.Header.Set("X-Request-ID", "req_contract_fake_node")
+	for key, value := range headers {
+		req.Header.Set(key, value)
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return fakePublicAPICheck{Name: name, Error: err.Error()}
+	}
+	defer resp.Body.Close()
+	check := fakePublicAPICheck{Name: name, HTTPStatus: resp.StatusCode}
+	var envelope fakePolicyEnvelope
+	if err := json.NewDecoder(resp.Body).Decode(&envelope); err != nil {
+		check.Error = err.Error()
+		return check
+	}
+	if resp.StatusCode != wantStatus {
+		check.Error = fmt.Sprintf("HTTP %d, want %d", resp.StatusCode, wantStatus)
+		return check
+	}
+	if envelope.OK || envelope.Error.Code != wantCode {
+		check.Error = fmt.Sprintf("error code = %q, want %q", envelope.Error.Code, wantCode)
+		return check
+	}
+	check.OK = true
+	return check
 }
 
 func appendFakePolicyChecks(ctx context.Context, checks *[]fakePublicAPICheck) {

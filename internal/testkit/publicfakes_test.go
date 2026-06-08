@@ -327,6 +327,99 @@ func TestFakePolicyHandlerRequiresComponentCredential(t *testing.T) {
 	}
 }
 
+func TestFakeNodeHandlerExposesServiceStates(t *testing.T) {
+	handler, err := NewFakeNodeHandler(FakeNodeConfig{Now: fixedFakeClock})
+	if err != nil {
+		t.Fatalf("new fake node: %v", err)
+	}
+	server := httptest.NewServer(handler)
+	defer server.Close()
+
+	envelope := doFakeNodeEnvelope(t, server, http.MethodGet, "/v1/node/services", nil, http.StatusOK)
+	var list struct {
+		Items []contracts.NodeService `json:"items"`
+	}
+	decodeEnvelopeData(t, envelope, &list)
+	statuses := map[string]bool{}
+	for _, service := range list.Items {
+		statuses[service.Status] = true
+	}
+	for _, want := range []string{"running", "stopped", "starting", "failed"} {
+		if !statuses[want] {
+			t.Fatalf("status %q missing from %#v", want, list.Items)
+		}
+	}
+}
+
+func TestFakeNodeHandlerGetsOneService(t *testing.T) {
+	handler, err := NewFakeNodeHandler(FakeNodeConfig{Now: fixedFakeClock})
+	if err != nil {
+		t.Fatalf("new fake node: %v", err)
+	}
+	server := httptest.NewServer(handler)
+	defer server.Close()
+
+	envelope := doFakeNodeEnvelope(t, server, http.MethodGet, "/v1/node/services/svc_fake_failed", nil, http.StatusOK)
+	var service contracts.NodeService
+	decodeEnvelopeData(t, envelope, &service)
+	if service.ServiceID != "svc_fake_failed" || service.Status != "failed" {
+		t.Fatalf("service = %#v", service)
+	}
+
+	missing := doFakeNodeEnvelope(t, server, http.MethodGet, "/v1/node/services/svc_missing", nil, http.StatusNotFound)
+	if missing.OK || missing.Error.Code != "not_found" {
+		t.Fatalf("missing envelope = %#v", missing)
+	}
+}
+
+func TestFakeNodeHandlerStartsAndStopsService(t *testing.T) {
+	handler, err := NewFakeNodeHandler(FakeNodeConfig{Now: fixedFakeClock})
+	if err != nil {
+		t.Fatalf("new fake node: %v", err)
+	}
+	server := httptest.NewServer(handler)
+	defer server.Close()
+
+	missingKey := doFakeNodeEnvelope(t, server, http.MethodPost, "/v1/node/services/svc_fake_stopped/start", nil, http.StatusBadRequest)
+	if missingKey.OK || missingKey.Error.Code != "missing_idempotency_key" {
+		t.Fatalf("missing key envelope = %#v", missingKey)
+	}
+
+	started := doFakeNodeEnvelope(t, server, http.MethodPost, "/v1/node/services/svc_fake_stopped/start", map[string]string{
+		"Idempotency-Key": "fake-node-start-1",
+	}, http.StatusAccepted)
+	var service contracts.NodeService
+	decodeEnvelopeData(t, started, &service)
+	if service.Status != "starting" {
+		t.Fatalf("start service = %#v", service)
+	}
+
+	stopped := doFakeNodeEnvelope(t, server, http.MethodPost, "/v1/node/services/svc_fake_stopped/stop", map[string]string{
+		"Idempotency-Key": "fake-node-stop-1",
+	}, http.StatusAccepted)
+	decodeEnvelopeData(t, stopped, &service)
+	if service.Status != "stopped" {
+		t.Fatalf("stop service = %#v", service)
+	}
+}
+
+func TestFakeNodeHandlerSupportsUnavailableBehavior(t *testing.T) {
+	handler, err := NewFakeNodeHandler(FakeNodeConfig{
+		Behavior: FakeComponentUnavailable,
+		Now:      fixedFakeClock,
+	})
+	if err != nil {
+		t.Fatalf("new fake node: %v", err)
+	}
+	server := httptest.NewServer(handler)
+	defer server.Close()
+
+	envelope := doFakeNodeEnvelope(t, server, http.MethodGet, "/v1/node/health", nil, http.StatusServiceUnavailable)
+	if envelope.OK || envelope.Error.Code != "component_unavailable" || !envelope.Error.Retryable {
+		t.Fatalf("envelope = %#v", envelope)
+	}
+}
+
 func TestFakeProviderHandlerPassesProviderCheck(t *testing.T) {
 	handler, err := NewFakeProviderHandler(FakeProviderConfig{
 		Endpoint:   "http://provider.fake",
@@ -480,6 +573,31 @@ func postFakePolicyEnvelope(t *testing.T, server *httptest.Server, path string, 
 	defer resp.Body.Close()
 	if resp.StatusCode != wantStatus {
 		t.Fatalf("POST %s status = %d, want %d", path, resp.StatusCode, wantStatus)
+	}
+	var envelope fakePolicyEnvelope
+	if err := json.NewDecoder(resp.Body).Decode(&envelope); err != nil {
+		t.Fatalf("decode envelope: %v", err)
+	}
+	return envelope
+}
+
+func doFakeNodeEnvelope(t *testing.T, server *httptest.Server, method, path string, headers map[string]string, wantStatus int) fakePolicyEnvelope {
+	t.Helper()
+	req, err := http.NewRequest(method, server.URL+path, nil)
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	req.Header.Set("X-Request-ID", "req_fake_node")
+	for key, value := range headers {
+		req.Header.Set(key, value)
+	}
+	resp, err := server.Client().Do(req)
+	if err != nil {
+		t.Fatalf("%s %s: %v", method, path, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != wantStatus {
+		t.Fatalf("%s %s status = %d, want %d", method, path, resp.StatusCode, wantStatus)
 	}
 	var envelope fakePolicyEnvelope
 	if err := json.NewDecoder(resp.Body).Decode(&envelope); err != nil {

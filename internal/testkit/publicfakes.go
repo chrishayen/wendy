@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	"pacp/internal/contracts"
@@ -49,6 +50,17 @@ type FakePolicyConfig struct {
 	Secrets             map[string]string
 	Now                 func() time.Time
 	Samples             []contracts.MetricSample
+}
+
+type FakeNodeConfig struct {
+	Credential   string
+	Behavior     FakeComponentBehavior
+	NodeID       string
+	HealthStatus string
+	Resources    []contracts.NodeResource
+	Services     []contracts.NodeService
+	Now          func() time.Time
+	Samples      []contracts.MetricSample
 }
 
 func NewFakeComponentHandler(cfg FakeComponentConfig) (http.Handler, error) {
@@ -165,6 +177,39 @@ func NewFakePolicyHandler(cfg FakePolicyConfig) http.Handler {
 	return handler
 }
 
+func NewFakeNodeHandler(cfg FakeNodeConfig) (http.Handler, error) {
+	if cfg.Now == nil {
+		cfg.Now = time.Now
+	}
+	if cfg.NodeID == "" {
+		cfg.NodeID = "node_fake"
+	}
+	if cfg.HealthStatus == "" {
+		cfg.HealthStatus = "healthy"
+	}
+	if cfg.Behavior == "" {
+		cfg.Behavior = FakeComponentSuccess
+	}
+	switch cfg.Behavior {
+	case FakeComponentSuccess, FakeComponentDenied, FakeComponentUnavailable:
+	default:
+		return nil, errors.New("unsupported fake node behavior: " + string(cfg.Behavior))
+	}
+	resources := cfg.Resources
+	if resources == nil {
+		resources = fakeNodeResources()
+	}
+	services := cfg.Services
+	if services == nil {
+		services = fakeNodeServices()
+	}
+	handler := newFakeNodeHandler(cfg, resources, services)
+	if cfg.Credential != "" {
+		return requireFakeCredential(cfg.Credential, handler), nil
+	}
+	return handler, nil
+}
+
 type fakeComponentHandler struct {
 	cfg      FakeComponentConfig
 	contract componentContract
@@ -172,6 +217,43 @@ type fakeComponentHandler struct {
 
 type fakePolicyHandler struct {
 	cfg FakePolicyConfig
+}
+
+type fakeNodeHandler struct {
+	mu           sync.Mutex
+	cfg          FakeNodeConfig
+	resources    []contracts.NodeResource
+	services     map[string]contracts.NodeService
+	serviceOrder []string
+	idempotency  map[string]fakeNodeLifecycle
+}
+
+type fakeNodeLifecycle struct {
+	operation string
+	serviceID string
+}
+
+func newFakeNodeHandler(cfg FakeNodeConfig, resources []contracts.NodeResource, services []contracts.NodeService) *fakeNodeHandler {
+	serviceMap := make(map[string]contracts.NodeService, len(services))
+	serviceOrder := make([]string, 0, len(services))
+	for _, service := range services {
+		service = cloneFakeNodeService(service)
+		if service.ServiceID == "" {
+			continue
+		}
+		if service.Links == nil {
+			service.Links = map[string]any{}
+		}
+		serviceMap[service.ServiceID] = service
+		serviceOrder = append(serviceOrder, service.ServiceID)
+	}
+	return &fakeNodeHandler{
+		cfg:          cfg,
+		resources:    cloneFakeNodeResources(resources),
+		services:     serviceMap,
+		serviceOrder: serviceOrder,
+		idempotency:  map[string]fakeNodeLifecycle{},
+	}
 }
 
 func (h *fakeComponentHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -278,6 +360,167 @@ func (h *fakePolicyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func (h *fakeNodeHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if h.writeBlocked(w, r) {
+		return
+	}
+	path := strings.TrimSuffix(r.URL.Path, "/")
+	switch {
+	case r.Method == http.MethodGet && path == "/v1/node/health":
+		writeFakeSuccess(w, r, http.StatusOK, contracts.NodeHealth{
+			Status:    h.cfg.HealthStatus,
+			Version:   "v1",
+			CheckedAt: h.cfg.Now().UTC().Format(time.RFC3339),
+			Details: map[string]any{
+				"component": "node",
+				"fake":      true,
+				"node_id":   h.cfg.NodeID,
+			},
+		})
+	case r.Method == http.MethodGet && path == "/v1/node/metrics":
+		samples := h.cfg.Samples
+		if samples == nil {
+			samples = h.metricsSamples()
+		}
+		metrics := contracts.NewComponentMetrics("node", samples)
+		metrics.CollectedAt = h.cfg.Now().UTC().Format(time.RFC3339)
+		writeFakeSuccess(w, r, http.StatusOK, metrics)
+	case r.Method == http.MethodGet && path == "/v1/node/resources":
+		h.mu.Lock()
+		resources := cloneFakeNodeResources(h.resources)
+		h.mu.Unlock()
+		writeFakeSuccess(w, r, http.StatusOK, map[string]any{"items": resources, "next_cursor": nil})
+	case r.Method == http.MethodGet && path == "/v1/node/services":
+		writeFakeSuccess(w, r, http.StatusOK, map[string]any{"items": h.listServices(), "next_cursor": nil})
+	case strings.HasPrefix(path, "/v1/node/services/"):
+		h.serviceRoute(w, r, strings.TrimPrefix(path, "/v1/node/services/"))
+	default:
+		writeFakeError(w, r, http.StatusNotFound, "not_found", "fake node route not found", false)
+	}
+}
+
+func (h *fakeNodeHandler) serviceRoute(w http.ResponseWriter, r *http.Request, tail string) {
+	parts := strings.Split(tail, "/")
+	if len(parts) == 0 || parts[0] == "" {
+		writeFakeError(w, r, http.StatusNotFound, "not_found", "fake node service route not found", false)
+		return
+	}
+	serviceID, err := url.PathUnescape(parts[0])
+	if err != nil {
+		writeFakeError(w, r, http.StatusBadRequest, "validation_failed", "service_id is invalid", false)
+		return
+	}
+	if len(parts) == 1 && r.Method == http.MethodGet {
+		service, ok := h.getService(serviceID)
+		if !ok {
+			writeFakeError(w, r, http.StatusNotFound, "not_found", "fake node service not found", false)
+			return
+		}
+		writeFakeSuccess(w, r, http.StatusOK, service)
+		return
+	}
+	if len(parts) != 2 || r.Method != http.MethodPost {
+		writeFakeError(w, r, http.StatusNotFound, "not_found", "fake node service route not found", false)
+		return
+	}
+	switch parts[1] {
+	case "start":
+		h.lifecycle(w, r, serviceID, "start")
+	case "stop":
+		h.lifecycle(w, r, serviceID, "stop")
+	default:
+		writeFakeError(w, r, http.StatusNotFound, "not_found", "fake node service route not found", false)
+	}
+}
+
+func (h *fakeNodeHandler) lifecycle(w http.ResponseWriter, r *http.Request, serviceID, operation string) {
+	idempotencyKey := strings.TrimSpace(r.Header.Get("Idempotency-Key"))
+	if idempotencyKey == "" {
+		writeFakeError(w, r, http.StatusBadRequest, "missing_idempotency_key", "Idempotency-Key header is required for node service lifecycle operations", false)
+		return
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	service, ok := h.services[serviceID]
+	if !ok {
+		writeFakeError(w, r, http.StatusNotFound, "not_found", "fake node service not found", false)
+		return
+	}
+	if existing, ok := h.idempotency[idempotencyKey]; ok {
+		if existing.operation != operation || existing.serviceID != serviceID {
+			writeFakeError(w, r, http.StatusConflict, "idempotency_conflict", "idempotency key was reused with different node lifecycle content", false)
+			return
+		}
+		writeFakeSuccess(w, r, http.StatusOK, cloneFakeNodeService(service))
+		return
+	}
+	status := http.StatusAccepted
+	switch operation {
+	case "start":
+		if service.Status == "running" {
+			status = http.StatusOK
+		} else {
+			service.Status = "starting"
+		}
+	case "stop":
+		service.Status = "stopped"
+	}
+	h.services[serviceID] = service
+	h.idempotency[idempotencyKey] = fakeNodeLifecycle{operation: operation, serviceID: serviceID}
+	writeFakeSuccess(w, r, status, cloneFakeNodeService(service))
+}
+
+func (h *fakeNodeHandler) listServices() []contracts.NodeService {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	services := make([]contracts.NodeService, 0, len(h.serviceOrder))
+	for _, serviceID := range h.serviceOrder {
+		if service, ok := h.services[serviceID]; ok {
+			services = append(services, cloneFakeNodeService(service))
+		}
+	}
+	return services
+}
+
+func (h *fakeNodeHandler) getService(serviceID string) (contracts.NodeService, bool) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	service, ok := h.services[serviceID]
+	if !ok {
+		return contracts.NodeService{}, false
+	}
+	return cloneFakeNodeService(service), true
+}
+
+func (h *fakeNodeHandler) metricsSamples() []contracts.MetricSample {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	counts := map[string]int{}
+	for _, service := range h.services {
+		counts[service.Status]++
+	}
+	samples := []contracts.MetricSample{
+		contracts.CountMetric("node_services_total", len(h.services), map[string]string{"node_id": h.cfg.NodeID}),
+	}
+	for status, count := range counts {
+		samples = append(samples, contracts.CountMetric("node_services_by_status", count, map[string]string{"node_id": h.cfg.NodeID, "status": status}))
+	}
+	return samples
+}
+
+func (h *fakeNodeHandler) writeBlocked(w http.ResponseWriter, r *http.Request) bool {
+	switch h.cfg.Behavior {
+	case FakeComponentDenied:
+		writeFakeError(w, r, http.StatusForbidden, "forbidden", "fake node access denied", false)
+		return true
+	case FakeComponentUnavailable:
+		writeFakeError(w, r, http.StatusServiceUnavailable, "component_unavailable", "fake node unavailable", true)
+		return true
+	default:
+		return false
+	}
+}
+
 func (h *fakeComponentHandler) writeBlocked(w http.ResponseWriter, r *http.Request) bool {
 	switch h.cfg.Behavior {
 	case FakeComponentDenied:
@@ -289,6 +532,63 @@ func (h *fakeComponentHandler) writeBlocked(w http.ResponseWriter, r *http.Reque
 	default:
 		return false
 	}
+}
+
+func fakeNodeResources() []contracts.NodeResource {
+	return []contracts.NodeResource{{
+		ResourceID: "res_fake_gpu",
+		Tags:       []string{"gpu", "gpu:0"},
+		Metadata:   map[string]any{"kind": "gpu"},
+	}}
+}
+
+func fakeNodeServices() []contracts.NodeService {
+	return []contracts.NodeService{
+		fakeNodeService("svc_fake_running", "running"),
+		fakeNodeService("svc_fake_stopped", "stopped"),
+		fakeNodeService("svc_fake_starting", "starting"),
+		fakeNodeService("svc_fake_failed", "failed"),
+	}
+}
+
+func fakeNodeService(serviceID, status string) contracts.NodeService {
+	return contracts.NodeService{
+		ServiceID:        serviceID,
+		Status:           status,
+		RuntimeAdapter:   "fake",
+		ProviderEndpoint: "http://node.fake/providers/" + serviceID,
+		Links:            map[string]any{},
+	}
+}
+
+func cloneFakeNodeResources(resources []contracts.NodeResource) []contracts.NodeResource {
+	cloned := make([]contracts.NodeResource, len(resources))
+	for i, resource := range resources {
+		cloned[i] = resource
+		cloned[i].Tags = append([]string(nil), resource.Tags...)
+		cloned[i].Metadata = cloneMap(resource.Metadata)
+	}
+	return cloned
+}
+
+func cloneFakeNodeService(service contracts.NodeService) contracts.NodeService {
+	service.Links = cloneMap(service.Links)
+	if service.Manifest != nil {
+		manifest := *service.Manifest
+		service.Manifest = &manifest
+	}
+	return service
+}
+
+func cloneMap(in map[string]any) map[string]any {
+	if in == nil {
+		return nil
+	}
+	out := make(map[string]any, len(in))
+	for key, value := range in {
+		out[key] = value
+	}
+	return out
 }
 
 func decodeFakeBody(w http.ResponseWriter, r *http.Request, out any) bool {

@@ -40,7 +40,9 @@ Contract simulation data is kept as test input, not as product behavior.
   failure branches; reusable component fakes can run in success, denied, or
   unavailable modes and can expose caller-supplied public list records. The
   reusable policy fake covers auth allow/failure, policy allow/deny, secret
-  resolution, and redaction.
+  resolution, and redaction. The reusable node fake covers resources,
+  running/stopped/starting/failed services, lifecycle idempotency, and
+  unavailable-node behavior.
 - `cmd/pacp-contract-smoke`: CLI smoke check for contract simulation packages,
   OpenAPI contracts, live component contracts, distributed component wiring,
   and live provider compliance.
