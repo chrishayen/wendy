@@ -149,6 +149,14 @@ func TestCapabilityMetadataSchemasMatchManifestEnums(t *testing.T) {
 	assertOperationQueryParameterEnum(t, componentDoc, "/v1/catalog/capabilities", "get", "execution_mode", wantExecutionModes)
 }
 
+func TestProviderRoutingSchemaMatchesManifestValidation(t *testing.T) {
+	componentDoc := loadOpenAPIDoc(t, filepath.Join("..", "..", "openapi", "component-services.v1.yaml"))
+
+	assertSchemaPropertyValue(t, componentDoc, "Provider", "endpoint", "format", "uri")
+	assertSchemaPropertyValue(t, componentDoc, "Provider", "endpoint", "pattern", "^https?://[^?#]+$")
+	assertSchemaPropertyValue(t, componentDoc, "Provider", "health_path", "pattern", "^/[^?#]*$")
+}
+
 func TestValidateFileDetectsDuplicateOperationID(t *testing.T) {
 	path := writeContract(t, `
 openapi: 3.1.0
@@ -1127,17 +1135,34 @@ func assertOperationQueryParameterEnum(t *testing.T, doc map[string]any, path, m
 	t.Fatalf("%s %s query parameter %s not found", method, path, parameterName)
 }
 
+func assertSchemaPropertyValue(t *testing.T, doc map[string]any, schemaName, propertyName, fieldName string, want any) {
+	t.Helper()
+	property := openAPISchemaProperty(t, doc, schemaName, propertyName)
+	if got := property[fieldName]; got != want {
+		t.Fatalf("%s.%s %s=%#v want=%#v", schemaName, propertyName, fieldName, got, want)
+	}
+}
+
 func assertSchemaPropertyEnum(t *testing.T, doc map[string]any, schemaName, propertyName string, want []string) {
+	t.Helper()
+	property := openAPISchemaProperty(t, doc, schemaName, propertyName)
+	got := stringValues(property["enum"])
+	if !sameStringSet(got, want) {
+		t.Fatalf("%s.%s enum=%#v want=%#v", schemaName, propertyName, got, want)
+	}
+}
+
+func openAPISchemaProperty(t *testing.T, doc map[string]any, schemaName, propertyName string) map[string]any {
 	t.Helper()
 	components, _ := asMap(doc["components"])
 	schemas, _ := asMap(components["schemas"])
 	schema, _ := asMap(schemas[schemaName])
 	properties, _ := asMap(schema["properties"])
 	property, _ := asMap(properties[propertyName])
-	got := stringValues(property["enum"])
-	if !sameStringSet(got, want) {
-		t.Fatalf("%s.%s enum=%#v want=%#v", schemaName, propertyName, got, want)
+	if property == nil {
+		t.Fatalf("%s.%s property not found", schemaName, propertyName)
 	}
+	return property
 }
 
 func stringValues(raw any) []string {

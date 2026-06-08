@@ -2070,10 +2070,13 @@ components:
       properties:
         endpoint:
           type: string
+          format: uri
+          pattern: '^https?://[^?#]+$'
         node_id:
           type: string
         health_path:
           type: string
+          pattern: '^/[^?#]*$'
     Capability:
       type: object
       required: [id, name, description, execution_mode, input_schema, output_schema, examples, side_effects, resource_hints, artifact_hints, timeout_hint]
