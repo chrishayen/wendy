@@ -222,6 +222,22 @@ func TestRunnerFetchesProviderContentRefsAndUploadsArtifact(t *testing.T) {
 	}
 }
 
+func TestRunnerPreservesProviderTimeoutFailureCodeAndReleaseReason(t *testing.T) {
+	runProviderFailureBranch(t, contracts.ErrorObject{
+		Code:      "provider_timeout",
+		Message:   "provider invocation timed out",
+		Retryable: true,
+	}, http.StatusGatewayTimeout, "provider invocation timed out", "provider timed out")
+}
+
+func TestRunnerPreservesProviderUnavailableFailureCodeAndReleaseReason(t *testing.T) {
+	runProviderFailureBranch(t, contracts.ErrorObject{
+		Code:      "provider_unavailable",
+		Message:   "ComfyUI backend is unavailable",
+		Retryable: true,
+	}, http.StatusServiceUnavailable, "provider invocation failed", "provider failed")
+}
+
 func TestRunnerMonitorHTTPReportsHealthAndMetrics(t *testing.T) {
 	jobStore := jobs.NewStore()
 	jobsServer := httptest.NewServer(jobs.NewHandler(jobStore))
@@ -604,6 +620,98 @@ func TestRunnerRequiresConfiguredNodeURLForNodeID(t *testing.T) {
 	}
 }
 
+func runProviderFailureBranch(t *testing.T, providerError contracts.ErrorObject, status int, wantLogMessage, wantReleaseReason string) {
+	t.Helper()
+	jobStore := jobs.NewStore()
+	jobsServer := httptest.NewServer(jobs.NewHandler(jobStore))
+	defer jobsServer.Close()
+
+	leaseStore := leases.NewStore()
+	if _, err := leaseStore.RegisterResource(contracts.RegisterResourceRequest{Selector: "gpu", Status: contracts.ResourceAvailable}); err != nil {
+		t.Fatalf("register resource: %v", err)
+	}
+	leasesServer := httptest.NewServer(leases.NewHandler(leaseStore))
+	defer leasesServer.Close()
+
+	providerServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/v1/provider/capabilities/cap_failure/invoke" {
+			t.Fatalf("unexpected provider request %s %s", r.Method, r.URL.Path)
+		}
+		writeRunnerTestError(w, status, providerError)
+	}))
+	defer providerServer.Close()
+
+	route := contracts.CapabilityRoute{
+		CapabilityID:       "cap_failure",
+		ServiceID:          "svc_failure_provider",
+		ProviderEndpoint:   providerServer.URL,
+		ProviderHealthPath: "/v1/provider/health",
+		ProviderInvokePath: "/v1/provider/capabilities/cap_failure/invoke",
+		ServiceStartMode:   "manual",
+		ResourceHints:      []contracts.ResourceHint{{Selector: "gpu", Required: true}},
+	}
+	created, _, err := jobStore.Create(contracts.CreateJobRequest{
+		RequesterID:  "sub_agent",
+		CapabilityID: "cap_failure",
+		InputSummary: map[string]any{"prompt_present": true},
+		Metadata: map[string]any{"execution_plan": map[string]any{
+			"capability_id":     "cap_failure",
+			"subject_id":        "sub_agent",
+			"input":             map[string]any{"prompt": "red mug"},
+			"route":             route,
+			"resource_selector": "gpu",
+			"timeout_seconds":   30,
+		}},
+	}, "create-provider-failure-job")
+	if err != nil {
+		t.Fatalf("create job: %v", err)
+	}
+
+	runner := New(Config{
+		WorkerID:       "runner_test",
+		JobsURL:        jobsServer.URL,
+		LeasesURL:      leasesServer.URL,
+		ArtifactsURL:   "http://artifacts.invalid",
+		ActorSubjectID: "sub_runner_test",
+		Client:         jobsServer.Client(),
+	})
+	jobID, ok, err := runner.RunOnce(context.Background())
+	if err == nil {
+		t.Fatal("expected provider failure error")
+	}
+	if !ok || jobID != created.JobID {
+		t.Fatalf("run result jobID=%q ok=%v", jobID, ok)
+	}
+	failed, err := jobStore.Get(created.JobID)
+	if err != nil {
+		t.Fatalf("get failed job: %v", err)
+	}
+	if failed.State != contracts.JobFailed || failed.TerminalError == nil {
+		t.Fatalf("failed job = %#v", failed)
+	}
+	if *failed.TerminalError != providerError {
+		t.Fatalf("terminal error = %#v want %#v", *failed.TerminalError, providerError)
+	}
+	logs, _, err := jobStore.Logs(created.JobID, "", 20)
+	if err != nil {
+		t.Fatalf("read logs: %v", err)
+	}
+	if len(logs) < 3 {
+		t.Fatalf("logs = %#v", logs)
+	}
+	lastLog := logs[len(logs)-1]
+	if lastLog.Level != "error" || lastLog.Message != wantLogMessage || lastLog.Fields["code"] != providerError.Code {
+		t.Fatalf("last log = %#v", lastLog)
+	}
+	events := leaseStore.AuditEvents()
+	if len(events) != 1 {
+		t.Fatalf("lease audit events = %#v", events)
+	}
+	if events[0].ReleaseReason != wantReleaseReason || events[0].ActorSubjectID != "sub_runner_test" || events[0].HolderID != created.JobID {
+		t.Fatalf("lease audit event = %#v", events[0])
+	}
+}
+
 func createRunnerPolicyJob(t *testing.T, store *jobs.Store, providerEndpoint, capabilityID string) contracts.Job {
 	t.Helper()
 	route := contracts.CapabilityRoute{
@@ -735,6 +843,12 @@ func writeRunnerTestSuccess(w http.ResponseWriter, status int, data any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(contracts.SuccessEnvelope{OK: true, Data: data, Links: map[string]any{}, Meta: map[string]string{"request_id": "req_test", "schema_version": "v1"}})
+}
+
+func writeRunnerTestError(w http.ResponseWriter, status int, errObj contracts.ErrorObject) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(contracts.ErrorEnvelope{OK: false, Error: errObj, Links: map[string]any{}, Meta: map[string]string{"request_id": "req_test", "schema_version": "v1"}})
 }
 
 func requestRunnerData(t *testing.T, handler http.Handler, method, path string) map[string]any {

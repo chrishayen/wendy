@@ -42,6 +42,27 @@ type Runner struct {
 	stats  *runnerStats
 }
 
+type componentError struct {
+	contracts.ErrorObject
+	StatusCode int
+}
+
+func (e componentError) Error() string {
+	if e.Message != "" {
+		return e.Message
+	}
+	if e.Code != "" {
+		return e.Code
+	}
+	return "component request failed"
+}
+
+type providerFailure struct {
+	contracts.ErrorObject
+	logMessage    string
+	releaseReason string
+}
+
 type executionPlan struct {
 	CapabilityID     string                    `json:"capability_id"`
 	SubjectID        string                    `json:"subject_id"`
@@ -131,6 +152,7 @@ func (r *Runner) runJob(ctx context.Context, job contracts.Job) error {
 	}
 
 	var lease *contracts.Lease
+	leaseReleaseReason := "job finished"
 	if plan.ResourceSelector != "" {
 		lease, err = r.acquireLease(ctx, job.JobID, plan.ResourceSelector)
 		if err != nil {
@@ -138,7 +160,7 @@ func (r *Runner) runJob(ctx context.Context, job contracts.Job) error {
 			return err
 		}
 		defer func() {
-			_, _ = r.releaseLease(context.Background(), lease.LeaseID, job.JobID, "job finished")
+			_, _ = r.releaseLease(context.Background(), lease.LeaseID, job.JobID, leaseReleaseReason)
 		}()
 	}
 	if plan.Route.NodeManaged {
@@ -160,7 +182,10 @@ func (r *Runner) runJob(ctx context.Context, job contracts.Job) error {
 	}
 	response, err := r.invokeProvider(ctx, job.JobID, plan, lease)
 	if err != nil {
-		_ = r.failJob(ctx, job.JobID, "provider_unavailable", err.Error())
+		providerErr := normalizeProviderError(err)
+		leaseReleaseReason = providerErr.releaseReason
+		_ = r.appendLogFields(ctx, job.JobID, "error", providerErr.logMessage, map[string]any{"code": providerErr.Code})
+		_ = r.failJobWithError(ctx, job.JobID, providerErr.ErrorObject)
 		return err
 	}
 	if terminal, err := r.jobTerminal(ctx, job.JobID); err != nil {
@@ -223,11 +248,22 @@ func (r *Runner) completeJob(ctx context.Context, jobID string, artifactIDs []st
 }
 
 func (r *Runner) failJob(ctx context.Context, jobID, code, message string) error {
+	return r.failJobWithError(ctx, jobID, contracts.ErrorObject{Code: code, Message: message, Retryable: false})
+}
+
+func (r *Runner) failJobWithError(ctx context.Context, jobID string, errObj contracts.ErrorObject) error {
 	var job contracts.Job
-	return r.postJSON(ctx, r.cfg.JobsURL+"/v1/jobs/"+url.PathEscape(jobID)+"/fail", contracts.JobFailRequest{WorkerID: r.cfg.WorkerID, Error: contracts.ErrorObject{Code: code, Message: message, Retryable: false}}, "", &job)
+	return r.postJSON(ctx, r.cfg.JobsURL+"/v1/jobs/"+url.PathEscape(jobID)+"/fail", contracts.JobFailRequest{WorkerID: r.cfg.WorkerID, Error: errObj}, "", &job)
 }
 
 func (r *Runner) appendLog(ctx context.Context, jobID, level, message string) error {
+	return r.appendLogFields(ctx, jobID, level, message, nil)
+}
+
+func (r *Runner) appendLogFields(ctx context.Context, jobID, level, message string, fields map[string]any) error {
+	if fields == nil {
+		fields = map[string]any{}
+	}
 	var data map[string]any
 	return r.postJSON(ctx, r.cfg.JobsURL+"/v1/jobs/"+url.PathEscape(jobID)+"/logs", contracts.AppendJobLogRequest{
 		WorkerID: r.cfg.WorkerID,
@@ -235,6 +271,7 @@ func (r *Runner) appendLog(ctx context.Context, jobID, level, message string) er
 			Timestamp: time.Now().UTC().Format(time.RFC3339),
 			Level:     level,
 			Message:   message,
+			Fields:    fields,
 		}},
 	}, "", &data)
 }
@@ -422,6 +459,43 @@ func (r *Runner) verifyWorkerSubject(ctx context.Context) (string, error) {
 		return "", errors.New("runner credential could not be verified for provider.invoke policy checks")
 	}
 	return *verification.SubjectID, nil
+}
+
+func normalizeProviderError(err error) providerFailure {
+	failure := providerFailure{
+		ErrorObject: contracts.ErrorObject{
+			Code:      "provider_unavailable",
+			Message:   err.Error(),
+			Retryable: true,
+		},
+		logMessage:    "provider invocation failed",
+		releaseReason: "provider failed",
+	}
+	var componentErr componentError
+	if errors.As(err, &componentErr) {
+		failure.Code = componentErr.Code
+		failure.Message = componentErr.Message
+		failure.Retryable = componentErr.Retryable
+	}
+	if failure.Code == "" {
+		failure.Code = "provider_unavailable"
+	}
+	if failure.Message == "" {
+		failure.Message = err.Error()
+	}
+	switch failure.Code {
+	case "provider_timeout":
+		failure.logMessage = "provider invocation timed out"
+		failure.releaseReason = "provider timed out"
+		failure.Retryable = true
+	case "provider_unavailable":
+		failure.logMessage = "provider invocation failed"
+		failure.releaseReason = "provider failed"
+		if failure.Message == "" {
+			failure.Message = "provider is unavailable"
+		}
+	}
+	return failure
 }
 
 func (r *Runner) uploadArtifacts(ctx context.Context, jobID, ownerSubjectID string, artifacts []contracts.ProviderArtifact) ([]string, error) {
@@ -623,7 +697,7 @@ func decodeEnvelope(resp *http.Response, out any) error {
 		if envelope.Error.Message == "" {
 			envelope.Error.Message = resp.Status
 		}
-		return errors.New(envelope.Error.Message)
+		return componentError{ErrorObject: envelope.Error, StatusCode: resp.StatusCode}
 	}
 	var envelope struct {
 		OK    bool                  `json:"ok"`
@@ -634,7 +708,10 @@ func decodeEnvelope(resp *http.Response, out any) error {
 		return err
 	}
 	if !envelope.OK {
-		return errors.New(envelope.Error.Message)
+		if envelope.Error.Message == "" {
+			envelope.Error.Message = "component response was not ok"
+		}
+		return componentError{ErrorObject: envelope.Error, StatusCode: resp.StatusCode}
 	}
 	if out == nil {
 		return nil
@@ -652,7 +729,7 @@ func readProviderContentResponse(resp *http.Response) ([]byte, error) {
 		if envelope.Error.Message == "" {
 			envelope.Error.Message = resp.Status
 		}
-		return nil, errors.New(envelope.Error.Message)
+		return nil, componentError{ErrorObject: envelope.Error, StatusCode: resp.StatusCode}
 	}
 	return io.ReadAll(io.LimitReader(resp.Body, 100<<20))
 }
