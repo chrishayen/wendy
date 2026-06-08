@@ -3,8 +3,12 @@ package testkit
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"strings"
@@ -76,6 +80,7 @@ func CheckProvider(ctx context.Context, httpClient *http.Client, opts ProviderCh
 		response, capability, invoked = checkProviderInvoke(ctx, httpClient, baseURL, manifest, opts, &report)
 		if invoked {
 			checkProviderArtifactMetadata(capability, response, &report)
+			checkProviderContentRefs(ctx, httpClient, baseURL, credential, response.ContentRefs, &report)
 			checkProviderInvalidInput(ctx, httpClient, baseURL, credential, manifest, strings.TrimSpace(opts.CapabilityID), &report)
 		}
 	}
@@ -383,6 +388,93 @@ func checkProviderArtifactMetadata(capability contracts.Capability, response con
 	}
 	result.OK = true
 	report.add(result)
+}
+
+func checkProviderContentRefs(ctx context.Context, httpClient *http.Client, baseURL, credential string, refs []contracts.ProviderContentRef, report *ProviderCheckReport) {
+	for i, ref := range refs {
+		contentRef := strings.TrimSpace(ref.ContentRef)
+		result := ProviderCheckResult{Name: fmt.Sprintf("provider.content_refs[%d]", i)}
+		if contentRef == "" {
+			result.Error = fmt.Sprintf("content_refs[%d].content_ref is required", i)
+			report.add(result)
+			return
+		}
+		path := "/v1/provider/artifacts/" + url.PathEscape(contentRef) + "/content"
+		status, headers, body, err := getProviderContent(ctx, httpClient, joinURLPath(baseURL, path), credential)
+		result.HTTPStatus = status
+		if err != nil {
+			result.Error = err.Error()
+			report.add(result)
+			return
+		}
+		if status < 200 || status >= 300 {
+			result.Error = fmt.Sprintf("HTTP %d", status)
+			report.add(result)
+			return
+		}
+		if !contentTypeMatches(headers.Get("Content-Type"), ref.MediaType) {
+			result.Error = fmt.Sprintf("content_refs[%d] Content-Type = %q, want %q", i, headers.Get("Content-Type"), ref.MediaType)
+			report.add(result)
+			return
+		}
+		if int64(len(body)) != ref.Size {
+			result.Error = fmt.Sprintf("content_refs[%d] size = %d, want %d", i, len(body), ref.Size)
+			report.add(result)
+			return
+		}
+		checksum, digest := providerContentChecksumAndDigest(body)
+		if ref.Checksum != checksum {
+			result.Error = fmt.Sprintf("content_refs[%d] checksum = %q, want %q", i, checksum, ref.Checksum)
+			report.add(result)
+			return
+		}
+		if got := strings.TrimSpace(headers.Get("Digest")); got != digest {
+			result.Error = fmt.Sprintf("content_refs[%d] Digest = %q, want %q", i, got, digest)
+			report.add(result)
+			return
+		}
+		result.OK = true
+		report.add(result)
+	}
+}
+
+func getProviderContent(ctx context.Context, httpClient *http.Client, endpoint, credential string) (int, http.Header, []byte, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return 0, nil, nil, err
+	}
+	credential = strings.TrimSpace(credential)
+	if credential != "" {
+		req.Header.Set("Authorization", credential)
+	}
+	observability.PropagateRequestID(ctx, req)
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return 0, nil, nil, err
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 100<<20))
+	if err != nil {
+		return resp.StatusCode, resp.Header, nil, err
+	}
+	return resp.StatusCode, resp.Header, body, nil
+}
+
+func contentTypeMatches(got, want string) bool {
+	want = strings.TrimSpace(want)
+	if want == "" {
+		return true
+	}
+	got = strings.TrimSpace(got)
+	if i := strings.Index(got, ";"); i >= 0 {
+		got = strings.TrimSpace(got[:i])
+	}
+	return got == want
+}
+
+func providerContentChecksumAndDigest(body []byte) (string, string) {
+	sum := sha256.Sum256(body)
+	return "sha256:" + hex.EncodeToString(sum[:]), "sha-256=" + base64.StdEncoding.EncodeToString(sum[:])
 }
 
 func capabilityRequiresArtifacts(capability contracts.Capability) bool {

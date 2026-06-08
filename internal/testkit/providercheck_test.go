@@ -216,6 +216,154 @@ func TestCheckProviderValidatesArtifactMetadata(t *testing.T) {
 	}
 }
 
+func TestCheckProviderFetchesContentRefs(t *testing.T) {
+	body := []byte("provider artifact body")
+	checksum, digest := providerContentChecksumAndDigest(body)
+	contentFetched := false
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer provider-token" {
+			writeTestErrorEnvelope(t, w, http.StatusUnauthorized, "unauthorized", "missing token")
+			return
+		}
+		switch r.URL.Path {
+		case "/v1/provider/manifest":
+			manifest := testProviderManifest(serverURL(r))
+			manifest.Capabilities[0].ArtifactHints = []contracts.ArtifactHint{{MediaType: "text/plain", Count: "one"}}
+			writeTestEnvelope(t, w, http.StatusOK, manifest)
+		case "/v1/provider/health":
+			writeTestEnvelope(t, w, http.StatusOK, map[string]any{"status": "healthy"})
+		case "/v1/provider/capabilities/cap_echo/invoke":
+			if r.Header.Get("X-Request-ID") != "req_test" {
+				t.Fatalf("invoke X-Request-ID = %q", r.Header.Get("X-Request-ID"))
+			}
+			var req contracts.ProviderInvokeRequest
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				t.Fatalf("decode invoke: %v", err)
+			}
+			if _, exists := req.Input["message"]; !exists {
+				writeTestErrorEnvelope(t, w, http.StatusBadRequest, "validation_failed", "message is required")
+				return
+			}
+			writeTestEnvelope(t, w, http.StatusOK, contracts.ProviderInvokeResponse{
+				Output: map[string]any{"reply": "hello"},
+				ContentRefs: []contracts.ProviderContentRef{{
+					ContentRef: "pcr_text",
+					Name:       "result.txt",
+					MediaType:  "text/plain",
+					Size:       int64(len(body)),
+					Checksum:   checksum,
+					ExpiresAt:  "2026-06-08T00:00:00Z",
+				}},
+			})
+		case "/v1/provider/artifacts/pcr_text/content":
+			if r.Header.Get("X-Request-ID") != "req_test" {
+				t.Fatalf("content X-Request-ID = %q", r.Header.Get("X-Request-ID"))
+			}
+			contentFetched = true
+			w.Header().Set("Content-Type", "text/plain")
+			w.Header().Set("Digest", digest)
+			w.WriteHeader(http.StatusOK)
+			if _, err := w.Write(body); err != nil {
+				t.Fatalf("write content: %v", err)
+			}
+		case "/v1/provider/metrics":
+			writeTestEnvelope(t, w, http.StatusOK, testProviderMetrics([]contracts.MetricSample{
+				contracts.CountMetric("provider_invocations_total", 1, map[string]string{
+					"capability_id": "cap_echo",
+					"service_id":    "svc_test_provider",
+					"status":        "success",
+				}),
+			}))
+		default:
+			t.Fatalf("unexpected request = %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	report := CheckProvider(context.Background(), server.Client(), ProviderCheckOptions{
+		BaseURL:      server.URL,
+		CapabilityID: "cap_echo",
+		Input:        map[string]any{"message": "hello"},
+		Credential:   "Bearer provider-token",
+		RequestID:    "req_test",
+	})
+	if !report.Passed() {
+		t.Fatalf("report = %#v", report)
+	}
+	if !contentFetched {
+		t.Fatal("provider content ref was not fetched")
+	}
+	if !providerCheckPassed(report, "provider.content_refs[0]") {
+		t.Fatalf("content ref check missing: %#v", report.Checks)
+	}
+}
+
+func TestCheckProviderReportsContentRefChecksumMismatch(t *testing.T) {
+	body := []byte("provider artifact body")
+	_, digest := providerContentChecksumAndDigest(body)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/provider/manifest":
+			manifest := testProviderManifest(serverURL(r))
+			manifest.Capabilities[0].ArtifactHints = []contracts.ArtifactHint{{MediaType: "text/plain", Count: "one"}}
+			writeTestEnvelope(t, w, http.StatusOK, manifest)
+		case "/v1/provider/health":
+			writeTestEnvelope(t, w, http.StatusOK, map[string]any{"status": "healthy"})
+		case "/v1/provider/capabilities/cap_echo/invoke":
+			var req contracts.ProviderInvokeRequest
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				t.Fatalf("decode invoke: %v", err)
+			}
+			if _, exists := req.Input["message"]; !exists {
+				writeTestErrorEnvelope(t, w, http.StatusBadRequest, "validation_failed", "message is required")
+				return
+			}
+			writeTestEnvelope(t, w, http.StatusOK, contracts.ProviderInvokeResponse{
+				Output: map[string]any{"reply": "hello"},
+				ContentRefs: []contracts.ProviderContentRef{{
+					ContentRef: "pcr_text",
+					Name:       "result.txt",
+					MediaType:  "text/plain",
+					Size:       int64(len(body)),
+					Checksum:   "sha256:bad",
+					ExpiresAt:  "2026-06-08T00:00:00Z",
+				}},
+			})
+		case "/v1/provider/artifacts/pcr_text/content":
+			w.Header().Set("Content-Type", "text/plain")
+			w.Header().Set("Digest", digest)
+			w.WriteHeader(http.StatusOK)
+			if _, err := w.Write(body); err != nil {
+				t.Fatalf("write content: %v", err)
+			}
+		case "/v1/provider/metrics":
+			writeTestEnvelope(t, w, http.StatusOK, testProviderMetrics([]contracts.MetricSample{
+				contracts.CountMetric("provider_invocations_total", 1, map[string]string{
+					"capability_id": "cap_echo",
+					"service_id":    "svc_test_provider",
+					"status":        "success",
+				}),
+			}))
+		default:
+			t.Fatalf("unexpected request = %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	report := CheckProvider(context.Background(), server.Client(), ProviderCheckOptions{
+		BaseURL:      server.URL,
+		CapabilityID: "cap_echo",
+		Input:        map[string]any{"message": "hello"},
+		RequestID:    "req_test",
+	})
+	if report.Passed() {
+		t.Fatalf("report passed unexpectedly: %#v", report)
+	}
+	if !providerCheckFailed(report, "provider.content_refs[0]") {
+		t.Fatalf("content ref failure missing: %#v", report.Checks)
+	}
+}
+
 func TestCheckProviderExpectedError(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/v1/provider/capabilities/cap_fail/invoke" {
@@ -320,6 +468,15 @@ func serverURL(r *http.Request) string {
 func providerCheckFailed(report ProviderCheckReport, name string) bool {
 	for _, check := range report.Checks {
 		if check.Name == name && !check.OK {
+			return true
+		}
+	}
+	return false
+}
+
+func providerCheckPassed(report ProviderCheckReport, name string) bool {
+	for _, check := range report.Checks {
+		if check.Name == name && check.OK {
 			return true
 		}
 	}
