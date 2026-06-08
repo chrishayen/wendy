@@ -13,6 +13,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"sort"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -231,6 +232,7 @@ func Run(ctx context.Context) DistributedSmokeReport {
 		{Kind: "node", URL: nodeHTTP.URL, Credential: "Bearer " + runnerToken},
 		{Kind: "gateway", URL: gatewayHTTP.URL},
 	}, &report)
+	checkGatewayDependencyHealth(ctx, client, gatewayHTTP.URL, &report)
 
 	jobID := invokeDistributedTool(ctx, client, gatewayHTTP.URL, agentToken, capability, &report)
 	if jobID == "" {
@@ -324,6 +326,117 @@ func distributedComponentCheckName(kind, name string) string {
 		return "component." + kind + ".surface." + strings.TrimPrefix(name, surfacePrefix)
 	}
 	return "component." + kind + "." + strings.TrimPrefix(name, "component.")
+}
+
+func checkGatewayDependencyHealth(ctx context.Context, client *http.Client, gatewayURL string, report *DistributedSmokeReport) {
+	var healthEnvelope rawSuccessEnvelope
+	status, err := requestJSON(ctx, client, http.MethodGet, joinURLPath(gatewayURL, "/v1/gateway/health"), nil, nil, &healthEnvelope)
+	check := DistributedSmokeCheck{Name: "gateway.dependencies_healthy", HTTPStatus: status}
+	if err != nil {
+		check.Error = err.Error()
+		report.add(check)
+		return
+	}
+	if status != http.StatusOK || !healthEnvelope.OK {
+		check.Error = fmt.Sprintf("HTTP %d ok=%t", status, healthEnvelope.OK)
+		report.add(check)
+		return
+	}
+	var health struct {
+		Status  string `json:"status"`
+		Details struct {
+			Dependencies []smokeGatewayDependency `json:"dependencies"`
+		} `json:"details"`
+	}
+	if err := json.Unmarshal(healthEnvelope.Data, &health); err != nil {
+		check.Error = "decode gateway health: " + err.Error()
+		report.add(check)
+		return
+	}
+	if health.Status != "healthy" {
+		check.Error = "gateway status is " + health.Status
+		report.add(check)
+		return
+	}
+	if missing := missingHealthyGatewayDependencies(health.Details.Dependencies); len(missing) > 0 {
+		check.Error = "unhealthy dependencies: " + strings.Join(missing, ",")
+		report.add(check)
+		return
+	}
+	check.OK = true
+	report.add(check)
+
+	var metricsEnvelope rawSuccessEnvelope
+	status, err = requestJSON(ctx, client, http.MethodGet, joinURLPath(gatewayURL, "/v1/gateway/metrics"), nil, nil, &metricsEnvelope)
+	metricCheck := DistributedSmokeCheck{Name: "gateway.downstream_reachability_metrics", HTTPStatus: status}
+	if err != nil {
+		metricCheck.Error = err.Error()
+		report.add(metricCheck)
+		return
+	}
+	if status != http.StatusOK || !metricsEnvelope.OK {
+		metricCheck.Error = fmt.Sprintf("HTTP %d ok=%t", status, metricsEnvelope.OK)
+		report.add(metricCheck)
+		return
+	}
+	var metrics contracts.ComponentMetrics
+	if err := json.Unmarshal(metricsEnvelope.Data, &metrics); err != nil {
+		metricCheck.Error = "decode gateway metrics: " + err.Error()
+		report.add(metricCheck)
+		return
+	}
+	if missing := missingGatewayReachabilityMetrics(metrics.Samples); len(missing) > 0 {
+		metricCheck.Error = "missing reachable metrics: " + strings.Join(missing, ",")
+		report.add(metricCheck)
+		return
+	}
+	metricCheck.OK = true
+	report.add(metricCheck)
+}
+
+type smokeGatewayDependency struct {
+	Name       string
+	Configured bool
+	Reachable  bool
+	Status     string
+}
+
+func missingHealthyGatewayDependencies(dependencies []smokeGatewayDependency) []string {
+	required := map[string]bool{"catalog": false, "policy": false, "jobs": false, "leases": false, "artifacts": false}
+	for _, dependency := range dependencies {
+		if _, ok := required[dependency.Name]; !ok {
+			continue
+		}
+		if dependency.Configured && dependency.Reachable && dependency.Status == "healthy" {
+			required[dependency.Name] = true
+		}
+	}
+	return missingSmokeNames(required)
+}
+
+func missingGatewayReachabilityMetrics(samples []contracts.MetricSample) []string {
+	required := map[string]bool{"catalog": false, "policy": false, "jobs": false, "leases": false, "artifacts": false}
+	for _, sample := range samples {
+		if sample.Name != "gateway_downstream_reachable" || sample.Value != 1 {
+			continue
+		}
+		downstream := sample.Labels["downstream"]
+		if _, ok := required[downstream]; ok && sample.Labels["status"] == "healthy" {
+			required[downstream] = true
+		}
+	}
+	return missingSmokeNames(required)
+}
+
+func missingSmokeNames(required map[string]bool) []string {
+	missing := []string{}
+	for name, ok := range required {
+		if !ok {
+			missing = append(missing, name)
+		}
+	}
+	sort.Strings(missing)
+	return missing
 }
 
 func checkLeaseReleaseAudit(store *leases.Store, runnerID, jobID string, report *DistributedSmokeReport) {

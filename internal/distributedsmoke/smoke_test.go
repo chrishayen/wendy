@@ -25,6 +25,8 @@ func TestRunDistributedSmokePassesPrimaryPlusNodeFlow(t *testing.T) {
 		"component.leases.surface.resources",
 		"component.artifacts.surface.list",
 		"component.node.surface.resources",
+		"gateway.dependencies_healthy",
+		"gateway.downstream_reachability_metrics",
 		"gateway.invoke",
 		"runner.run_once",
 		"jobs.succeeded",
