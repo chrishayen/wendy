@@ -967,34 +967,17 @@ func jobContextMap(context contracts.JobPolicyContext) map[string]any {
 }
 
 func validateInvokeInput(input map[string]any, schema map[string]any) string {
-	for _, field := range schemaRequiredFields(schema) {
-		value, ok := input[field]
-		if !ok || value == nil {
-			return "input." + field + " is required"
-		}
+	if err := contracts.ValidateObject(input, schema); err != nil {
+		return gatewayInputValidationMessage(err.Error())
 	}
 	return ""
 }
 
-func schemaRequiredFields(schema map[string]any) []string {
-	raw, ok := schema["required"]
-	if !ok {
-		return nil
+func gatewayInputValidationMessage(message string) string {
+	if message == "" || strings.HasPrefix(message, "only object schemas") {
+		return message
 	}
-	switch required := raw.(type) {
-	case []string:
-		return append([]string(nil), required...)
-	case []any:
-		fields := make([]string, 0, len(required))
-		for _, item := range required {
-			if field, ok := item.(string); ok && field != "" {
-				fields = append(fields, field)
-			}
-		}
-		return fields
-	default:
-		return nil
-	}
+	return "input." + message
 }
 
 func inputSummary(input map[string]any) map[string]any {

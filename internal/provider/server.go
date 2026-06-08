@@ -265,86 +265,10 @@ func (m *providerInvocationMetrics) Samples(serviceID string) []contracts.Metric
 }
 
 func ValidateObject(value map[string]any, schema map[string]any) error {
-	if schema == nil {
-		return nil
-	}
-	if schemaType, _ := schema["type"].(string); schemaType != "" && schemaType != "object" {
-		return fmt.Errorf("%w: only object schemas are supported", ErrValidation)
-	}
-	for _, required := range stringSlice(schema["required"]) {
-		if _, ok := value[required]; !ok {
-			return fmt.Errorf("%w: %s is required", ErrValidation, required)
-		}
-	}
-	properties, _ := schema["properties"].(map[string]any)
-	for key, rawProperty := range properties {
-		property, _ := rawProperty.(map[string]any)
-		expected, _ := property["type"].(string)
-		if expected == "" {
-			continue
-		}
-		actual, exists := value[key]
-		if !exists || actual == nil {
-			continue
-		}
-		if !matchesJSONType(actual, expected) {
-			return fmt.Errorf("%w: %s must be %s", ErrValidation, key, expected)
-		}
+	if err := contracts.ValidateObject(value, schema); err != nil {
+		return fmt.Errorf("%w: %s", ErrValidation, err.Error())
 	}
 	return nil
-}
-
-func stringSlice(value any) []string {
-	switch typed := value.(type) {
-	case []string:
-		return typed
-	case []any:
-		out := make([]string, 0, len(typed))
-		for _, item := range typed {
-			if text, ok := item.(string); ok {
-				out = append(out, text)
-			}
-		}
-		return out
-	default:
-		return nil
-	}
-}
-
-func matchesJSONType(value any, expected string) bool {
-	switch expected {
-	case "string":
-		_, ok := value.(string)
-		return ok
-	case "boolean":
-		_, ok := value.(bool)
-		return ok
-	case "integer":
-		switch value.(type) {
-		case int, int64, float64:
-			if number, ok := value.(float64); ok {
-				return number == float64(int64(number))
-			}
-			return true
-		default:
-			return false
-		}
-	case "number":
-		switch value.(type) {
-		case int, int64, float64:
-			return true
-		default:
-			return false
-		}
-	case "object":
-		_, ok := value.(map[string]any)
-		return ok
-	case "array":
-		_, ok := value.([]any)
-		return ok
-	default:
-		return true
-	}
 }
 
 func decodeBody(w http.ResponseWriter, r *http.Request, out any) bool {

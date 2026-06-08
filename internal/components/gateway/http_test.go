@@ -190,6 +190,25 @@ func TestGatewayDiscoveryInvokeAndJobProjection(t *testing.T) {
 	}
 }
 
+func TestGatewayRejectsInvalidInputTypeBeforeJobCreation(t *testing.T) {
+	env := newGatewayTestEnv(t)
+
+	envelope := env.doJSONEnvelope(http.MethodPost, "/v1/tools/cap_image_generate_gpu/invoke", map[string]any{
+		"input": map[string]any{"prompt": 123},
+	}, map[string]string{"Authorization": "Bearer token_agent", "Idempotency-Key": "invoke-invalid-type"}, http.StatusBadRequest)
+	errObj := envelope["error"].(map[string]any)
+	if errObj["code"] != "validation_failed" || !strings.Contains(errObj["message"].(string), "input.prompt must be string") {
+		t.Fatalf("error = %#v", errObj)
+	}
+	created, err := env.jobStore.List(jobs.ListFilter{})
+	if err != nil {
+		t.Fatalf("list jobs: %v", err)
+	}
+	if len(created) != 0 {
+		t.Fatalf("jobs were created for invalid input: %#v", created)
+	}
+}
+
 func TestGatewayAgentJobProjectionIncludesLeaseQueueStatus(t *testing.T) {
 	env := newGatewayTestEnv(t)
 
@@ -1012,10 +1031,16 @@ func testManifest() contracts.ProviderManifest {
 			Description:   "Generate an image using a GPU-backed provider.",
 			Tags:          []string{"image"},
 			ExecutionMode: "async",
-			InputSchema:   map[string]any{"type": "object"},
-			OutputSchema:  map[string]any{"type": "object"},
-			Examples:      []map[string]any{},
-			SideEffects:   "external",
+			InputSchema: map[string]any{
+				"type":     "object",
+				"required": []any{"prompt"},
+				"properties": map[string]any{
+					"prompt": map[string]any{"type": "string"},
+				},
+			},
+			OutputSchema: map[string]any{"type": "object"},
+			Examples:     []map[string]any{},
+			SideEffects:  "external",
 			ResourceHints: []contracts.ResourceHint{{
 				Selector: "gpu",
 				Required: true,
