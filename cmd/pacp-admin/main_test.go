@@ -645,6 +645,42 @@ func TestAlertsReportsLeaseExpirationFromRunnerMetrics(t *testing.T) {
 	}
 }
 
+func TestAlertsReportsArtifactMaterializationFromRunnerMetrics(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/health") {
+			writeHealth(t, w, http.StatusOK, "healthy")
+			return
+		}
+		if r.URL.Path == "/v1/runner/metrics" {
+			writeMetrics(t, w, http.StatusOK, "runner", []map[string]any{
+				{"name": "runner_errors_total", "value": 1, "unit": "count", "labels": map[string]string{"code": "artifact_upload_failed"}},
+			})
+			return
+		}
+		writeMetrics(t, w, http.StatusOK, "component", []map[string]any{})
+	}))
+	defer server.Close()
+
+	args := append(coreURLArgs(server.URL),
+		"-runner-url", server.URL,
+		"alerts",
+	)
+	var stdout, stderr bytes.Buffer
+	code := run(args, &stdout, &stderr, server.Client())
+	if code != 1 {
+		t.Fatalf("code=%d stderr=%s stdout=%s", code, stderr.String(), stdout.String())
+	}
+	output := stdout.String()
+	for _, expected := range []string{
+		`"code": "artifact_materialization_failed"`,
+		`artifact materialization failure`,
+	} {
+		if !strings.Contains(output, expected) {
+			t.Fatalf("stdout missing %q:\n%s", expected, output)
+		}
+	}
+}
+
 func TestAlertsCanIncludeNodeRegistryFindings(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {

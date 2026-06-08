@@ -2290,8 +2290,14 @@ func addMetricFindings(report *alertsReport, item metricsItem, opts alertOptions
 				addAlertFinding(report, diagnosticFinding{Severity: severity, Code: "runner_dependency_unreachable", Message: fmt.Sprintf("%s dependency %s is unreachable", item.Name, dependency)})
 			}
 		case "runner_errors_total":
-			if sample.Value > 0 && sample.Labels["code"] == "lease_expired" {
+			if sample.Value <= 0 {
+				continue
+			}
+			switch sample.Labels["code"] {
+			case "lease_expired":
 				addAlertFinding(report, diagnosticFinding{Severity: "error", Code: "lease_heartbeat_expired", Message: fmt.Sprintf("%s recorded %.0f resource lease expiration error(s)", item.Name, sample.Value)})
+			case "artifact_upload_failed":
+				addAlertFinding(report, diagnosticFinding{Severity: "error", Code: "artifact_materialization_failed", Message: fmt.Sprintf("%s recorded %.0f artifact materialization failure(s)", item.Name, sample.Value)})
 			}
 		case "jobs_by_state":
 			state := sample.Labels["state"]
