@@ -36,8 +36,9 @@ Contract simulation data is kept as test input, not as product behavior.
   snapshots.
 - `internal/components/node`: runtime node agent with local auth, resource
   advertisement, fake, process, and Docker service lifecycle adapters, idle
-  shutdown accounting, lifecycle event log, health, lease resource export, and
-  service status APIs.
+  shutdown accounting, lifecycle event log, health, lease resource export,
+  optional node registry registration and heartbeat reporting, and service
+  status APIs.
 - `internal/testkit`: contract-simulation fixture loader, fixture-backed HTTP
   fake server, reusable public component/provider fakes, and fixture replay
   helpers for live handler contract tests. The reusable provider fake includes
@@ -159,6 +160,7 @@ go run ./cmd/pacp-admin policy check -subject-id sub_agent -action tool.invoke -
 PACP_PROVIDER_TOKEN='secret-value' go run ./cmd/pacp-admin policy create-secret -name provider_token -value-env PACP_PROVIDER_TOKEN
 go run ./cmd/pacp-bundle -bundle testdata/deploy/generic-gpu-bundle.json -out-dir /tmp/pacp-bundle
 go run ./cmd/pacp-primary -manifest /tmp/pacp-bundle/catalog -resources /tmp/pacp-bundle/leases/resources.json -policy-seed /tmp/pacp-bundle/policy/policy-seed.json -state-dir /tmp/pacp-primary-state -artifact-root /tmp/pacp-primary-artifacts -disable-runner
+go run ./cmd/pacp-node -addr localhost:18087 -config testdata/node/linux-gpu-fake.json -node-registry-url http://localhost:18080 -node-registry-credential token_component -node-public-url http://linux-box:18087 -node-registry-register -node-registry-heartbeat 30s
 go run ./cmd/pacp-control -gateway-url http://localhost:18086 health
 go run ./cmd/pacp-control -gateway-url http://localhost:18086 -token token_agent tools
 go run ./cmd/pacp-control -gateway-url http://localhost:18086 -token token_agent invoke cap_dev_echo -idempotency-key echo-1 -input '{"message":"hello"}'
@@ -227,6 +229,13 @@ Node resource declarations can be converted into lease resource seed files:
 go run ./cmd/pacp-node -config testdata/node/linux-gpu-fake.json -export-lease-resources
 ```
 
+`pacp-node` can also report itself to a node registry through the public
+registry API. Use `-node-registry-register` with `-node-public-url` to create or
+refresh a registry record at startup, and `-node-registry-heartbeat 30s` to keep
+the record reachable while the node process is running. Self-registration
+defaults to the registry's trust rules, so an operator can still promote or
+disable trust explicitly with `pacp-admin node-registry trust`.
+
 Direct job creation/cancellation, node service start/touch/stop, and lease release
 are side-effecting operations and require an `Idempotency-Key`. The gateway sets
 the job creation and cancellation headers for public invocations, `pacp-admin jobs
@@ -248,9 +257,11 @@ worker routes still use the worker credential. When the node registry is
 transport-protected by a component token, set
 `PACP_RUNNER_NODE_REGISTRY_CREDENTIAL` or `-node-registry-credential` so node
 trust lookups use the component credential while node service calls still use
-the worker credential. In `pacp-primary`, `-component-token` also becomes the
-default embedded gateway credential, embedded runner credential, embedded runner
-policy credential, and embedded runner node-registry credential unless the more
+the worker credential. `pacp-node` uses `PACP_NODE_REGISTRY_CREDENTIAL` or
+`-node-registry-credential` when it self-registers or heartbeats to the node
+registry. In `pacp-primary`, `-component-token` also becomes the default
+embedded gateway credential, embedded runner credential, embedded runner policy
+credential, and embedded runner node-registry credential unless the more
 specific gateway or runner credential flags are set. Raw tokens and
 `Bearer ...` values are both accepted. Leaving the token unset keeps local
 service endpoints open for quick isolated testing. The example policy seed
