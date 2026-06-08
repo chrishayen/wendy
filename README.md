@@ -94,7 +94,7 @@ go run ./cmd/pacp-dev -state-dir /tmp/pacp-dev-state
 PACP_HTTP_ECHO_TOKEN='Bearer dev-token' go run ./cmd/pacp-http-provider -addr localhost:18088 -manifest testdata/http-provider/echo-manifest.json -routes testdata/http-provider/echo-routes.json -endpoint http://localhost:18088
 go run ./cmd/pacp-command-provider -addr localhost:18088 -manifest provider-manifest.json -routes command-routes.json -endpoint http://localhost:18088
 go run ./cmd/pacp-browser-search-provider -addr localhost:18089 -search-index testdata/browser-search/index.json -allowed-hosts localhost,127.0.0.1
-go run ./cmd/pacp-comfyui-provider -addr localhost:18090 -dry-run -workflow testdata/comfyui/workflow-template.json -lora-catalog testdata/comfyui/loras.json
+go run ./cmd/pacp-comfyui-provider -addr localhost:18090 -dry-run -workflow testdata/comfyui/workflow-template.json -lora-catalog testdata/comfyui/loras.json -runner-tokens token_worker
 go run ./cmd/pacp-speech-provider -addr localhost:18091 -dry-run -voice-catalog testdata/speech/catalog.json
 go run ./cmd/pacp-ai-toolkit-provider -addr localhost:18092 -dry-run -workspace testdata/ai-toolkit
 go run ./cmd/pacp-admin health
@@ -193,6 +193,12 @@ both accepted. Leaving the token unset keeps local service endpoints open for
 quick isolated testing. The example policy seed creates logical policy
 credentials for the gateway, runner, and local agent; component endpoint
 authentication is a separate transport guard.
+Provider endpoints may also enforce runner/component bearer tokens. The
+ComfyUI provider accepts `-runner-tokens`, `-component-tokens`, and
+`-agent-tokens`; the first two are allowed to invoke and fetch provider-local
+content, while configured agent tokens are authenticated but forbidden. The
+flags default from `PACP_PROVIDER_RUNNER_TOKENS`, `PACP_RUNNER_CREDENTIAL`,
+`PACP_PROVIDER_COMPONENT_TOKENS`, and `PACP_COMPONENT_TOKEN`.
 When `pacp-runner` is given `-policy-url`, or when the primary embedded runner
 uses the co-hosted policy service, the runner credential should identify a
 subject with `worker` scope so `provider.invoke` is allowed intentionally.
@@ -211,6 +217,12 @@ format is comma-separated `node_id=URL` entries, for example
 HTTP provider bridge route files can set literal `headers` for non-secret
 values and `headers_from_env` for backend credentials that must not be stored in
 JSON config.
+
+ComfyUI image generation returns provider-local `content_refs` to the runner.
+The runner dereferences `/v1/provider/artifacts/{content_ref}/content`, verifies
+the size/checksum/digest, uploads the bytes to C07, and completes the job with
+durable C07 artifact ids. Provider-local content refs are runner-facing only and
+must not be returned to agents.
 
 `pacp-jobs` can use C08-backed route-aware auth instead of the coarse component
 transport token by setting `-policy-url`. In that mode callers present their
