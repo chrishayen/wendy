@@ -1613,6 +1613,45 @@ func TestPolicyRevokeKeyCommandPostsRevoke(t *testing.T) {
 	}
 }
 
+func TestPolicyRotateKeyCommandPostsRotate(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/v1/api-keys/key_1/rotate" {
+			t.Fatalf("request = %s %s", r.Method, r.URL.Path)
+		}
+		if r.Header.Get("Authorization") != "Bearer component-token" {
+			t.Fatalf("Authorization = %q", r.Header.Get("Authorization"))
+		}
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatalf("decode body: %v", err)
+		}
+		if body["token"] != "token_rotated" {
+			t.Fatalf("body = %#v", body)
+		}
+		writeEnvelope(t, w, http.StatusOK, map[string]any{
+			"key_id":     "key_1",
+			"subject_id": "sub_admin",
+			"token":      "token_rotated",
+			"rotated_at": "2026-06-07T00:00:00Z",
+		})
+	}))
+	defer server.Close()
+
+	var stdout, stderr bytes.Buffer
+	code := run([]string{
+		"-policy-url", server.URL,
+		"-component-token", "component-token",
+		"policy", "rotate-key", "key_1",
+		"-token", "token_rotated",
+	}, &stdout, &stderr, server.Client())
+	if code != 0 {
+		t.Fatalf("code=%d stderr=%s stdout=%s", code, stderr.String(), stdout.String())
+	}
+	if !strings.Contains(stdout.String(), `"token": "token_rotated"`) || !strings.Contains(stdout.String(), `"rotated_at": "2026-06-07T00:00:00Z"`) {
+		t.Fatalf("stdout = %s", stdout.String())
+	}
+}
+
 func TestPolicyCheckCommandPostsDecisionRequest(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost || r.URL.Path != "/v1/policy/check" {

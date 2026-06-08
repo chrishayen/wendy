@@ -827,11 +827,13 @@ func artifactsRegisterLocalCommand(cfg adminConfig, httpClient *http.Client, arg
 
 func policyCommand(cfg adminConfig, httpClient *http.Client, args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
-		return usage(stderr, "usage: pacp-admin [flags] policy <create-key|revoke-key|verify|check|create-rule|create-secret|redact>")
+		return usage(stderr, "usage: pacp-admin [flags] policy <create-key|rotate-key|revoke-key|verify|check|create-rule|create-secret|redact>")
 	}
 	switch args[0] {
 	case "create-key":
 		return policyCreateKeyCommand(cfg, httpClient, args[1:], stdout, stderr)
+	case "rotate-key":
+		return policyRotateKeyCommand(cfg, httpClient, args[1:], stdout, stderr)
 	case "revoke-key":
 		if len(args) != 2 {
 			return usage(stderr, "usage: pacp-admin [flags] policy revoke-key <key-id>")
@@ -848,7 +850,7 @@ func policyCommand(cfg adminConfig, httpClient *http.Client, args []string, stdo
 	case "redact":
 		return policyRedactCommand(cfg, httpClient, args[1:], stdout, stderr)
 	default:
-		return usage(stderr, "usage: pacp-admin [flags] policy <create-key|revoke-key|verify|check|create-rule|create-secret|redact>")
+		return usage(stderr, "usage: pacp-admin [flags] policy <create-key|rotate-key|revoke-key|verify|check|create-rule|create-secret|redact>")
 	}
 }
 
@@ -874,6 +876,21 @@ func policyCreateKeyCommand(cfg adminConfig, httpClient *http.Client, args []str
 	}
 	req := contracts.CreateAPIKeyRequest{SubjectID: *subjectID, Scopes: scopeList, Token: *token}
 	return postJSONBody(cfg, httpClient, cfg.PolicyURL, "/v1/api-keys", authorizationHeader(cfg.ComponentToken), "", req, stdout, stderr)
+}
+
+func policyRotateKeyCommand(cfg adminConfig, httpClient *http.Client, args []string, stdout, stderr io.Writer) int {
+	flags := flag.NewFlagSet("policy rotate-key", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	token := flags.String("token", "", "optional explicit replacement token")
+	remaining, err := parseSubcommandFlags(flags, args)
+	if err != nil {
+		return 2
+	}
+	if len(remaining) != 1 {
+		return usage(stderr, "usage: pacp-admin [flags] policy rotate-key <key-id> [-token token]")
+	}
+	req := contracts.RotateAPIKeyRequest{Token: *token}
+	return postJSONBody(cfg, httpClient, cfg.PolicyURL, "/v1/api-keys/"+url.PathEscape(remaining[0])+"/rotate", authorizationHeader(cfg.ComponentToken), "", req, stdout, stderr)
 }
 
 func policyVerifyCommand(cfg adminConfig, httpClient *http.Client, args []string, stdout, stderr io.Writer) int {

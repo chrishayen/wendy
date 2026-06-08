@@ -236,6 +236,41 @@ func (s *Store) RevokeAPIKey(keyID string) (contracts.APIKeyRecord, error) {
 	return out, nil
 }
 
+func (s *Store) RotateAPIKey(keyID string, req contracts.RotateAPIKeyRequest) (contracts.APIKeyRecord, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	record, ok := s.keysByID[keyID]
+	if !ok {
+		return contracts.APIKeyRecord{}, ErrNotFound
+	}
+	if record.revoked {
+		return contracts.APIKeyRecord{}, fmt.Errorf("%w: revoked api key cannot be rotated", ErrValidation)
+	}
+	token := req.Token
+	if token == "" {
+		token = fmt.Sprintf("token_%06d", s.nextKeyID)
+		s.nextKeyID++
+	}
+	if tokenHasWhitespace(token) {
+		return contracts.APIKeyRecord{}, fmt.Errorf("%w: token must not contain whitespace", ErrValidation)
+	}
+	if existing, exists := s.keysByToken[token]; exists {
+		if existing == record {
+			return contracts.APIKeyRecord{}, ErrConflict
+		}
+		return contracts.APIKeyRecord{}, ErrConflict
+	}
+	delete(s.keysByToken, record.token)
+	record.token = token
+	record.record.Token = token
+	record.record.RotatedAt = s.formatNow()
+	s.keysByToken[token] = record
+	if err := s.saveLocked(); err != nil {
+		return contracts.APIKeyRecord{}, err
+	}
+	return cloneAPIKey(record.record), nil
+}
+
 func (s *Store) CreateRule(req contracts.CreatePolicyRuleRequest) (contracts.PolicyRule, error) {
 	normalized, err := normalizePolicyRuleRequest(req)
 	if err != nil {

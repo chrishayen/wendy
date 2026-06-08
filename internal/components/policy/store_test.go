@@ -38,6 +38,28 @@ func TestStoreCreatesVerifiesAndRevokesAPIKeys(t *testing.T) {
 		t.Fatalf("unknown response = %#v", unknown)
 	}
 
+	rotated, err := store.RotateAPIKey(key.KeyID, contracts.RotateAPIKeyRequest{Token: "token_agent_rotated"})
+	if err != nil {
+		t.Fatalf("rotate key: %v", err)
+	}
+	if rotated.KeyID != key.KeyID || rotated.Token != "token_agent_rotated" || rotated.RotatedAt == "" {
+		t.Fatalf("rotated response = %#v", rotated)
+	}
+	oldToken, err := store.VerifyCredential(contracts.VerifyCredentialRequest{Credential: "Bearer token_agent"})
+	if err != nil {
+		t.Fatalf("verify old token after rotate: %v", err)
+	}
+	if oldToken.Valid {
+		t.Fatalf("old rotated credential verified: %#v", oldToken)
+	}
+	newToken, err := store.VerifyCredential(contracts.VerifyCredentialRequest{Credential: "Bearer token_agent_rotated"})
+	if err != nil {
+		t.Fatalf("verify new token after rotate: %v", err)
+	}
+	if !newToken.Valid || newToken.SubjectID == nil || *newToken.SubjectID != "sub_agent" {
+		t.Fatalf("new rotated credential = %#v", newToken)
+	}
+
 	_, err = store.VerifyCredential(contracts.VerifyCredentialRequest{Credential: "bearer token_agent"})
 	if !errors.Is(err, ErrMalformedCredential) {
 		t.Fatalf("expected malformed credential, got %v", err)
@@ -50,12 +72,16 @@ func TestStoreCreatesVerifiesAndRevokesAPIKeys(t *testing.T) {
 	if revoked.Token != "" || revoked.RevokedAt == "" {
 		t.Fatalf("revoked response = %#v", revoked)
 	}
-	afterRevoke, err := store.VerifyCredential(contracts.VerifyCredentialRequest{Credential: "Bearer token_agent"})
+	afterRevoke, err := store.VerifyCredential(contracts.VerifyCredentialRequest{Credential: "Bearer token_agent_rotated"})
 	if err != nil {
 		t.Fatalf("verify revoked: %v", err)
 	}
 	if afterRevoke.Valid {
 		t.Fatalf("revoked credential verified: %#v", afterRevoke)
+	}
+	_, err = store.RotateAPIKey(key.KeyID, contracts.RotateAPIKeyRequest{Token: "token_after_revoke"})
+	if !errors.Is(err, ErrValidation) {
+		t.Fatalf("expected revoked key validation error, got %v", err)
 	}
 }
 

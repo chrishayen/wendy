@@ -138,6 +138,7 @@ go run ./cmd/pacp-admin artifacts put-content upload_000001 -file /tmp/output.tx
 go run ./cmd/pacp-admin artifacts complete-upload upload_000001 -file /tmp/output.txt -idempotency-key upload-complete-1
 go run ./cmd/pacp-admin artifacts register-local -path blobs/output.txt -name output.txt -media-type text/plain -owner-subject-id sub_admin
 go run ./cmd/pacp-admin policy create-key -subject-id sub_admin -scopes admin,component
+go run ./cmd/pacp-admin policy rotate-key key_000001
 go run ./cmd/pacp-admin policy check -subject-id sub_agent -action tool.invoke -resource cap_image_generate
 PACP_PROVIDER_TOKEN='secret-value' go run ./cmd/pacp-admin policy create-secret -name provider_token -value-env PACP_PROVIDER_TOKEN
 go run ./cmd/pacp-bundle -bundle testdata/deploy/generic-gpu-bundle.json -out-dir /tmp/pacp-bundle
@@ -318,6 +319,9 @@ The policy seed and state files store API tokens and secret values. Keep them
 private and outside shared artifact directories. Reapplying the same policy
 seed is idempotent, but startup fails if an existing token or secret name has
 drifted from the seed.
+Use `pacp-admin policy rotate-key` when a credential should keep the same key id
+and subject/scopes but receive a replacement bearer token. The old token stops
+verifying immediately after rotation.
 
 The catalog and gateway can then be queried:
 

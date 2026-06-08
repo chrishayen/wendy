@@ -861,6 +861,25 @@ paths:
           $ref: "#/components/responses/Success"
         default:
           $ref: "#/components/responses/Error"
+  /v1/api-keys/{key_id}/rotate:
+    post:
+      tags: [policy]
+      operationId: rotateAPIKey
+      x-operation-audience: admin
+      x-policy-action: policy.api_key.rotate
+      parameters:
+        - $ref: "#/components/parameters/KeyID"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RotateAPIKeyRequest"
+      responses:
+        "200":
+          $ref: "#/components/responses/Success"
+        default:
+          $ref: "#/components/responses/Error"
   /v1/auth/verify:
     post:
       tags: [policy]
@@ -1774,6 +1793,11 @@ components:
           type: array
           items:
             type: string
+        token:
+          type: string
+    RotateAPIKeyRequest:
+      type: object
+      properties:
         token:
           type: string
     VerifyCredentialRequest:

@@ -55,8 +55,25 @@ func (h Handler) serveHTTP(w http.ResponseWriter, r *http.Request) {
 
 func (h Handler) apiKeyRoute(w http.ResponseWriter, r *http.Request, tail string) {
 	parts := strings.Split(tail, "/")
+	if len(parts) != 2 || r.Method != http.MethodPost {
+		writeError(w, r, http.StatusNotFound, "not_found", "api key route not found", false)
+		return
+	}
 	if len(parts) == 2 && parts[1] == "revoke" && r.Method == http.MethodPost {
 		record, err := h.store.RevokeAPIKey(parts[0])
+		if err != nil {
+			writeStoreError(w, r, err)
+			return
+		}
+		writeSuccess(w, r, http.StatusOK, record)
+		return
+	}
+	if parts[1] == "rotate" {
+		var req contracts.RotateAPIKeyRequest
+		if !decodeBody(w, r, &req) {
+			return
+		}
+		record, err := h.store.RotateAPIKey(parts[0], req)
 		if err != nil {
 			writeStoreError(w, r, err)
 			return

@@ -12,7 +12,12 @@ type APIKeyRecord struct {
 	Scopes    []string `json:"scopes"`
 	Token     string   `json:"token,omitempty"`
 	CreatedAt string   `json:"created_at"`
+	RotatedAt string   `json:"rotated_at,omitempty"`
 	RevokedAt string   `json:"revoked_at,omitempty"`
+}
+
+type RotateAPIKeyRequest struct {
+	Token string `json:"token,omitempty"`
 }
 
 type VerifyCredentialRequest struct {

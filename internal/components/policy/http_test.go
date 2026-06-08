@@ -73,6 +73,25 @@ func TestHandlerCredentialPolicyAndSecretFlow(t *testing.T) {
 		t.Fatalf("verify = %#v", verify)
 	}
 
+	rotated := doJSON(t, handler, http.MethodPost, "/v1/api-keys/"+key["key_id"].(string)+"/rotate", map[string]any{
+		"token": "token_agent_rotated",
+	}, http.StatusOK)
+	if rotated["token"] != "token_agent_rotated" || rotated["rotated_at"] == "" {
+		t.Fatalf("rotated = %#v", rotated)
+	}
+	oldToken := doJSON(t, handler, http.MethodPost, "/v1/auth/verify", map[string]any{
+		"credential": "Bearer token_agent",
+	}, http.StatusOK)
+	if oldToken["valid"] != false {
+		t.Fatalf("old token verified after rotate = %#v", oldToken)
+	}
+	newToken := doJSON(t, handler, http.MethodPost, "/v1/auth/verify", map[string]any{
+		"credential": "Bearer token_agent_rotated",
+	}, http.StatusOK)
+	if newToken["valid"] != true || newToken["subject_id"] != "sub_agent" {
+		t.Fatalf("new token verify = %#v", newToken)
+	}
+
 	decision := doJSON(t, handler, http.MethodPost, "/v1/policy/check", map[string]any{
 		"subject_id": "sub_agent",
 		"action":     "tool.invoke",
