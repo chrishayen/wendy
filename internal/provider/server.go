@@ -2,6 +2,7 @@ package provider
 
 import (
 	"context"
+	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -22,20 +23,44 @@ var (
 
 type CapabilityHandler func(context.Context, contracts.ProviderInvokeRequest) (contracts.ProviderInvokeResponse, error)
 
+type ServerOption func(*serverOptions)
+
+type serverOptions struct {
+	content        *ContentStore
+	authCredential string
+}
+
 type Server struct {
 	manifest          contracts.ProviderManifest
 	handlers          map[string]CapabilityHandler
 	content           *ContentStore
+	authCredential    string
 	now               func() time.Time
 	httpMetrics       *observability.HTTPMetrics
 	invocationMetrics *providerInvocationMetrics
 }
 
 func NewServer(manifest contracts.ProviderManifest, handlers map[string]CapabilityHandler) (*Server, error) {
-	return NewServerWithContentStore(manifest, handlers, NewContentStore())
+	return NewServerWithOptions(manifest, handlers)
 }
 
 func NewServerWithContentStore(manifest contracts.ProviderManifest, handlers map[string]CapabilityHandler, content *ContentStore) (*Server, error) {
+	return NewServerWithOptions(manifest, handlers, WithContentStore(content))
+}
+
+func WithContentStore(content *ContentStore) ServerOption {
+	return func(opts *serverOptions) {
+		opts.content = content
+	}
+}
+
+func WithAuthCredential(credential string) ServerOption {
+	return func(opts *serverOptions) {
+		opts.authCredential = normalizeProviderCredential(credential)
+	}
+}
+
+func NewServerWithOptions(manifest contracts.ProviderManifest, handlers map[string]CapabilityHandler, opts ...ServerOption) (*Server, error) {
 	if errs := contracts.ValidateProviderManifest(manifest); len(errs) > 0 {
 		return nil, fmt.Errorf("%w: %s", ErrValidation, strings.Join(errs, "; "))
 	}
@@ -44,13 +69,21 @@ func NewServerWithContentStore(manifest contracts.ProviderManifest, handlers map
 			return nil, fmt.Errorf("%w: missing handler for %s", ErrValidation, capability.ID)
 		}
 	}
-	if content == nil {
-		content = NewContentStore()
+	options := serverOptions{content: NewContentStore()}
+	for _, opt := range opts {
+		if opt != nil {
+			opt(&options)
+		}
 	}
+	if options.content == nil {
+		options.content = NewContentStore()
+	}
+	options.authCredential = normalizeProviderCredential(options.authCredential)
 	return &Server{
 		manifest:          manifest,
 		handlers:          handlers,
-		content:           content,
+		content:           options.content,
+		authCredential:    options.authCredential,
 		now:               time.Now,
 		httpMetrics:       observability.NewHTTPMetrics(),
 		invocationMetrics: newProviderInvocationMetrics(),
@@ -86,13 +119,45 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		writeSuccess(w, r, http.StatusOK, contracts.NewComponentMetrics("provider", samples))
 	case r.Method == http.MethodPost && strings.HasPrefix(path, "/v1/provider/capabilities/") && strings.HasSuffix(path, "/invoke"):
 		capabilityID := strings.TrimSuffix(strings.TrimPrefix(path, "/v1/provider/capabilities/"), "/invoke")
+		if !s.authorizeProviderOperation(w, r) {
+			return
+		}
 		s.invoke(w, r, capabilityID)
 	case r.Method == http.MethodGet && strings.HasPrefix(path, "/v1/provider/artifacts/") && strings.HasSuffix(path, "/content"):
 		contentRef := strings.TrimSuffix(strings.TrimPrefix(path, "/v1/provider/artifacts/"), "/content")
+		if !s.authorizeProviderOperation(w, r) {
+			return
+		}
 		s.readContent(w, r, contentRef)
 	default:
 		writeError(w, r, http.StatusNotFound, "not_found", "provider route not found", false)
 	}
+}
+
+func (s *Server) authorizeProviderOperation(w http.ResponseWriter, r *http.Request) bool {
+	if s.authCredential == "" {
+		return true
+	}
+	if subtle.ConstantTimeCompare([]byte(r.Header.Get("Authorization")), []byte(s.authCredential)) == 1 {
+		return true
+	}
+	writeError(w, r, http.StatusUnauthorized, "unauthorized", "provider bearer token is required", false)
+	return false
+}
+
+func normalizeProviderCredential(credential string) string {
+	credential = strings.TrimSpace(credential)
+	if credential == "" {
+		return ""
+	}
+	if strings.HasPrefix(strings.ToLower(credential), "bearer ") {
+		token := strings.TrimSpace(credential[len("bearer "):])
+		if token == "" {
+			return ""
+		}
+		return "Bearer " + token
+	}
+	return "Bearer " + credential
 }
 
 func (s *Server) invoke(w http.ResponseWriter, r *http.Request, capabilityID string) {

@@ -41,6 +41,7 @@ type Config struct {
 	ServiceID                 string
 	ServiceName               string
 	Version                   string
+	AuthCredential            string
 	DatasetRegisterCapability string
 	DatasetListCapability     string
 	DatasetInspectCapability  string
@@ -123,7 +124,7 @@ func NewServer(cfg Config) (*provider.Server, error) {
 	if err := p.loadState(); err != nil {
 		return nil, err
 	}
-	return provider.NewServer(manifest(normalized), map[string]provider.CapabilityHandler{
+	return provider.NewServerWithOptions(manifest(normalized), map[string]provider.CapabilityHandler{
 		normalized.DatasetRegisterCapability: p.registerDataset,
 		normalized.DatasetListCapability:     p.listDatasets,
 		normalized.DatasetInspectCapability:  p.inspectDataset,
@@ -131,7 +132,7 @@ func NewServer(cfg Config) (*provider.Server, error) {
 		normalized.TrainCapability:           p.train,
 		normalized.OutputListCapability:      p.listOutputs,
 		normalized.OutputInspectCapability:   p.inspectOutput,
-	})
+	}, provider.WithAuthCredential(normalized.AuthCredential))
 }
 
 func normalizeConfig(cfg Config) (Config, error) {

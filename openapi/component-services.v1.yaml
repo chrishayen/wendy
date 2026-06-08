@@ -1243,7 +1243,9 @@ paths:
       operationId: invokeProviderCapability
       x-operation-audience: worker
       x-policy-action: provider.invoke
-      security: []
+      security:
+        - providerBearer: []
+        - {}
       parameters:
         - $ref: "#/components/parameters/CapabilityID"
       requestBody:
@@ -1268,7 +1270,9 @@ paths:
       x-policy-action: provider.content.read
       summary: Retrieve provider-local result content for a completed invocation.
       description: Runner-facing content handoff for opaque provider content refs.
-      security: []
+      security:
+        - providerBearer: []
+        - {}
       parameters:
         - $ref: "#/components/parameters/ProviderContentRef"
       responses:
@@ -1331,6 +1335,10 @@ components:
       type: http
       scheme: bearer
       description: Node-local bearer credential configured in the node config file.
+    providerBearer:
+      type: http
+      scheme: bearer
+      description: Optional bearer credential configured by provider deployments for invoke and content routes.
     runnerMonitorBearer:
       type: http
       scheme: bearer

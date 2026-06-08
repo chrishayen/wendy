@@ -22,6 +22,7 @@ func main() {
 	serviceID := flag.String("service-id", aitoolkit.DefaultServiceID, "provider service id")
 	serviceName := flag.String("service-name", "AI-Toolkit Provider", "provider service name")
 	workspaceRoot := flag.String("workspace", os.Getenv("PACP_AI_TOOLKIT_WORKSPACE"), "provider workspace root")
+	providerCredential := flag.String("provider-credential", envFirst("PACP_PROVIDER_CREDENTIAL", "PACP_PROVIDER_TOKEN"), "optional provider bearer credential required for invoke and content routes")
 	engineConfigPath := flag.String("engine-config", "", "optional training engine command config JSON path")
 	dryRun := flag.Bool("dry-run", false, "simulate training without invoking AI-Toolkit")
 	timeout := flag.Duration("timeout", time.Hour, "training command timeout")
@@ -36,13 +37,14 @@ func main() {
 		advertisedEndpoint = defaultEndpoint(*addr)
 	}
 	server, err := aitoolkit.NewServer(aitoolkit.Config{
-		Endpoint:      advertisedEndpoint,
-		ServiceID:     *serviceID,
-		ServiceName:   *serviceName,
-		WorkspaceRoot: *workspaceRoot,
-		DryRun:        *dryRun,
-		TrainCommand:  engineConfig.TrainCommand,
-		Timeout:       *timeout,
+		Endpoint:       advertisedEndpoint,
+		ServiceID:      *serviceID,
+		ServiceName:    *serviceName,
+		AuthCredential: *providerCredential,
+		WorkspaceRoot:  *workspaceRoot,
+		DryRun:         *dryRun,
+		TrainCommand:   engineConfig.TrainCommand,
+		Timeout:        *timeout,
 	})
 	if err != nil {
 		log.Fatal(err)
@@ -73,4 +75,13 @@ func defaultEndpoint(addr string) string {
 		addr = "localhost" + addr
 	}
 	return "http://" + addr
+}
+
+func envFirst(names ...string) string {
+	for _, name := range names {
+		if value := os.Getenv(name); value != "" {
+			return value
+		}
+	}
+	return ""
 }

@@ -17,6 +17,7 @@ func main() {
 	serviceID := flag.String("service-id", "svc_browser_search", "provider service id")
 	serviceName := flag.String("service-name", "Browser Search Provider", "provider service name")
 	searchIndex := flag.String("search-index", "", "optional JSON search index path")
+	providerCredential := flag.String("provider-credential", envFirst("PACP_PROVIDER_CREDENTIAL", "PACP_PROVIDER_TOKEN"), "optional provider bearer credential required for invoke and content routes")
 	allowedHosts := flag.String("allowed-hosts", envOrDefault("PACP_BROWSER_ALLOWED_HOSTS", "localhost,127.0.0.1,::1"), "comma-separated allowed browser hosts; use * only for trusted deployments")
 	allowHTTP := flag.Bool("allow-http", false, "allow non-loopback http URLs")
 	timeout := flag.Duration("timeout", 30*time.Second, "browser request timeout")
@@ -30,6 +31,7 @@ func main() {
 		Endpoint:        advertisedEndpoint,
 		ServiceID:       *serviceID,
 		ServiceName:     *serviceName,
+		AuthCredential:  *providerCredential,
 		SearchIndexPath: *searchIndex,
 		AllowedHosts:    splitCSV(*allowedHosts),
 		AllowHTTP:       *allowHTTP,
@@ -68,4 +70,13 @@ func envOrDefault(name, fallback string) string {
 		return value
 	}
 	return fallback
+}
+
+func envFirst(names ...string) string {
+	for _, name := range names {
+		if value := os.Getenv(name); value != "" {
+			return value
+		}
+	}
+	return ""
 }

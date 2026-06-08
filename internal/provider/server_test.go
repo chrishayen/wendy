@@ -32,6 +32,65 @@ func TestServerManifestHealthAndInvoke(t *testing.T) {
 	}
 }
 
+func TestServerOptionalAuthProtectsInvokeAndContent(t *testing.T) {
+	contentStore := NewContentStore()
+	ref, err := contentStore.Put(ContentPut{
+		ContentRef: "pcr_auth_text",
+		JobID:      "job_auth",
+		Name:       "result.txt",
+		MediaType:  "text/plain",
+		Body:       []byte("protected provider content"),
+	})
+	if err != nil {
+		t.Fatalf("put content: %v", err)
+	}
+	server, err := NewServerWithOptions(testManifest(), map[string]CapabilityHandler{
+		"cap_echo": func(ctx context.Context, req contracts.ProviderInvokeRequest) (contracts.ProviderInvokeResponse, error) {
+			return contracts.ProviderInvokeResponse{Output: map[string]any{"message": req.Input["message"]}}, nil
+		},
+	}, WithContentStore(contentStore), WithAuthCredential("provider-token"))
+	if err != nil {
+		t.Fatalf("new provider: %v", err)
+	}
+
+	doJSON(t, server, http.MethodGet, "/v1/provider/manifest", nil, http.StatusOK)
+	doJSON(t, server, http.MethodGet, "/v1/provider/health", nil, http.StatusOK)
+
+	unauthorized := doJSONEnvelope(t, server, http.MethodPost, "/v1/provider/capabilities/cap_echo/invoke", map[string]any{
+		"input": map[string]any{"message": "hello"},
+	}, http.StatusUnauthorized)
+	errObj := unauthorized["error"].(map[string]any)
+	if errObj["code"] != "unauthorized" {
+		t.Fatalf("unauthorized error = %#v", errObj)
+	}
+
+	response := doJSONWithHeaders(t, server, http.MethodPost, "/v1/provider/capabilities/cap_echo/invoke", map[string]any{
+		"input": map[string]any{"message": "hello"},
+	}, map[string]string{"Authorization": "Bearer provider-token"}, http.StatusOK)
+	output := response["output"].(map[string]any)
+	if output["message"] != "hello" {
+		t.Fatalf("authorized response = %#v", response)
+	}
+
+	missingAuth := httptest.NewRequest(http.MethodGet, "/v1/provider/artifacts/"+ref.ContentRef+"/content", nil)
+	missingAuthRec := httptest.NewRecorder()
+	server.ServeHTTP(missingAuthRec, missingAuth)
+	if missingAuthRec.Code != http.StatusUnauthorized {
+		t.Fatalf("content without auth status=%d body=%s", missingAuthRec.Code, missingAuthRec.Body.String())
+	}
+
+	withAuth := httptest.NewRequest(http.MethodGet, "/v1/provider/artifacts/"+ref.ContentRef+"/content", nil)
+	withAuth.Header.Set("Authorization", "Bearer provider-token")
+	withAuthRec := httptest.NewRecorder()
+	server.ServeHTTP(withAuthRec, withAuth)
+	if withAuthRec.Code != http.StatusOK {
+		t.Fatalf("content with auth status=%d body=%s", withAuthRec.Code, withAuthRec.Body.String())
+	}
+	if withAuthRec.Header().Get("Content-Type") != "text/plain" || withAuthRec.Body.String() != "protected provider content" {
+		t.Fatalf("content headers=%#v body=%q", withAuthRec.Header(), withAuthRec.Body.String())
+	}
+}
+
 func TestServerRejectsInvalidInput(t *testing.T) {
 	server := newTestProvider(t)
 	envelope := doJSONEnvelope(t, server, http.MethodPost, "/v1/provider/capabilities/cap_echo/invoke", map[string]any{
@@ -418,7 +477,21 @@ func doJSON(t *testing.T, handler http.Handler, method, path string, body any, w
 	return envelope["data"].(map[string]any)
 }
 
+func doJSONWithHeaders(t *testing.T, handler http.Handler, method, path string, body any, headers map[string]string, wantStatus int) map[string]any {
+	t.Helper()
+	envelope := doJSONEnvelopeWithHeaders(t, handler, method, path, body, headers, wantStatus)
+	if !envelope["ok"].(bool) {
+		t.Fatalf("error response for %s %s: %#v", method, path, envelope)
+	}
+	return envelope["data"].(map[string]any)
+}
+
 func doJSONEnvelope(t *testing.T, handler http.Handler, method, path string, body any, wantStatus int) map[string]any {
+	t.Helper()
+	return doJSONEnvelopeWithHeaders(t, handler, method, path, body, nil, wantStatus)
+}
+
+func doJSONEnvelopeWithHeaders(t *testing.T, handler http.Handler, method, path string, body any, headers map[string]string, wantStatus int) map[string]any {
 	t.Helper()
 	var raw bytes.Buffer
 	if body != nil {
@@ -429,6 +502,9 @@ func doJSONEnvelope(t *testing.T, handler http.Handler, method, path string, bod
 	req := httptest.NewRequest(method, path, &raw)
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
+	}
+	for key, value := range headers {
+		req.Header.Set(key, value)
 	}
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)

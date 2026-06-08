@@ -85,6 +85,30 @@ func TestCommandBridgeSupportsEnvironmentFromSecret(t *testing.T) {
 	}
 }
 
+func TestCommandBridgeSupportsProviderAuthCredential(t *testing.T) {
+	server, err := NewCommandBridgeServer(bridgeManifest(), CommandBridgeConfig{
+		Routes: map[string]CommandBridgeRoute{
+			"cap_bridge_echo": {
+				Command: helperCommand(t, "echo"),
+			},
+		},
+		AuthCredential: "provider-token",
+	})
+	if err != nil {
+		t.Fatalf("new command bridge: %v", err)
+	}
+	unauthorized := invokeBridge(t, server, contracts.ProviderInvokeRequest{Input: map[string]any{"message": "hello"}})
+	if unauthorized.Code != http.StatusUnauthorized {
+		t.Fatalf("unauthorized status=%d body=%s", unauthorized.Code, unauthorized.Body.String())
+	}
+	authorized := invokeBridgeWithHeaders(t, server, contracts.ProviderInvokeRequest{Input: map[string]any{"message": "hello"}}, map[string]string{
+		"Authorization": "Bearer provider-token",
+	})
+	if authorized.Code != http.StatusOK {
+		t.Fatalf("authorized status=%d body=%s", authorized.Code, authorized.Body.String())
+	}
+}
+
 func TestCommandBridgeExposesInvokeContextEnvironment(t *testing.T) {
 	t.Setenv("PACP_TEST_COMMAND_TOKEN", "env-token")
 	server, err := NewCommandBridgeServer(bridgeManifest(), CommandBridgeConfig{

@@ -40,6 +40,7 @@ type Config struct {
 	ServiceID        string
 	ServiceName      string
 	Version          string
+	AuthCredential   string
 	TTSCapabilityID  string
 	STTCapabilityID  string
 	VoiceCatalogPath string
@@ -118,10 +119,10 @@ func NewServer(cfg Config) (*provider.Server, error) {
 		return nil, err
 	}
 	p := &speechProvider{cfg: normalized, voices: mapVoices(catalog.Voices), formats: mapFormats(catalog.Formats)}
-	return provider.NewServer(manifest(normalized, p.voices, p.formats), map[string]provider.CapabilityHandler{
+	return provider.NewServerWithOptions(manifest(normalized, p.voices, p.formats), map[string]provider.CapabilityHandler{
 		normalized.TTSCapabilityID: p.tts,
 		normalized.STTCapabilityID: p.stt,
-	})
+	}, provider.WithAuthCredential(normalized.AuthCredential))
 }
 
 func normalizeConfig(cfg Config) (Config, error) {

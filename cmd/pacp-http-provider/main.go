@@ -21,6 +21,7 @@ func main() {
 	manifestPath := flag.String("manifest", "", "provider manifest JSON path")
 	routesPath := flag.String("routes", "", "HTTP route config JSON path")
 	endpoint := flag.String("endpoint", providerEndpointDefault(), "provider endpoint advertised in the manifest")
+	providerCredential := flag.String("provider-credential", envFirst("PACP_PROVIDER_CREDENTIAL", "PACP_PROVIDER_TOKEN"), "optional provider bearer credential required for invoke and content routes")
 	policyURL := flag.String("policy-url", os.Getenv("PACP_PROVIDER_POLICY_URL"), "optional policy service base URL used to resolve route secret refs")
 	policyCredential := flag.String("policy-credential", envFirst("PACP_PROVIDER_POLICY_CREDENTIAL", "PACP_COMPONENT_TOKEN"), "optional policy service bearer credential used to resolve route secret refs")
 	secretSubjectID := flag.String("secret-subject-id", os.Getenv("PACP_PROVIDER_SECRET_SUBJECT_ID"), "optional policy subject id used to resolve route secret refs")
@@ -52,6 +53,7 @@ func main() {
 	server, err := provider.NewHTTPBridgeServer(manifest, provider.HTTPBridgeConfig{
 		Routes:         routeConfig.Routes,
 		SecretResolver: secretResolver(*policyURL, *policyCredential, *secretSubjectID),
+		AuthCredential: *providerCredential,
 	})
 	if err != nil {
 		log.Fatal(err)

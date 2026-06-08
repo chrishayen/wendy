@@ -17,6 +17,7 @@ import (
 type CommandBridgeConfig struct {
 	Routes         map[string]CommandBridgeRoute `json:"routes"`
 	SecretResolver SecretResolver                `json:"-"`
+	AuthCredential string                        `json:"-"`
 }
 
 type CommandBridgeRoute struct {
@@ -41,7 +42,7 @@ func NewCommandBridgeServer(manifest contracts.ProviderManifest, cfg CommandBrid
 		}
 		handlers[capability.ID] = commandBridgeHandler(normalized)
 	}
-	return NewServer(manifest, handlers)
+	return NewServerWithOptions(manifest, handlers, WithAuthCredential(cfg.AuthCredential))
 }
 
 func normalizeCommandBridgeRoute(ctx context.Context, route CommandBridgeRoute, secretResolver SecretResolver) (CommandBridgeRoute, error) {

@@ -35,6 +35,7 @@ type Config struct {
 	ServiceID       string
 	ServiceName     string
 	Version         string
+	AuthCredential  string
 	SearchIndexPath string
 	AllowedHosts    []string
 	AllowHTTP       bool
@@ -94,10 +95,10 @@ func NewServer(cfg Config) (*provider.Server, error) {
 			},
 		}
 	}
-	return provider.NewServer(manifest(normalized), map[string]provider.CapabilityHandler{
+	return provider.NewServerWithOptions(manifest(normalized), map[string]provider.CapabilityHandler{
 		SearchCapabilityID: p.search,
 		FetchCapabilityID:  p.fetch,
-	})
+	}, provider.WithAuthCredential(normalized.AuthCredential))
 }
 
 func normalizeConfig(cfg Config) Config {

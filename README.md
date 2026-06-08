@@ -250,6 +250,10 @@ ComfyUI provider accepts `-runner-tokens`, `-component-tokens`, and
 content, while configured agent tokens are authenticated but forbidden. The
 flags default from `PACP_PROVIDER_RUNNER_TOKENS`, `PACP_RUNNER_CREDENTIAL`,
 `PACP_PROVIDER_COMPONENT_TOKENS`, and `PACP_COMPONENT_TOKEN`.
+Generic SDK-backed provider binaries accept `-provider-credential`, defaulting
+from `PACP_PROVIDER_CREDENTIAL` or `PACP_PROVIDER_TOKEN`, to require a bearer
+credential for invoke and provider-local content routes. Manifest, health, and
+metrics routes remain readable for discovery and monitoring.
 Provider binaries accept `-endpoint` or `PACP_PROVIDER_ENDPOINT` for the
 provider URL advertised in manifests. Set it to the URL reachable by the
 runner, especially when the listen address is bound to `:port` or a node-local

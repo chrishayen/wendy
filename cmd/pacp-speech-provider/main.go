@@ -25,6 +25,7 @@ func main() {
 	ttsCapabilityID := flag.String("tts-capability-id", speech.DefaultTTSCapabilityID, "TTS capability id")
 	sttCapabilityID := flag.String("stt-capability-id", speech.DefaultSTTCapabilityID, "STT capability id")
 	voiceCatalogPath := flag.String("voice-catalog", "", "optional voice/model/format catalog JSON path")
+	providerCredential := flag.String("provider-credential", envFirst("PACP_PROVIDER_CREDENTIAL", "PACP_PROVIDER_TOKEN"), "optional provider bearer credential required for invoke and content routes")
 	engineConfigPath := flag.String("engine-config", "", "optional engine command config JSON path")
 	dryRun := flag.Bool("dry-run", false, "return deterministic TTS/STT responses without engine commands")
 	timeout := flag.Duration("timeout", time.Minute, "speech engine timeout")
@@ -42,6 +43,7 @@ func main() {
 		Endpoint:         advertisedEndpoint,
 		ServiceID:        *serviceID,
 		ServiceName:      *serviceName,
+		AuthCredential:   *providerCredential,
 		TTSCapabilityID:  *ttsCapabilityID,
 		STTCapabilityID:  *sttCapabilityID,
 		VoiceCatalogPath: *voiceCatalogPath,
@@ -79,4 +81,13 @@ func defaultEndpoint(addr string) string {
 		addr = "localhost" + addr
 	}
 	return "http://" + addr
+}
+
+func envFirst(names ...string) string {
+	for _, name := range names {
+		if value := os.Getenv(name); value != "" {
+			return value
+		}
+	}
+	return ""
 }

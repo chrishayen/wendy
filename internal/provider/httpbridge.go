@@ -40,6 +40,7 @@ type HTTPBridgeConfig struct {
 	Routes         map[string]HTTPBridgeRoute `json:"routes"`
 	Client         *http.Client               `json:"-"`
 	SecretResolver SecretResolver             `json:"-"`
+	AuthCredential string                     `json:"-"`
 }
 
 type HTTPBridgeRoute struct {
@@ -68,7 +69,7 @@ func NewHTTPBridgeServer(manifest contracts.ProviderManifest, cfg HTTPBridgeConf
 		}
 		handlers[capability.ID] = httpBridgeHandler(client, normalized)
 	}
-	return NewServer(manifest, handlers)
+	return NewServerWithOptions(manifest, handlers, WithAuthCredential(cfg.AuthCredential))
 }
 
 func normalizeHTTPBridgeRoute(ctx context.Context, route HTTPBridgeRoute, secretResolver SecretResolver) (HTTPBridgeRoute, error) {

@@ -18,6 +18,7 @@ import (
 func main() {
 	addr := flag.String("addr", "localhost:18088", "listen address")
 	endpoint := flag.String("endpoint", os.Getenv("PACP_PROVIDER_ENDPOINT"), "provider endpoint advertised in manifest")
+	providerCredential := flag.String("provider-credential", envFirst("PACP_PROVIDER_CREDENTIAL", "PACP_PROVIDER_TOKEN"), "optional provider bearer credential required for invoke and content routes")
 	flag.Parse()
 	advertisedEndpoint := *endpoint
 	if advertisedEndpoint == "" {
@@ -25,10 +26,10 @@ func main() {
 	}
 
 	manifest := fakeManifest(advertisedEndpoint)
-	server, err := provider.NewServer(manifest, map[string]provider.CapabilityHandler{
+	server, err := provider.NewServerWithOptions(manifest, map[string]provider.CapabilityHandler{
 		"cap_echo":       echoHandler,
 		"cap_fake_image": fakeImageHandler,
-	})
+	}, provider.WithAuthCredential(*providerCredential))
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -43,6 +44,15 @@ func defaultEndpoint(addr string) string {
 		addr = "localhost" + addr
 	}
 	return "http://" + addr
+}
+
+func envFirst(names ...string) string {
+	for _, name := range names {
+		if value := os.Getenv(name); value != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 func echoHandler(ctx context.Context, req contracts.ProviderInvokeRequest) (contracts.ProviderInvokeResponse, error) {

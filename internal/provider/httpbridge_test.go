@@ -129,6 +129,37 @@ func TestHTTPBridgeSupportsHeadersFromSecret(t *testing.T) {
 	}
 }
 
+func TestHTTPBridgeSupportsProviderAuthCredential(t *testing.T) {
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeSuccess(w, r, http.StatusOK, contracts.ProviderInvokeResponse{
+			Output: map[string]any{"message": "authorized"},
+		})
+	}))
+	defer backend.Close()
+
+	server, err := NewHTTPBridgeServer(bridgeManifest(), HTTPBridgeConfig{
+		Routes: map[string]HTTPBridgeRoute{
+			"cap_bridge_echo": {URL: backend.URL},
+		},
+		Client:         backend.Client(),
+		AuthCredential: "provider-token",
+	})
+	if err != nil {
+		t.Fatalf("new bridge: %v", err)
+	}
+
+	unauthorized := invokeBridge(t, server, contracts.ProviderInvokeRequest{Input: map[string]any{"message": "hello"}})
+	if unauthorized.Code != http.StatusUnauthorized {
+		t.Fatalf("unauthorized status=%d body=%s", unauthorized.Code, unauthorized.Body.String())
+	}
+	authorized := invokeBridgeWithHeaders(t, server, contracts.ProviderInvokeRequest{Input: map[string]any{"message": "hello"}}, map[string]string{
+		"Authorization": "Bearer provider-token",
+	})
+	if authorized.Code != http.StatusOK {
+		t.Fatalf("authorized status=%d body=%s", authorized.Code, authorized.Body.String())
+	}
+}
+
 func TestHTTPBridgeRejectsSecretHeaderWithoutResolver(t *testing.T) {
 	_, err := NewHTTPBridgeServer(bridgeManifest(), HTTPBridgeConfig{
 		Routes: map[string]HTTPBridgeRoute{
@@ -243,12 +274,20 @@ func TestHTTPBridgeRejectsUnsupportedRouteMethod(t *testing.T) {
 
 func invokeBridge(t *testing.T, server http.Handler, body contracts.ProviderInvokeRequest) *httptest.ResponseRecorder {
 	t.Helper()
+	return invokeBridgeWithHeaders(t, server, body, nil)
+}
+
+func invokeBridgeWithHeaders(t *testing.T, server http.Handler, body contracts.ProviderInvokeRequest, headers map[string]string) *httptest.ResponseRecorder {
+	t.Helper()
 	raw, err := json.Marshal(body)
 	if err != nil {
 		t.Fatalf("marshal invoke request: %v", err)
 	}
 	req := httptest.NewRequest(http.MethodPost, "/v1/provider/capabilities/cap_bridge_echo/invoke", bytesReader(raw))
 	req.Header.Set("Content-Type", "application/json")
+	for key, value := range headers {
+		req.Header.Set(key, value)
+	}
 	rec := httptest.NewRecorder()
 	server.ServeHTTP(rec, req)
 	return rec
