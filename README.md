@@ -122,7 +122,7 @@ go run ./cmd/pacp-primary -manifest /tmp/pacp-bundle/catalog -resources /tmp/pac
 go run ./cmd/pacp-control -gateway-url http://localhost:18086 health
 go run ./cmd/pacp-control -gateway-url http://localhost:18086 -token token_agent tools
 go run ./cmd/pacp-control -gateway-url http://localhost:18086 -token token_agent invoke cap_dev_echo -idempotency-key echo-1 -input '{"message":"hello"}'
-go run ./cmd/pacp-control -gateway-url http://localhost:18086 -token token_agent invoke cap_dev_artifact -idempotency-key artifact-1 -input '{"prompt":"red mug"}'
+go run ./cmd/pacp-control -gateway-url http://localhost:18086 -token token_agent invoke cap_dev_artifact -idempotency-key artifact-1 -input '{"prompt":"red mug"}' -wait
 go run ./cmd/pacp-control -gateway-url http://localhost:18086 -token token_agent wait job_000001
 ```
 

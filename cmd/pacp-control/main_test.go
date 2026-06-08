@@ -129,6 +129,68 @@ func TestInvokeRequiresIdempotencyKey(t *testing.T) {
 	}
 }
 
+func TestInvokeWaitsForAsyncJob(t *testing.T) {
+	invokeRequests := 0
+	jobRequests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/tools/cap_async/invoke":
+			if r.Method != http.MethodPost {
+				t.Fatalf("invoke method = %s", r.Method)
+			}
+			invokeRequests++
+			if got := r.Header.Get("Idempotency-Key"); got != "invoke-async-1" {
+				t.Fatalf("Idempotency-Key = %q", got)
+			}
+			writeTestJSON(t, w, http.StatusCreated, map[string]any{
+				"ok":   true,
+				"data": map[string]any{"mode": "async", "job_id": "job_1"},
+			})
+		case "/v1/agent/jobs/job_1":
+			if r.Method != http.MethodGet {
+				t.Fatalf("job method = %s", r.Method)
+			}
+			jobRequests++
+			state := "running"
+			if jobRequests >= 2 {
+				state = "succeeded"
+			}
+			writeTestJSON(t, w, http.StatusOK, map[string]any{
+				"ok": true,
+				"data": map[string]any{
+					"job_id": "job_1",
+					"state":  state,
+				},
+			})
+		default:
+			t.Fatalf("request = %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	var stdout, stderr bytes.Buffer
+	code := run([]string{
+		"-gateway-url", server.URL,
+		"-token", "token_agent",
+		"invoke", "cap_async",
+		"-idempotency-key", "invoke-async-1",
+		"-mode", "async",
+		"-wait",
+		"-wait-interval", "1ms",
+		"-wait-timeout", "1s",
+	}, &stdout, &stderr, server.Client())
+	if code != 0 {
+		t.Fatalf("code=%d stderr=%s", code, stderr.String())
+	}
+	if invokeRequests != 1 || jobRequests < 2 {
+		t.Fatalf("invokeRequests=%d jobRequests=%d", invokeRequests, jobRequests)
+	}
+	output := stdout.String()
+	if strings.Contains(output, `"mode": "async"`) || !strings.Contains(output, `"state": "succeeded"`) {
+		t.Fatalf("stdout = %s", output)
+	}
+}
+
 func TestArtifactContentStreamsBody(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet || r.URL.Path != "/v1/artifacts/art_1/content" {

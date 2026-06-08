@@ -106,32 +106,66 @@ func invokeCommand(client gatewayClient, args []string, stdout, stderr io.Writer
 	flags := flag.NewFlagSet("invoke", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	input := flags.String("input", "{}", "JSON object input")
-	mode := flags.String("mode", "", "preferred execution mode")
+	preferredMode := flags.String("mode", "", "preferred execution mode")
 	dryRun := flags.Bool("dry-run", false, "request provider dry run")
 	idempotencyKey := flags.String("idempotency-key", "", "idempotency key for this invocation")
+	wait := flags.Bool("wait", false, "wait for async jobs to reach a terminal state")
+	waitInterval := flags.Duration("wait-interval", 2*time.Second, "poll interval when -wait is set")
+	waitTimeout := flags.Duration("wait-timeout", 10*time.Minute, "maximum wait time when -wait is set; zero waits forever")
 	remaining, err := parseCommandFlags(flags, args)
 	if err != nil {
 		return 2, err
 	}
 	if len(remaining) != 1 {
-		return 2, errors.New("usage: pacp-control invoke <capability-id> -idempotency-key <key> [-input JSON]")
+		return 2, errors.New("usage: pacp-control invoke <capability-id> -idempotency-key <key> [-input JSON] [-wait]")
 	}
 	if *idempotencyKey == "" {
 		return 2, errors.New("idempotency-key is required for invoke")
+	}
+	if *wait {
+		if *waitInterval <= 0 {
+			return 2, errors.New("wait-interval must be greater than zero")
+		}
+		if *waitTimeout < 0 {
+			return 2, errors.New("wait-timeout must be zero or greater")
+		}
 	}
 	inputObject, err := decodeJSONObject(*input)
 	if err != nil {
 		return 2, fmt.Errorf("input: %w", err)
 	}
 	body := map[string]any{"input": inputObject}
-	if *mode != "" {
-		body["preferred_mode"] = *mode
+	if *preferredMode != "" {
+		body["preferred_mode"] = *preferredMode
 	}
 	if *dryRun {
 		body["dry_run"] = true
 	}
 	path := "/v1/tools/" + url.PathEscape(remaining[0]) + "/invoke"
-	return runJSONCommand(client, http.MethodPost, path, body, *idempotencyKey, stdout, nil)
+	if !*wait {
+		return runJSONCommand(client, http.MethodPost, path, body, *idempotencyKey, stdout, nil)
+	}
+	status, raw, err := requestRaw(client, http.MethodPost, path, body, *idempotencyKey)
+	if err != nil {
+		return 1, err
+	}
+	if status < 200 || status >= 300 {
+		if err := writePrettyJSON(stdout, raw); err != nil {
+			return 1, err
+		}
+		return 1, fmt.Errorf("gateway returned HTTP %d", status)
+	}
+	mode, jobID, err := invokeResultFromEnvelope(raw)
+	if err != nil {
+		return 1, err
+	}
+	if mode != "async" || jobID == "" {
+		if err := writePrettyJSON(stdout, raw); err != nil {
+			return 1, err
+		}
+		return 0, nil
+	}
+	return waitForJob(client, jobID, waitOptions{Interval: *waitInterval, Timeout: *waitTimeout}, stdout)
 }
 
 func waitCommand(client gatewayClient, args []string, stdout, stderr io.Writer) (int, error) {
@@ -153,10 +187,19 @@ func waitCommand(client gatewayClient, args []string, stdout, stderr io.Writer) 
 		return 2, errors.New("timeout must be zero or greater")
 	}
 
-	path := "/v1/agent/jobs/" + url.PathEscape(remaining[0])
+	return waitForJob(client, remaining[0], waitOptions{Interval: *interval, Timeout: *timeout}, stdout)
+}
+
+type waitOptions struct {
+	Interval time.Duration
+	Timeout  time.Duration
+}
+
+func waitForJob(client gatewayClient, jobID string, opts waitOptions, stdout io.Writer) (int, error) {
+	path := "/v1/agent/jobs/" + url.PathEscape(jobID)
 	started := time.Now()
 	for {
-		status, raw, err := getRaw(client, path)
+		status, raw, err := requestRaw(client, http.MethodGet, path, nil, "")
 		if err != nil {
 			return 1, err
 		}
@@ -176,12 +219,12 @@ func waitCommand(client gatewayClient, args []string, stdout, stderr io.Writer) 
 			}
 			return 0, nil
 		}
-		if *timeout > 0 && time.Since(started) >= *timeout {
-			return 1, fmt.Errorf("wait timed out after %s; last state=%s", timeout.String(), state)
+		if opts.Timeout > 0 && time.Since(started) >= opts.Timeout {
+			return 1, fmt.Errorf("wait timed out after %s; last state=%s", opts.Timeout.String(), state)
 		}
-		sleepFor := *interval
-		if *timeout > 0 {
-			remaining := *timeout - time.Since(started)
+		sleepFor := opts.Interval
+		if opts.Timeout > 0 {
+			remaining := opts.Timeout - time.Since(started)
 			if remaining <= 0 {
 				continue
 			}
@@ -253,8 +296,8 @@ func contentCommand(client gatewayClient, artifactID string, stdout, stderr io.W
 	return 0, nil
 }
 
-func getRaw(client gatewayClient, path string) (int, []byte, error) {
-	resp, err := client.do(context.Background(), http.MethodGet, path, nil, "")
+func requestRaw(client gatewayClient, method, path string, body any, idempotencyKey string) (int, []byte, error) {
+	resp, err := client.do(context.Background(), method, path, body, idempotencyKey)
 	if err != nil {
 		return 0, nil, err
 	}
@@ -283,6 +326,26 @@ func runJSONCommand(client gatewayClient, method, path string, body any, idempot
 		return 1, fmt.Errorf("gateway returned HTTP %d", resp.StatusCode)
 	}
 	return 0, nil
+}
+
+func invokeResultFromEnvelope(raw []byte) (string, string, error) {
+	var envelope struct {
+		OK   bool `json:"ok"`
+		Data struct {
+			Mode  string `json:"mode"`
+			JobID string `json:"job_id"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(raw, &envelope); err != nil {
+		return "", "", fmt.Errorf("decode invoke response: %w", err)
+	}
+	if !envelope.OK {
+		return "", "", errors.New("invoke response was not ok")
+	}
+	if envelope.Data.Mode == "" {
+		return "", "", errors.New("invoke response missing mode")
+	}
+	return envelope.Data.Mode, envelope.Data.JobID, nil
 }
 
 func jobStateFromEnvelope(raw []byte) (string, error) {
