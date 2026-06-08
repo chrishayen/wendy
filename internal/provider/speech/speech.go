@@ -29,6 +29,8 @@ const (
 	defaultVoiceID     = "default"
 	defaultFormatID    = "wav"
 	defaultSampleRate  = 16000
+	defaultTTSSpeed    = 1.0
+	defaultTTSPitch    = 0.0
 	maxTextLength      = 5000
 	maxAudioBytes      = 25 << 20
 )
@@ -73,10 +75,12 @@ type SpeechModel struct {
 }
 
 type ttsRequest struct {
-	Text       string `json:"text"`
-	Voice      string `json:"voice"`
-	Format     string `json:"format"`
-	SampleRate int    `json:"sample_rate"`
+	Text       string  `json:"text"`
+	Voice      string  `json:"voice"`
+	Format     string  `json:"format"`
+	SampleRate int     `json:"sample_rate"`
+	Speed      float64 `json:"speed"`
+	Pitch      float64 `json:"pitch"`
 }
 
 type sttRequest struct {
@@ -229,6 +233,8 @@ func (p *speechProvider) tts(ctx context.Context, req contracts.ProviderInvokeRe
 			"format":           parsed.Format,
 			"media_type":       mediaType,
 			"sample_rate":      parsed.SampleRate,
+			"speed":            parsed.Speed,
+			"pitch":            parsed.Pitch,
 			"duration_seconds": engine.DurationSeconds,
 			"dry_run":          p.cfg.DryRun,
 		},
@@ -283,11 +289,25 @@ func (p *speechProvider) parseTTS(input map[string]any) (ttsRequest, AudioFormat
 	if !ok {
 		return ttsRequest{}, AudioFormat{}, fmt.Errorf("%w: format %s is not supported", provider.ErrValidation, formatID)
 	}
+	speed, err := numberInput(input, "speed", defaultTTSSpeed)
+	if err != nil {
+		return ttsRequest{}, AudioFormat{}, err
+	}
+	if speed < 0.5 || speed > 2.0 {
+		return ttsRequest{}, AudioFormat{}, fmt.Errorf("%w: speed must be between 0.5 and 2.0", provider.ErrValidation)
+	}
+	pitch, err := numberInput(input, "pitch", defaultTTSPitch)
+	if err != nil {
+		return ttsRequest{}, AudioFormat{}, err
+	}
+	if pitch < -12 || pitch > 12 {
+		return ttsRequest{}, AudioFormat{}, fmt.Errorf("%w: pitch must be between -12 and 12 semitones", provider.ErrValidation)
+	}
 	sampleRate := format.SampleRate
 	if sampleRate <= 0 {
 		sampleRate = defaultSampleRate
 	}
-	return ttsRequest{Text: text, Voice: voice, Format: formatID, SampleRate: sampleRate}, format, nil
+	return ttsRequest{Text: text, Voice: voice, Format: formatID, SampleRate: sampleRate, Speed: speed, Pitch: pitch}, format, nil
 }
 
 func (p *speechProvider) parseSTT(input map[string]any) (sttRequest, error) {
@@ -398,6 +418,23 @@ func optionalStringDefault(input map[string]any, key, fallback string) string {
 	return value
 }
 
+func numberInput(input map[string]any, key string, fallback float64) (float64, error) {
+	value, ok := input[key]
+	if !ok || value == nil {
+		return fallback, nil
+	}
+	switch typed := value.(type) {
+	case int:
+		return float64(typed), nil
+	case int64:
+		return float64(typed), nil
+	case float64:
+		return typed, nil
+	default:
+		return 0, fmt.Errorf("%w: %s must be a number", provider.ErrValidation, key)
+	}
+}
+
 func defaultLanguage(value string) string {
 	if strings.TrimSpace(value) == "" {
 		return "en"
@@ -445,21 +482,25 @@ func ttsCapability(id string, voices map[string]Voice, formats map[string]AudioF
 				"text":   map[string]any{"type": "string", "minLength": 1, "maxLength": maxTextLength},
 				"voice":  stringProperty(voiceIDs),
 				"format": stringProperty(formatIDs),
+				"speed":  map[string]any{"type": "number", "minimum": 0.5, "maximum": 2.0},
+				"pitch":  map[string]any{"type": "number", "minimum": -12, "maximum": 12},
 			},
 		},
 		OutputSchema: map[string]any{
 			"type":     "object",
-			"required": []any{"voice", "format", "media_type", "sample_rate", "duration_seconds", "dry_run"},
+			"required": []any{"voice", "format", "media_type", "sample_rate", "speed", "pitch", "duration_seconds", "dry_run"},
 			"properties": map[string]any{
 				"voice":            map[string]any{"type": "string"},
 				"format":           map[string]any{"type": "string"},
 				"media_type":       map[string]any{"type": "string"},
 				"sample_rate":      map[string]any{"type": "integer"},
+				"speed":            map[string]any{"type": "number"},
+				"pitch":            map[string]any{"type": "number"},
 				"duration_seconds": map[string]any{"type": "number"},
 				"dry_run":          map[string]any{"type": "boolean"},
 			},
 		},
-		Examples:      []map[string]any{{"text": "hello", "voice": firstString(voiceIDs, defaultVoiceID), "format": firstString(formatIDs, defaultFormatID)}},
+		Examples:      []map[string]any{{"text": "hello", "voice": firstString(voiceIDs, defaultVoiceID), "format": firstString(formatIDs, defaultFormatID), "speed": defaultTTSSpeed, "pitch": defaultTTSPitch}},
 		SideEffects:   "external",
 		ResourceHints: []contracts.ResourceHint{},
 		ArtifactHints: []contracts.ArtifactHint{{MediaType: "audio/wav", Count: "one"}},

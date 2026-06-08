@@ -21,10 +21,15 @@ func TestDryRunTTSGeneratesAudioArtifact(t *testing.T) {
 		"text":   "hello from PACP",
 		"voice":  "narrator",
 		"format": "wav",
+		"speed":  1.25,
+		"pitch":  -2,
 	}, http.StatusOK)
 
 	output := data["output"].(map[string]any)
 	if output["voice"] != "narrator" || output["format"] != "wav" || output["media_type"] != "audio/wav" || output["dry_run"] != true {
+		t.Fatalf("output = %#v", output)
+	}
+	if output["speed"].(float64) != 1.25 || output["pitch"].(float64) != -2 {
 		t.Fatalf("output = %#v", output)
 	}
 	artifacts := data["artifacts"].([]any)
@@ -43,7 +48,7 @@ func TestDryRunTTSDefaultsToCatalogVoice(t *testing.T) {
 	data := invoke(t, server, DefaultTTSCapabilityID, map[string]any{"text": "hello from PACP"}, http.StatusOK)
 
 	output := data["output"].(map[string]any)
-	if output["voice"] != "narrator" || output["format"] != "wav" {
+	if output["voice"] != "narrator" || output["format"] != "wav" || output["speed"].(float64) != defaultTTSSpeed || output["pitch"].(float64) != defaultTTSPitch {
 		t.Fatalf("output = %#v", output)
 	}
 }
@@ -70,6 +75,17 @@ func TestManifestPublishesSpeechCatalogSchemas(t *testing.T) {
 	if tts.Examples[0]["voice"] != "narrator" || tts.Examples[0]["format"] != "wav" {
 		t.Fatalf("tts examples = %#v", tts.Examples)
 	}
+	speedProperty := schemaProperty(t, tts.InputSchema, "speed")
+	if speedProperty["minimum"] != 0.5 || speedProperty["maximum"] != 2.0 {
+		t.Fatalf("speed property = %#v", speedProperty)
+	}
+	pitchProperty := schemaProperty(t, tts.InputSchema, "pitch")
+	if pitchProperty["minimum"] != float64(-12) || pitchProperty["maximum"] != float64(12) {
+		t.Fatalf("pitch property = %#v", pitchProperty)
+	}
+	if tts.Examples[0]["speed"] != defaultTTSSpeed || tts.Examples[0]["pitch"] != defaultTTSPitch {
+		t.Fatalf("tts examples = %#v", tts.Examples)
+	}
 
 	audioProperty := schemaProperty(t, stt.InputSchema, "audio_base64")
 	if audioProperty["contentEncoding"] != "base64" || audioProperty["maxLength"] != float64(base64.StdEncoding.EncodedLen(maxAudioBytes)) {
@@ -89,6 +105,18 @@ func TestRejectsInvalidVoice(t *testing.T) {
 	}, http.StatusBadRequest)
 	errObj := envelope["error"].(map[string]any)
 	if errObj["code"] != "validation_failed" || !strings.Contains(errObj["message"].(string), "voice") {
+		t.Fatalf("error = %#v", errObj)
+	}
+}
+
+func TestRejectsInvalidTTSGenerationOption(t *testing.T) {
+	server := newTestServer(t, Config{Endpoint: "http://provider.local", DryRun: true, VoiceCatalogPath: writeCatalog(t)})
+	envelope := invokeEnvelope(t, server, DefaultTTSCapabilityID, map[string]any{
+		"text":  "hello",
+		"speed": 3.0,
+	}, http.StatusBadRequest)
+	errObj := envelope["error"].(map[string]any)
+	if errObj["code"] != "validation_failed" || !strings.Contains(errObj["message"].(string), "speed") {
 		t.Fatalf("error = %#v", errObj)
 	}
 }
