@@ -269,17 +269,17 @@ func writeStoreError(w http.ResponseWriter, r *http.Request, err error) {
 	case errors.Is(err, ErrIdempotencyConflict):
 		writeError(w, r, http.StatusConflict, "idempotency_conflict", "idempotency key was reused with different request content", false)
 	case errors.Is(err, ErrWorkerMismatch):
-		writeError(w, r, http.StatusForbidden, "forbidden", "job is claimed by another worker", false)
+		writeError(w, r, http.StatusForbidden, "forbidden", "worker_id does not match the active job claim", false)
 	case errors.Is(err, ErrClaimConflict):
-		writeError(w, r, http.StatusConflict, "claim_conflict", "job is claimed by another worker", true)
+		writeError(w, r, http.StatusConflict, "worker_conflict", "job is already claimed by another worker", true)
 	case errors.Is(err, ErrClaimExpired):
-		writeError(w, r, http.StatusConflict, "claim_expired", "job claim expired", true)
+		writeError(w, r, http.StatusConflict, "claim_expired", "worker claim has expired", true)
 	case errors.Is(err, ErrInvalidTransition):
-		writeError(w, r, http.StatusBadRequest, "invalid_transition", "job cannot transition from its current state", false)
+		writeError(w, r, http.StatusBadRequest, "validation_failed", "transition_to must be running when heartbeat changes state", false)
 	case errors.Is(err, ErrCancellationClosed):
 		writeError(w, r, http.StatusBadRequest, "validation_failed", ErrCancellationClosed.Error(), false)
 	case errors.Is(err, ErrTerminalState):
-		writeError(w, r, http.StatusConflict, "terminal_state", "job is already terminal", false)
+		writeError(w, r, http.StatusConflict, "job_terminal", "job is already terminal", false)
 	case errors.Is(err, ErrInvalidCursor):
 		writeError(w, r, http.StatusBadRequest, "invalid_cursor", "cursor is invalid or expired", false)
 	default:

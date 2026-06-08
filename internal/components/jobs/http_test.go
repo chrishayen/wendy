@@ -220,6 +220,61 @@ func TestHandlerReplaysS003JobReadFixtures(t *testing.T) {
 	}
 }
 
+func TestHandlerReplaysS003JobLifecycleFixtures(t *testing.T) {
+	scenario, err := testkit.LoadScenario(filepath.Join("..", "..", "..", "testdata", "contract-sim"), filepath.Join("fixtures", "S003", "manifest.json"))
+	if err != nil {
+		t.Fatalf("load scenario: %v", err)
+	}
+	pkg, ok := testkit.FindPackage(scenario, "c05-async-job-service")
+	if !ok {
+		t.Fatalf("c05 fixture package not found")
+	}
+
+	tests := []struct {
+		fixtureID string
+		now       string
+		seed      func(*Store)
+	}{
+		{"job_claim_ok", "2026-06-05T20:00:01Z", seedS003JobQueued},
+		{"job_heartbeat_running", "2026-06-05T20:00:03Z", seedS003JobClaimedWithCursor("cursor_s003_logs_0001")},
+		{"job_heartbeat_waiting_for_gpu_lease", "2026-06-05T20:00:02Z", seedS003JobClaimed},
+		{"job_heartbeat_claim_renewed", "2026-06-05T20:00:32Z", seedS003JobRunningWithCursor("cursor_s003_logs_0002")},
+		{"job_fail_provider_unavailable", "2026-06-05T20:00:08Z", seedS003JobRunningWithCursor("cursor_s003_logs_provider_failure")},
+		{"job_fail_provider_timeout", "2026-06-05T20:15:08Z", seedS003JobRunningWithCursorAndClaim("cursor_s003_logs_provider_timeout", "2026-06-05T20:16:08Z")},
+		{"job_complete_ok", "2026-06-05T20:00:46Z", seedS003JobRunning},
+		{"job_complete_worker_mismatch", "2026-06-05T20:00:46Z", seedS003JobRunning},
+		{"job_complete_expired_claim", "2026-06-05T20:01:02Z", seedS003JobRunningExpiredClaim},
+		{"job_cancel_queued", "2026-06-05T20:00:01Z", seedS003JobQueued},
+		{"job_cancel_queued_replay", "2026-06-05T20:00:02Z", seedS003JobCanceledWithCancelIdempotency},
+		{"job_cancel_idempotency_conflict", "2026-06-05T20:00:02Z", seedS003JobCanceledWithCancelIdempotency},
+		{"job_fail_lease_expired", "2026-06-05T20:01:04Z", seedS003JobRunningWithCursorAndClaim("cursor_s003_logs_lease_expired", "2026-06-05T20:02:04Z")},
+		{"job_invalid_transition", "2026-06-05T20:00:02Z", seedS003JobClaimed},
+		{"job_append_log_worker_mismatch", "2026-06-05T20:00:02Z", seedS003JobClaimed},
+		{"job_append_log_expired_claim", "2026-06-05T20:01:02Z", seedS003JobClaimedExpiredClaim},
+		{"job_claim_same_worker_replay", "2026-06-05T20:00:02Z", seedS003JobClaimed},
+		{"job_claim_worker_conflict", "2026-06-05T20:00:02Z", seedS003JobClaimed},
+		{"job_claim_expired_reclaim", "2026-06-05T20:02:02Z", seedS003JobClaimedExpiredClaim},
+		{"job_claim_terminal_conflict", "2026-06-05T20:00:47Z", seedS003JobSucceeded},
+		{"job_cancel_running_conflict", "2026-06-05T20:00:04Z", seedS003JobRunning},
+		{"job_complete_terminal_conflict", "2026-06-05T20:00:47Z", seedS003JobSucceeded},
+		{"job_fail_worker_mismatch", "2026-06-05T20:00:08Z", seedS003JobRunning},
+		{"job_fail_expired_claim", "2026-06-05T20:01:02Z", seedS003JobRunningExpiredClaim},
+		{"job_fail_terminal_conflict", "2026-06-05T20:15:09Z", seedS003JobProviderTimeout},
+	}
+	for _, test := range tests {
+		t.Run(test.fixtureID, func(t *testing.T) {
+			store := NewStore()
+			store.SetClock(fixedS003JobTime(test.now))
+			if test.seed != nil {
+				test.seed(store)
+			}
+			if _, err := testkit.ReplayHTTPFixture(NewHandler(store), pkg, test.fixtureID); err != nil {
+				t.Fatalf("replay %s: %v", test.fixtureID, err)
+			}
+		})
+	}
+}
+
 func requestJSON(t *testing.T, handler http.Handler, method, path string, body any, headers ...map[string]string) *httptest.ResponseRecorder {
 	t.Helper()
 	var reader *bytes.Reader
@@ -323,6 +378,22 @@ func seedS003JobQueued(store *Store) {
 	})
 }
 
+func seedS003JobClaimed(store *Store) {
+	seedS003Job(store, s003ClaimedJob(nil))
+}
+
+func seedS003JobClaimedWithCursor(cursor string) func(*Store) {
+	return func(store *Store) {
+		seedS003Job(store, s003ClaimedJob(&cursor))
+	}
+}
+
+func seedS003JobClaimedExpiredClaim(store *Store) {
+	job := s003ClaimedJob(nil)
+	job.Claim.ExpiresAt = "2026-06-05T20:01:01Z"
+	seedS003Job(store, job)
+}
+
 func seedS003JobRunning(store *Store) {
 	cursor := "cursor_s003_logs_0001"
 	seedS003Job(store, contracts.Job{
@@ -332,11 +403,34 @@ func seedS003JobRunning(store *Store) {
 		UpdatedAt:     "2026-06-05T20:00:03Z",
 		StatusMessage: "running",
 		InputSummary:  s003InputSummary(),
+		Metadata:      s003ExecutionMetadata(),
+		Claim:         s003ActiveClaim("2026-06-05T20:01:03Z"),
 		ArtifactRefs:  []string{},
 		LogCursor:     &cursor,
 		TerminalError: nil,
 		Links:         map[string]any{},
 	})
+}
+
+func seedS003JobRunningWithCursor(cursor string) func(*Store) {
+	return seedS003JobRunningWithCursorAndClaim(cursor, "2026-06-05T20:01:03Z")
+}
+
+func seedS003JobRunningWithCursorAndClaim(cursor, expiresAt string) func(*Store) {
+	return func(store *Store) {
+		seedS003JobRunning(store)
+		store.mu.Lock()
+		defer store.mu.Unlock()
+		store.jobs[s003JobID].job.LogCursor = &cursor
+		store.jobs[s003JobID].job.Claim.ExpiresAt = expiresAt
+	}
+}
+
+func seedS003JobRunningExpiredClaim(store *Store) {
+	seedS003JobRunning(store)
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	store.jobs[s003JobID].job.Claim.ExpiresAt = "2026-06-05T20:01:01Z"
 }
 
 func seedS003JobCanceled(store *Store) {
@@ -347,11 +441,26 @@ func seedS003JobCanceled(store *Store) {
 		UpdatedAt:     "2026-06-05T20:00:01Z",
 		StatusMessage: "canceled by requester",
 		InputSummary:  s003InputSummary(),
+		Metadata:      s003ExecutionMetadata(),
 		ArtifactRefs:  []string{},
 		LogCursor:     nil,
 		TerminalError: &contracts.ErrorObject{Code: "canceled", Message: "canceled by requester", Retryable: false},
 		Links:         map[string]any{},
 	})
+}
+
+func seedS003JobCanceledWithCancelIdempotency(store *Store) {
+	seedS003JobCanceled(store)
+	fingerprint, err := fingerprint(struct {
+		JobID   string                  `json:"job_id"`
+		Request contracts.CancelRequest `json:"request"`
+	}{JobID: s003JobID, Request: contracts.CancelRequest{Reason: "canceled by requester"}})
+	if err != nil {
+		panic(err)
+	}
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	store.cancelIdempotency["idem_s003_c05_cancel_queued"] = idempotentCancel{fingerprint: fingerprint, jobID: s003JobID}
 }
 
 func seedS003JobSucceeded(store *Store) {
@@ -363,6 +472,7 @@ func seedS003JobSucceeded(store *Store) {
 		UpdatedAt:     "2026-06-05T20:00:46Z",
 		StatusMessage: "completed",
 		InputSummary:  s003InputSummary(),
+		Metadata:      s003ExecutionMetadata(),
 		ArtifactRefs:  []string{"art_s003_0001"},
 		LogCursor:     &cursor,
 		TerminalError: nil,
@@ -379,6 +489,7 @@ func seedS003JobProviderTimeout(store *Store) {
 		UpdatedAt:     "2026-06-05T20:15:08Z",
 		StatusMessage: "provider invocation timed out",
 		InputSummary:  s003InputSummary(),
+		Metadata:      s003ExecutionMetadata(),
 		ArtifactRefs:  []string{},
 		LogCursor:     &cursor,
 		TerminalError: &contracts.ErrorObject{Code: "provider_timeout", Message: "provider invocation timed out", Retryable: true},
@@ -395,6 +506,7 @@ func seedS003JobProviderFailure(store *Store) {
 		UpdatedAt:     "2026-06-05T20:00:08Z",
 		StatusMessage: "ComfyUI backend is unavailable",
 		InputSummary:  s003InputSummary(),
+		Metadata:      s003ExecutionMetadata(),
 		ArtifactRefs:  []string{},
 		LogCursor:     &cursor,
 		TerminalError: &contracts.ErrorObject{Code: "provider_unavailable", Message: "ComfyUI backend is unavailable", Retryable: true},
@@ -411,6 +523,7 @@ func seedS003JobLeaseExpired(store *Store) {
 		UpdatedAt:     "2026-06-05T20:01:04Z",
 		StatusMessage: "resource lease expired before completion",
 		InputSummary:  s003InputSummary(),
+		Metadata:      s003ExecutionMetadata(),
 		ArtifactRefs:  []string{},
 		LogCursor:     &cursor,
 		TerminalError: &contracts.ErrorObject{Code: "lease_expired", Message: "resource lease expired before completion", Retryable: true},
@@ -419,6 +532,9 @@ func seedS003JobLeaseExpired(store *Store) {
 }
 
 func seedS003Job(store *Store, job contracts.Job) {
+	if job.Metadata == nil {
+		job.Metadata = s003ExecutionMetadata()
+	}
 	store.mu.Lock()
 	defer store.mu.Unlock()
 	store.jobs[s003JobID] = &record{
@@ -429,10 +545,80 @@ func seedS003Job(store *Store, job contracts.Job) {
 	}
 }
 
+func s003ClaimedJob(cursor *string) contracts.Job {
+	return contracts.Job{
+		JobID:         s003JobID,
+		State:         contracts.JobClaimed,
+		CreatedAt:     "2026-06-05T20:00:00Z",
+		UpdatedAt:     "2026-06-05T20:00:01Z",
+		InputSummary:  s003InputSummary(),
+		Metadata:      s003ExecutionMetadata(),
+		Claim:         s003ActiveClaim("2026-06-05T20:01:01Z"),
+		ArtifactRefs:  []string{},
+		LogCursor:     cursor,
+		TerminalError: nil,
+		Links:         map[string]any{},
+	}
+}
+
+func s003ActiveClaim(expiresAt string) *contracts.JobClaim {
+	return &contracts.JobClaim{
+		WorkerID:  "runner_s003_0001",
+		ClaimedAt: "2026-06-05T20:00:01Z",
+		ExpiresAt: expiresAt,
+	}
+}
+
 func s003InputSummary() map[string]any {
 	return map[string]any{
 		"prompt_present": true,
 		"width":          1024,
 		"height":         1024,
+	}
+}
+
+func s003ExecutionMetadata() map[string]any {
+	return map[string]any{
+		"execution_plan": map[string]any{
+			"capability_id": "cap_image_generate_gpu",
+			"subject_id":    "sub_agent_s003",
+			"input": map[string]any{
+				"prompt": "a clean product photo of a red ceramic mug",
+				"width":  1024,
+				"height": 1024,
+			},
+			"route": map[string]any{
+				"capability_id":        "cap_image_generate_gpu",
+				"service_id":           "svc_comfyui_gpu",
+				"provider_endpoint":    "http://node_linux_gpu:8188",
+				"provider_health_path": "/v1/provider/health",
+				"provider_invoke_path": "/v1/provider/capabilities/cap_image_generate_gpu/invoke",
+				"node_id":              "node_linux_gpu",
+				"node_managed":         true,
+				"service_start_mode":   "on_demand",
+				"resource_hints": []any{
+					map[string]any{"selector": "gpu", "required": true, "quantity": 1},
+				},
+				"artifact_hints": []any{
+					map[string]any{"media_type": "image/png", "count": "one"},
+				},
+			},
+			"resource_selector": "gpu",
+			"timeout_seconds":   900,
+			"artifact_hints": []any{
+				map[string]any{"media_type": "image/png", "count": "one"},
+			},
+			"provider_context": map[string]any{},
+		},
+	}
+}
+
+func fixedS003JobTime(value string) func() time.Time {
+	return func() time.Time {
+		parsed, err := time.Parse(time.RFC3339, value)
+		if err != nil {
+			panic(err)
+		}
+		return parsed
 	}
 }
