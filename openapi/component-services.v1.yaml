@@ -106,7 +106,7 @@ paths:
         - $ref: "#/components/parameters/Limit"
       responses:
         "200":
-          $ref: "#/components/responses/Success"
+          $ref: "#/components/responses/JobListResponse"
         default:
           $ref: "#/components/responses/Error"
   /v1/catalog/services/{service_id}:
@@ -262,9 +262,9 @@ paths:
               $ref: "#/components/schemas/CreateJobRequest"
       responses:
         "200":
-          $ref: "#/components/responses/Success"
+          $ref: "#/components/responses/JobResponse"
         "201":
-          $ref: "#/components/responses/Success"
+          $ref: "#/components/responses/JobResponse"
         default:
           $ref: "#/components/responses/Error"
   /v1/jobs/{job_id}:
@@ -277,7 +277,7 @@ paths:
         - $ref: "#/components/parameters/JobID"
       responses:
         "200":
-          $ref: "#/components/responses/Success"
+          $ref: "#/components/responses/JobResponse"
         default:
           $ref: "#/components/responses/Error"
   /v1/jobs/{job_id}/policy-context:
@@ -290,7 +290,7 @@ paths:
         - $ref: "#/components/parameters/JobID"
       responses:
         "200":
-          $ref: "#/components/responses/Success"
+          $ref: "#/components/responses/JobPolicyContextResponse"
         default:
           $ref: "#/components/responses/Error"
   /v1/jobs/{job_id}/agent-projection:
@@ -303,7 +303,7 @@ paths:
         - $ref: "#/components/parameters/JobID"
       responses:
         "200":
-          $ref: "#/components/responses/Success"
+          $ref: "#/components/responses/AgentJobResponse"
         default:
           $ref: "#/components/responses/Error"
   /v1/jobs/{job_id}/claim:
@@ -322,7 +322,7 @@ paths:
               $ref: "#/components/schemas/JobClaimRequest"
       responses:
         "200":
-          $ref: "#/components/responses/Success"
+          $ref: "#/components/responses/JobResponse"
         default:
           $ref: "#/components/responses/Error"
   /v1/jobs/{job_id}/heartbeat:
@@ -341,7 +341,7 @@ paths:
               $ref: "#/components/schemas/JobHeartbeatRequest"
       responses:
         "200":
-          $ref: "#/components/responses/Success"
+          $ref: "#/components/responses/JobResponse"
         default:
           $ref: "#/components/responses/Error"
   /v1/jobs/{job_id}/complete:
@@ -360,7 +360,7 @@ paths:
               $ref: "#/components/schemas/JobCompleteRequest"
       responses:
         "200":
-          $ref: "#/components/responses/Success"
+          $ref: "#/components/responses/JobResponse"
         default:
           $ref: "#/components/responses/Error"
   /v1/jobs/{job_id}/fail:
@@ -379,7 +379,7 @@ paths:
               $ref: "#/components/schemas/JobFailRequest"
       responses:
         "200":
-          $ref: "#/components/responses/Success"
+          $ref: "#/components/responses/JobResponse"
         default:
           $ref: "#/components/responses/Error"
   /v1/jobs/{job_id}/cancel:
@@ -399,7 +399,7 @@ paths:
               $ref: "#/components/schemas/CancelRequest"
       responses:
         "200":
-          $ref: "#/components/responses/Success"
+          $ref: "#/components/responses/JobResponse"
         default:
           $ref: "#/components/responses/Error"
   /v1/jobs/{job_id}/logs:
@@ -414,7 +414,7 @@ paths:
         - $ref: "#/components/parameters/Limit"
       responses:
         "200":
-          $ref: "#/components/responses/Success"
+          $ref: "#/components/responses/JobLogListResponse"
         default:
           $ref: "#/components/responses/Error"
     post:
@@ -432,7 +432,7 @@ paths:
               $ref: "#/components/schemas/AppendJobLogRequest"
       responses:
         "200":
-          $ref: "#/components/responses/Success"
+          $ref: "#/components/responses/JobLogListResponse"
         default:
           $ref: "#/components/responses/Error"
 
@@ -1401,6 +1401,61 @@ components:
                 properties:
                   data:
                     $ref: "#/components/schemas/ComponentMetrics"
+    JobResponse:
+      description: Job envelope.
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: "#/components/schemas/SuccessEnvelope"
+              - type: object
+                properties:
+                  data:
+                    $ref: "#/components/schemas/Job"
+    JobListResponse:
+      description: Job list envelope.
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: "#/components/schemas/SuccessEnvelope"
+              - type: object
+                properties:
+                  data:
+                    $ref: "#/components/schemas/JobList"
+    JobPolicyContextResponse:
+      description: Job policy context envelope.
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: "#/components/schemas/SuccessEnvelope"
+              - type: object
+                properties:
+                  data:
+                    $ref: "#/components/schemas/JobPolicyContext"
+    AgentJobResponse:
+      description: Agent-safe job projection envelope.
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: "#/components/schemas/SuccessEnvelope"
+              - type: object
+                properties:
+                  data:
+                    $ref: "#/components/schemas/AgentJob"
+    JobLogListResponse:
+      description: Job log list envelope.
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: "#/components/schemas/SuccessEnvelope"
+              - type: object
+                properties:
+                  data:
+                    $ref: "#/components/schemas/JobLogList"
     Success:
       description: Success envelope.
       content:
@@ -1682,6 +1737,158 @@ components:
     JobState:
       type: string
       enum: [queued, claimed, running, succeeded, failed, canceled, expired]
+    Job:
+      type: object
+      required:
+        - job_id
+        - state
+        - created_at
+        - updated_at
+        - claim
+        - artifact_refs
+        - log_cursor
+        - terminal_error
+        - links
+      properties:
+        job_id:
+          type: string
+        capability_id:
+          type: string
+        state:
+          $ref: "#/components/schemas/JobState"
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+        status_message:
+          type: string
+        input_summary:
+          $ref: "#/components/schemas/AnyMap"
+        metadata:
+          $ref: "#/components/schemas/AnyMap"
+        claim:
+          nullable: true
+          allOf:
+            - $ref: "#/components/schemas/JobClaim"
+        resource_refs:
+          type: array
+          items:
+            type: string
+        artifact_refs:
+          type: array
+          items:
+            type: string
+        log_cursor:
+          type: string
+          nullable: true
+        terminal_error:
+          nullable: true
+          allOf:
+            - $ref: "#/components/schemas/ErrorObject"
+        links:
+          $ref: "#/components/schemas/Links"
+    JobList:
+      type: object
+      required: [items, next_cursor]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/Job"
+        next_cursor:
+          type: string
+          nullable: true
+    JobClaim:
+      type: object
+      required: [worker_id, claimed_at, expires_at]
+      properties:
+        worker_id:
+          type: string
+        claimed_at:
+          type: string
+          format: date-time
+        expires_at:
+          type: string
+          format: date-time
+    AgentJob:
+      type: object
+      required:
+        - job_id
+        - state
+        - created_at
+        - updated_at
+        - status_message
+        - artifact_refs
+        - log_cursor
+        - terminal_error
+        - links
+      properties:
+        job_id:
+          type: string
+        state:
+          $ref: "#/components/schemas/JobState"
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+        status_message:
+          type: string
+          nullable: true
+        input_summary:
+          $ref: "#/components/schemas/AnyMap"
+        artifact_refs:
+          type: array
+          items:
+            type: string
+        log_cursor:
+          type: string
+          nullable: true
+        terminal_error:
+          nullable: true
+          allOf:
+            - $ref: "#/components/schemas/ErrorObject"
+        queue:
+          $ref: "#/components/schemas/AgentJobQueue"
+        links:
+          $ref: "#/components/schemas/Links"
+    AgentJobQueue:
+      type: object
+      required: [request_id, state, resource_selector, queue_position]
+      properties:
+        request_id:
+          type: string
+        state:
+          type: string
+          enum: [pending, granted, canceled, expired]
+        resource_selector:
+          type: string
+        queue_position:
+          type: integer
+          nullable: true
+        lease_id:
+          type: string
+        resource_id:
+          type: string
+    JobPolicyContext:
+      type: object
+      required: [resource_kind, job_id, owner_subject_id, job_state, policy_state]
+      properties:
+        resource_kind:
+          type: string
+        job_id:
+          type: string
+        owner_subject_id:
+          type: string
+        requester_id:
+          type: string
+        job_state:
+          type: string
+        policy_state:
+          type: string
     CreateJobRequest:
       type: object
       required: [requester_id]
@@ -1752,6 +1959,17 @@ components:
           type: string
         fields:
           $ref: "#/components/schemas/AnyMap"
+    JobLogList:
+      type: object
+      required: [items, next_cursor]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/JobLogEntry"
+        next_cursor:
+          type: string
+          nullable: true
     AppendJobLogRequest:
       type: object
       required: [worker_id, entries]
