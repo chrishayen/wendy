@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"pacp/internal/contracts"
@@ -42,6 +43,8 @@ func (h Handler) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		h.checkPolicy(w, r)
 	case path == "/v1/policy/rules" && r.Method == http.MethodPost:
 		h.createRule(w, r)
+	case path == "/v1/policy/audit-events" && r.Method == http.MethodGet:
+		h.listAuditEvents(w, r)
 	case path == "/v1/secrets" && r.Method == http.MethodPost:
 		h.createSecret(w, r)
 	case path == "/v1/secrets/resolve" && r.Method == http.MethodPost:
@@ -136,6 +139,23 @@ func (h Handler) createRule(w http.ResponseWriter, r *http.Request) {
 	writeSuccess(w, r, http.StatusCreated, rule)
 }
 
+func (h Handler) listAuditEvents(w http.ResponseWriter, r *http.Request) {
+	limit, err := positiveInt(r.URL.Query().Get("limit"))
+	if err != nil {
+		writeError(w, r, http.StatusBadRequest, "validation_failed", "limit must be a positive integer", false)
+		return
+	}
+	events, next, err := h.store.ListAuditEvents(AuditListOptions{
+		Cursor: r.URL.Query().Get("cursor"),
+		Limit:  limit,
+	})
+	if err != nil {
+		writeStoreError(w, r, err)
+		return
+	}
+	writeSuccess(w, r, http.StatusOK, map[string]any{"items": events, "next_cursor": next})
+}
+
 func (h Handler) createSecret(w http.ResponseWriter, r *http.Request) {
 	var req contracts.CreateSecretRequest
 	if !decodeBody(w, r, &req) {
@@ -183,6 +203,8 @@ func writeStoreError(w http.ResponseWriter, r *http.Request, err error) {
 	switch {
 	case errors.Is(err, ErrNotFound):
 		writeError(w, r, http.StatusNotFound, "not_found", "policy resource not found", false)
+	case errors.Is(err, ErrInvalidCursor):
+		writeError(w, r, http.StatusBadRequest, "invalid_cursor", "cursor is invalid or expired", false)
 	case errors.Is(err, ErrValidation):
 		writeError(w, r, http.StatusBadRequest, "validation_failed", err.Error(), false)
 	case errors.Is(err, ErrMalformedCredential):
@@ -228,4 +250,15 @@ func meta(r *http.Request) map[string]string {
 		requestID = "req_policy"
 	}
 	return map[string]string{"request_id": requestID, "schema_version": "v1"}
+}
+
+func positiveInt(raw string) (int, error) {
+	if raw == "" {
+		return 0, nil
+	}
+	value, err := strconv.Atoi(raw)
+	if err != nil || value <= 0 {
+		return 0, errors.New("invalid positive integer")
+	}
+	return value, nil
 }

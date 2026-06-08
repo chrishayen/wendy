@@ -20,6 +20,7 @@ var (
 	ErrMalformedCredential = errors.New("credential could not be parsed")
 	ErrForbidden           = errors.New("forbidden")
 	ErrConflict            = errors.New("policy resource conflict")
+	ErrInvalidCursor       = errors.New("invalid cursor")
 )
 
 type Store struct {
@@ -56,6 +57,11 @@ type snapshotFile struct {
 	Rules        map[string]contracts.PolicyRule `json:"rules"`
 	Secrets      map[string]secretSnapshot       `json:"secrets"`
 	Audit        []contracts.PolicyAuditEvent    `json:"audit,omitempty"`
+}
+
+type AuditListOptions struct {
+	Cursor string
+	Limit  int
 }
 
 type apiKeySnapshot struct {
@@ -471,6 +477,31 @@ func (s *Store) AuditEvents() []contracts.PolicyAuditEvent {
 	return append([]contracts.PolicyAuditEvent(nil), s.audit...)
 }
 
+func (s *Store) ListAuditEvents(opts AuditListOptions) ([]contracts.PolicyAuditEvent, *string, error) {
+	s.mu.RLock()
+	events := append([]contracts.PolicyAuditEvent(nil), s.audit...)
+	s.mu.RUnlock()
+
+	start := 0
+	if opts.Cursor != "" {
+		parsed, err := parsePolicyAuditCursor(opts.Cursor)
+		if err != nil {
+			return nil, nil, ErrInvalidCursor
+		}
+		start = parsed
+	}
+	if start > len(events) {
+		return nil, nil, ErrInvalidCursor
+	}
+	end := len(events)
+	if opts.Limit > 0 && start+opts.Limit < end {
+		end = start + opts.Limit
+		next := policyAuditCursor(end)
+		return events[start:end], &next, nil
+	}
+	return events[start:end], nil, nil
+}
+
 func (s *Store) scopesForSubjectLocked(subjectID string) []string {
 	scopeSet := map[string]bool{}
 	for _, key := range s.keysByID {
@@ -533,6 +564,21 @@ func (s *Store) recordAuthVerification(subjectID string, allowed bool, reason st
 func (s *Store) appendAuditLocked(event contracts.PolicyAuditEvent) {
 	event.OccurredAt = s.formatNow()
 	s.audit = append(s.audit, event)
+}
+
+func policyAuditCursor(index int) string {
+	return fmt.Sprintf("cursor_policy_audit_%06d", index)
+}
+
+func parsePolicyAuditCursor(cursor string) (int, error) {
+	var index int
+	if _, err := fmt.Sscanf(cursor, "cursor_policy_audit_%06d", &index); err != nil {
+		return 0, err
+	}
+	if index < 0 || policyAuditCursor(index) != cursor {
+		return 0, ErrInvalidCursor
+	}
+	return index, nil
 }
 
 func (s *Store) formatNow() string {

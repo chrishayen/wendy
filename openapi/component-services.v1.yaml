@@ -994,6 +994,20 @@ paths:
           $ref: "#/components/responses/PolicyRuleResponse"
         default:
           $ref: "#/components/responses/Error"
+  /v1/policy/audit-events:
+    get:
+      tags: [policy]
+      operationId: listPolicyAuditEvents
+      x-operation-audience: admin
+      x-policy-action: policy.audit.read
+      parameters:
+        - $ref: "#/components/parameters/Cursor"
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          $ref: "#/components/responses/PolicyAuditEventListResponse"
+        default:
+          $ref: "#/components/responses/Error"
   /v1/secrets:
     post:
       tags: [policy]
@@ -1750,6 +1764,17 @@ components:
                 properties:
                   data:
                     $ref: "#/components/schemas/PolicyRule"
+    PolicyAuditEventListResponse:
+      description: Policy audit event list envelope.
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: "#/components/schemas/SuccessEnvelope"
+              - type: object
+                properties:
+                  data:
+                    $ref: "#/components/schemas/PolicyAuditEventList"
     SecretResponse:
       description: Secret metadata envelope.
       content:
@@ -3029,6 +3054,36 @@ components:
         reason:
           type: string
         created_at:
+          type: string
+          format: date-time
+    PolicyAuditEventList:
+      type: object
+      required: [items, next_cursor]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/PolicyAuditEvent"
+        next_cursor:
+          type: string
+          nullable: true
+    PolicyAuditEvent:
+      type: object
+      required: [event_type, subject_id, occurred_at]
+      properties:
+        event_type:
+          type: string
+        subject_id:
+          type: string
+        action:
+          type: string
+        resource:
+          type: string
+        allowed:
+          type: boolean
+        reason:
+          type: string
+        occurred_at:
           type: string
           format: date-time
     CreateSecretRequest:

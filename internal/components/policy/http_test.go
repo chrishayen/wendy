@@ -137,6 +137,31 @@ func TestHandlerCredentialPolicyAndSecretFlow(t *testing.T) {
 	if redacted["text"] != "token is [REDACTED]" {
 		t.Fatalf("redacted = %#v", redacted)
 	}
+	audit := doJSON(t, handler, http.MethodGet, "/v1/policy/audit-events", nil, http.StatusOK)
+	auditItems := audit["items"].([]any)
+	if len(auditItems) == 0 || audit["next_cursor"] != nil {
+		t.Fatalf("audit = %#v", audit)
+	}
+	rawAudit, err := json.Marshal(auditItems)
+	if err != nil {
+		t.Fatalf("marshal audit: %v", err)
+	}
+	if bytes.Contains(rawAudit, []byte("super-secret")) || bytes.Contains(rawAudit, []byte("token_agent_rotated")) {
+		t.Fatalf("audit leaked secret material: %s", rawAudit)
+	}
+	firstAuditPage := doJSON(t, handler, http.MethodGet, "/v1/policy/audit-events?limit=2", nil, http.StatusOK)
+	firstItems := firstAuditPage["items"].([]any)
+	if len(firstItems) != 2 || firstAuditPage["next_cursor"] == nil {
+		t.Fatalf("first audit page = %#v", firstAuditPage)
+	}
+	secondAuditPage := doJSON(t, handler, http.MethodGet, "/v1/policy/audit-events?limit=2&cursor="+firstAuditPage["next_cursor"].(string), nil, http.StatusOK)
+	if len(secondAuditPage["items"].([]any)) == 0 {
+		t.Fatalf("second audit page = %#v", secondAuditPage)
+	}
+	invalidAuditCursor := doJSONEnvelope(t, handler, http.MethodGet, "/v1/policy/audit-events?cursor=cursor_jobs_000001", nil, http.StatusBadRequest)
+	if invalidAuditCursor["error"].(map[string]any)["code"] != "invalid_cursor" {
+		t.Fatalf("invalid audit cursor = %#v", invalidAuditCursor)
+	}
 	metrics := doJSON(t, handler, http.MethodGet, "/v1/policy/metrics", nil, http.StatusOK)
 	if metrics["component"] != "policy" {
 		t.Fatalf("metrics = %#v", metrics)

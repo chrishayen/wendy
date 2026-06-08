@@ -1782,6 +1782,48 @@ func TestPolicyCreateRuleCommandPostsRule(t *testing.T) {
 	}
 }
 
+func TestPolicyAuditEventsCommandGetsPaginatedEvents(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/v1/policy/audit-events" {
+			t.Fatalf("request = %s %s", r.Method, r.URL.Path)
+		}
+		if r.Header.Get("Authorization") != "Bearer component-token" {
+			t.Fatalf("authorization = %q", r.Header.Get("Authorization"))
+		}
+		if r.URL.Query().Get("limit") != "2" || r.URL.Query().Get("cursor") != "cursor_policy_audit_000002" {
+			t.Fatalf("query = %s", r.URL.RawQuery)
+		}
+		writeEnvelope(t, w, http.StatusOK, map[string]any{
+			"items": []map[string]any{{
+				"event_type":  "policy.decision",
+				"subject_id":  "sub_agent",
+				"action":      "tool.invoke",
+				"resource":    "cap_image",
+				"allowed":     false,
+				"reason":      "policy_denied",
+				"occurred_at": "2026-06-07T00:00:00Z",
+			}},
+			"next_cursor": nil,
+		})
+	}))
+	defer server.Close()
+
+	var stdout, stderr bytes.Buffer
+	code := run([]string{
+		"-policy-url", server.URL,
+		"-component-token", "component-token",
+		"policy", "audit-events",
+		"-limit", "2",
+		"-cursor", "cursor_policy_audit_000002",
+	}, &stdout, &stderr, server.Client())
+	if code != 0 {
+		t.Fatalf("code=%d stderr=%s stdout=%s", code, stderr.String(), stdout.String())
+	}
+	if !strings.Contains(stdout.String(), `"event_type": "policy.decision"`) || !strings.Contains(stdout.String(), `"policy_denied"`) {
+		t.Fatalf("stdout = %s", stdout.String())
+	}
+}
+
 func TestPolicyCreateSecretCommandReadsValueEnv(t *testing.T) {
 	t.Setenv("PACP_TEST_SECRET", "super-secret")
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

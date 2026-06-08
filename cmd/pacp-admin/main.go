@@ -832,7 +832,7 @@ func artifactsRegisterLocalCommand(cfg adminConfig, httpClient *http.Client, arg
 
 func policyCommand(cfg adminConfig, httpClient *http.Client, args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
-		return usage(stderr, "usage: pacp-admin [flags] policy <create-key|rotate-key|revoke-key|verify|check|create-rule|create-secret|redact>")
+		return usage(stderr, "usage: pacp-admin [flags] policy <create-key|rotate-key|revoke-key|verify|check|create-rule|audit-events|create-secret|redact>")
 	}
 	switch args[0] {
 	case "create-key":
@@ -850,12 +850,14 @@ func policyCommand(cfg adminConfig, httpClient *http.Client, args []string, stdo
 		return policyCheckCommand(cfg, httpClient, args[1:], stdout, stderr)
 	case "create-rule":
 		return policyCreateRuleCommand(cfg, httpClient, args[1:], stdout, stderr)
+	case "audit-events":
+		return policyAuditEventsCommand(cfg, httpClient, args[1:], stdout, stderr)
 	case "create-secret":
 		return policyCreateSecretCommand(cfg, httpClient, args[1:], stdout, stderr)
 	case "redact":
 		return policyRedactCommand(cfg, httpClient, args[1:], stdout, stderr)
 	default:
-		return usage(stderr, "usage: pacp-admin [flags] policy <create-key|rotate-key|revoke-key|verify|check|create-rule|create-secret|redact>")
+		return usage(stderr, "usage: pacp-admin [flags] policy <create-key|rotate-key|revoke-key|verify|check|create-rule|audit-events|create-secret|redact>")
 	}
 }
 
@@ -978,6 +980,35 @@ func policyCreateRuleCommand(cfg adminConfig, httpClient *http.Client, args []st
 	}
 	req := contracts.CreatePolicyRuleRequest{SubjectID: *subjectID, Scope: *scope, Action: *action, Resource: *resource, Effect: *effect, Reason: *reason}
 	return postJSONBody(cfg, httpClient, cfg.PolicyURL, "/v1/policy/rules", authorizationHeader(cfg.ComponentToken), "", req, stdout, stderr)
+}
+
+func policyAuditEventsCommand(cfg adminConfig, httpClient *http.Client, args []string, stdout, stderr io.Writer) int {
+	flags := flag.NewFlagSet("policy audit-events", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	limit := flags.Int("limit", 0, "optional positive page limit")
+	cursor := flags.String("cursor", "", "optional page cursor")
+	remaining, err := parseSubcommandFlags(flags, args)
+	if err != nil {
+		return 2
+	}
+	if len(remaining) != 0 {
+		return usage(stderr, "usage: pacp-admin [flags] policy audit-events [-limit n] [-cursor cursor]")
+	}
+	if *limit < 0 {
+		return usage(stderr, "limit must be zero or greater for policy audit-events")
+	}
+	query := url.Values{}
+	if *limit > 0 {
+		query.Set("limit", strconv.Itoa(*limit))
+	}
+	if *cursor != "" {
+		query.Set("cursor", *cursor)
+	}
+	path := "/v1/policy/audit-events"
+	if encoded := query.Encode(); encoded != "" {
+		path += "?" + encoded
+	}
+	return getJSON(cfg, httpClient, cfg.PolicyURL, path, authorizationHeader(cfg.ComponentToken), stdout, stderr)
 }
 
 func policyCreateSecretCommand(cfg adminConfig, httpClient *http.Client, args []string, stdout, stderr io.Writer) int {
