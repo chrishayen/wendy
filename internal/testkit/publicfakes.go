@@ -73,6 +73,17 @@ type FakeJobsConfig struct {
 	Samples      []contracts.MetricSample
 }
 
+type FakeLeasesConfig struct {
+	Credential    string
+	Behavior      FakeComponentBehavior
+	HealthStatus  string
+	Resources     []contracts.ResourceRecord
+	LeaseRequests []contracts.LeaseRequest
+	Leases        []contracts.Lease
+	Now           func() time.Time
+	Samples       []contracts.MetricSample
+}
+
 func NewFakeComponentHandler(cfg FakeComponentConfig) (http.Handler, error) {
 	contract, ok := componentContractFor(strings.TrimSpace(cfg.Kind))
 	if !ok {
@@ -246,6 +257,40 @@ func NewFakeJobsHandler(cfg FakeJobsConfig) (http.Handler, error) {
 	return handler, nil
 }
 
+func NewFakeLeasesHandler(cfg FakeLeasesConfig) (http.Handler, error) {
+	if cfg.Now == nil {
+		cfg.Now = time.Now
+	}
+	if cfg.HealthStatus == "" {
+		cfg.HealthStatus = "healthy"
+	}
+	if cfg.Behavior == "" {
+		cfg.Behavior = FakeComponentSuccess
+	}
+	switch cfg.Behavior {
+	case FakeComponentSuccess, FakeComponentDenied, FakeComponentUnavailable:
+	default:
+		return nil, errors.New("unsupported fake leases behavior: " + string(cfg.Behavior))
+	}
+	resources := cfg.Resources
+	if resources == nil {
+		resources = fakeLeaseResources()
+	}
+	leases := cfg.Leases
+	if leases == nil {
+		leases = fakeLeases()
+	}
+	requests := cfg.LeaseRequests
+	if requests == nil {
+		requests = fakeLeaseRequests(leases)
+	}
+	handler := newFakeLeasesHandler(cfg, resources, requests, leases)
+	if cfg.Credential != "" {
+		return requireFakeCredential(cfg.Credential, handler), nil
+	}
+	return handler, nil
+}
+
 type fakeComponentHandler struct {
 	cfg      FakeComponentConfig
 	contract componentContract
@@ -282,6 +327,28 @@ type fakeJobsHandler struct {
 type fakeJobIdempotency struct {
 	operation   string
 	jobID       string
+	fingerprint string
+}
+
+type fakeLeasesHandler struct {
+	mu              sync.Mutex
+	cfg             FakeLeasesConfig
+	resources       map[string]contracts.ResourceRecord
+	resourceOrder   []string
+	requests        map[string]contracts.LeaseRequest
+	requestOrder    []string
+	leases          map[string]contracts.Lease
+	idempotency     map[string]fakeLeaseIdempotency
+	nextRequestID   int
+	nextLeaseID     int
+	releasedLeases  map[string]bool
+	requestByLease  map[string]string
+	selectorByLease map[string]string
+}
+
+type fakeLeaseIdempotency struct {
+	operation   string
+	leaseID     string
 	fingerprint string
 }
 
@@ -337,6 +404,57 @@ func newFakeJobsHandler(cfg FakeJobsConfig, jobs []contracts.Job) *fakeJobsHandl
 		logs:        logs,
 		idempotency: map[string]fakeJobIdempotency{},
 		nextID:      len(jobOrder) + 1,
+	}
+}
+
+func newFakeLeasesHandler(cfg FakeLeasesConfig, resources []contracts.ResourceRecord, requests []contracts.LeaseRequest, leases []contracts.Lease) *fakeLeasesHandler {
+	resourceMap := make(map[string]contracts.ResourceRecord, len(resources))
+	resourceOrder := make([]string, 0, len(resources))
+	for _, resource := range resources {
+		resource = cloneFakeResource(resource)
+		if resource.ResourceID == "" {
+			continue
+		}
+		resourceMap[resource.ResourceID] = resource
+		resourceOrder = append(resourceOrder, resource.ResourceID)
+	}
+	leaseMap := make(map[string]contracts.Lease, len(leases))
+	for _, lease := range leases {
+		lease = cloneFakeLease(lease)
+		if lease.LeaseID == "" {
+			continue
+		}
+		leaseMap[lease.LeaseID] = lease
+	}
+	requestMap := make(map[string]contracts.LeaseRequest, len(requests))
+	requestOrder := make([]string, 0, len(requests))
+	requestByLease := map[string]string{}
+	selectorByLease := map[string]string{}
+	for _, request := range requests {
+		request = cloneFakeLeaseRequest(request)
+		if request.RequestID == "" {
+			continue
+		}
+		requestMap[request.RequestID] = request
+		requestOrder = append(requestOrder, request.RequestID)
+		if request.Lease != nil {
+			requestByLease[request.Lease.LeaseID] = request.RequestID
+			selectorByLease[request.Lease.LeaseID] = request.ResourceSelector
+		}
+	}
+	return &fakeLeasesHandler{
+		cfg:             cfg,
+		resources:       resourceMap,
+		resourceOrder:   resourceOrder,
+		requests:        requestMap,
+		requestOrder:    requestOrder,
+		leases:          leaseMap,
+		idempotency:     map[string]fakeLeaseIdempotency{},
+		nextRequestID:   len(requestOrder) + 1,
+		nextLeaseID:     len(leaseMap) + 1,
+		releasedLeases:  map[string]bool{},
+		requestByLease:  requestByLease,
+		selectorByLease: selectorByLease,
 	}
 }
 
@@ -1021,6 +1139,520 @@ func (h *fakeJobsHandler) writeBlocked(w http.ResponseWriter, r *http.Request) b
 	}
 }
 
+func (h *fakeLeasesHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if h.writeBlocked(w, r) {
+		return
+	}
+	path := strings.TrimSuffix(r.URL.Path, "/")
+	switch {
+	case r.Method == http.MethodGet && path == "/v1/leases/health":
+		health := contracts.NewComponentHealth("leases", map[string]any{"fake": true})
+		health.Status = h.cfg.HealthStatus
+		health.CheckedAt = h.cfg.Now().UTC().Format(time.RFC3339)
+		writeFakeSuccess(w, r, http.StatusOK, health)
+	case r.Method == http.MethodGet && path == "/v1/leases/metrics":
+		samples := h.cfg.Samples
+		if samples == nil {
+			samples = h.metricsSamples()
+		}
+		metrics := contracts.NewComponentMetrics("leases", samples)
+		metrics.CollectedAt = h.cfg.Now().UTC().Format(time.RFC3339)
+		writeFakeSuccess(w, r, http.StatusOK, metrics)
+	case r.Method == http.MethodGet && path == "/v1/resources":
+		writeFakeSuccess(w, r, http.StatusOK, map[string]any{"items": h.listResources(r.URL.Query().Get("selector")), "next_cursor": nil})
+	case r.Method == http.MethodPost && path == "/v1/resources":
+		h.registerResource(w, r)
+	case strings.HasPrefix(path, "/v1/resources/"):
+		h.resourceRoute(w, r, strings.TrimPrefix(path, "/v1/resources/"))
+	case r.Method == http.MethodGet && path == "/v1/lease-requests":
+		h.listLeaseRequests(w, r)
+	case r.Method == http.MethodPost && path == "/v1/lease-requests":
+		h.createLeaseRequest(w, r)
+	case strings.HasPrefix(path, "/v1/lease-requests/"):
+		h.leaseRequestRoute(w, r, strings.TrimPrefix(path, "/v1/lease-requests/"))
+	case strings.HasPrefix(path, "/v1/leases/"):
+		h.leaseRoute(w, r, strings.TrimPrefix(path, "/v1/leases/"))
+	default:
+		writeFakeError(w, r, http.StatusNotFound, "not_found", "fake leases route not found", false)
+	}
+}
+
+func (h *fakeLeasesHandler) resourceRoute(w http.ResponseWriter, r *http.Request, tail string) {
+	parts := strings.Split(tail, "/")
+	if len(parts) == 0 || parts[0] == "" {
+		writeFakeError(w, r, http.StatusNotFound, "not_found", "fake resource route not found", false)
+		return
+	}
+	resourceID, err := url.PathUnescape(parts[0])
+	if err != nil {
+		writeFakeError(w, r, http.StatusBadRequest, "validation_failed", "resource_id is invalid", false)
+		return
+	}
+	if len(parts) == 1 && r.Method == http.MethodGet {
+		resource, ok := h.getResource(resourceID)
+		if !ok {
+			writeFakeError(w, r, http.StatusNotFound, "not_found", "fake resource not found", false)
+			return
+		}
+		writeFakeSuccess(w, r, http.StatusOK, resource)
+		return
+	}
+	if len(parts) == 2 && parts[1] == "inspection" && r.Method == http.MethodGet {
+		h.inspectResource(w, r, resourceID)
+		return
+	}
+	writeFakeError(w, r, http.StatusNotFound, "not_found", "fake resource route not found", false)
+}
+
+func (h *fakeLeasesHandler) leaseRequestRoute(w http.ResponseWriter, r *http.Request, tail string) {
+	parts := strings.Split(tail, "/")
+	if len(parts) == 0 || parts[0] == "" {
+		writeFakeError(w, r, http.StatusNotFound, "not_found", "fake lease request route not found", false)
+		return
+	}
+	requestID, err := url.PathUnescape(parts[0])
+	if err != nil {
+		writeFakeError(w, r, http.StatusBadRequest, "validation_failed", "request_id is invalid", false)
+		return
+	}
+	if len(parts) == 1 && r.Method == http.MethodGet {
+		request, ok := h.getLeaseRequest(requestID)
+		if !ok {
+			writeFakeError(w, r, http.StatusNotFound, "not_found", "fake lease request not found", false)
+			return
+		}
+		writeFakeSuccess(w, r, http.StatusOK, request)
+		return
+	}
+	if len(parts) == 2 && parts[1] == "cancel" && r.Method == http.MethodPost {
+		h.cancelLeaseRequest(w, r, requestID)
+		return
+	}
+	writeFakeError(w, r, http.StatusNotFound, "not_found", "fake lease request route not found", false)
+}
+
+func (h *fakeLeasesHandler) leaseRoute(w http.ResponseWriter, r *http.Request, tail string) {
+	parts := strings.Split(tail, "/")
+	if len(parts) == 0 || parts[0] == "" {
+		writeFakeError(w, r, http.StatusNotFound, "not_found", "fake lease route not found", false)
+		return
+	}
+	leaseID, err := url.PathUnescape(parts[0])
+	if err != nil {
+		writeFakeError(w, r, http.StatusBadRequest, "validation_failed", "lease_id is invalid", false)
+		return
+	}
+	if len(parts) == 1 && r.Method == http.MethodGet {
+		lease, ok := h.getLease(leaseID)
+		if !ok {
+			writeFakeError(w, r, http.StatusNotFound, "not_found", "fake lease not found", false)
+			return
+		}
+		writeFakeSuccess(w, r, http.StatusOK, lease)
+		return
+	}
+	if len(parts) != 2 || r.Method != http.MethodPost {
+		writeFakeError(w, r, http.StatusNotFound, "not_found", "fake lease route not found", false)
+		return
+	}
+	switch parts[1] {
+	case "heartbeat":
+		h.heartbeatLease(w, r, leaseID)
+	case "release":
+		h.releaseLease(w, r, leaseID)
+	default:
+		writeFakeError(w, r, http.StatusNotFound, "not_found", "fake lease route not found", false)
+	}
+}
+
+func (h *fakeLeasesHandler) registerResource(w http.ResponseWriter, r *http.Request) {
+	var req contracts.RegisterResourceRequest
+	if !decodeFakeBody(w, r, &req) {
+		return
+	}
+	if strings.TrimSpace(req.Selector) == "" {
+		writeFakeError(w, r, http.StatusBadRequest, "validation_failed", "selector is required", false)
+		return
+	}
+	status := req.Status
+	if status == "" {
+		status = contracts.ResourceAvailable
+	}
+	if status != contracts.ResourceAvailable && status != contracts.ResourceUnavailable {
+		writeFakeError(w, r, http.StatusBadRequest, "validation_failed", "status must be available or unavailable", false)
+		return
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	resourceID := strings.TrimSpace(req.ResourceID)
+	if resourceID == "" {
+		resourceID = fmt.Sprintf("res_fake_created_%03d", len(h.resourceOrder)+1)
+	}
+	if _, exists := h.resources[resourceID]; exists {
+		writeFakeError(w, r, http.StatusConflict, "resource_conflict", "resource already exists", false)
+		return
+	}
+	resource := contracts.ResourceRecord{
+		ResourceID:  resourceID,
+		Selector:    req.Selector,
+		DisplayName: req.DisplayName,
+		Status:      status,
+		NodeID:      req.NodeID,
+		Tags:        append([]string(nil), req.Tags...),
+		Metadata:    cloneMap(req.Metadata),
+		Links:       fakeResourceLinks(resourceID),
+	}
+	h.resources[resourceID] = resource
+	h.resourceOrder = append(h.resourceOrder, resourceID)
+	writeFakeSuccess(w, r, http.StatusCreated, cloneFakeResource(resource))
+}
+
+func (h *fakeLeasesHandler) createLeaseRequest(w http.ResponseWriter, r *http.Request) {
+	var req contracts.CreateLeaseRequest
+	if !decodeFakeBody(w, r, &req) {
+		return
+	}
+	if strings.TrimSpace(req.RequesterID) == "" || strings.TrimSpace(req.ResourceSelector) == "" {
+		writeFakeError(w, r, http.StatusBadRequest, "validation_failed", "requester_id and resource_selector are required", false)
+		return
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	resource, ok := h.firstResourceForSelector(req.ResourceSelector)
+	if !ok || resource.Status != contracts.ResourceAvailable {
+		writeFakeError(w, r, http.StatusConflict, "resource_unavailable", "no available resource matches the requested selector", true)
+		return
+	}
+	now := h.cfg.Now().UTC().Format(time.RFC3339)
+	requestID := fmt.Sprintf("lease_req_fake_created_%03d", h.nextRequestID)
+	h.nextRequestID++
+	request := contracts.LeaseRequest{
+		RequestID:        requestID,
+		State:            contracts.LeaseRequestPending,
+		RequesterID:      req.RequesterID,
+		ResourceSelector: req.ResourceSelector,
+		CreatedAt:        now,
+		UpdatedAt:        now,
+		Links:            fakeLeaseRequestLinks(requestID, contracts.LeaseRequestPending),
+	}
+	if h.activeLeaseForResource(resource.ResourceID) == nil {
+		request = h.grantRequestLocked(request, resource.ResourceID, req.RequesterID)
+	} else {
+		position := h.queuePositionLocked(req.ResourceSelector) + 1
+		request.QueuePosition = &position
+	}
+	h.requests[requestID] = request
+	h.requestOrder = append(h.requestOrder, requestID)
+	writeFakeSuccess(w, r, http.StatusCreated, cloneFakeLeaseRequest(request))
+}
+
+func (h *fakeLeasesHandler) listLeaseRequests(w http.ResponseWriter, r *http.Request) {
+	requesterID := strings.TrimSpace(r.URL.Query().Get("requester_id"))
+	if requesterID == "" {
+		writeFakeError(w, r, http.StatusBadRequest, "validation_failed", "requester_id is required", false)
+		return
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	items := []contracts.LeaseRequest{}
+	for _, requestID := range h.requestOrder {
+		request, ok := h.requests[requestID]
+		if ok && request.RequesterID == requesterID {
+			items = append(items, cloneFakeLeaseRequest(request))
+		}
+	}
+	writeFakeSuccess(w, r, http.StatusOK, map[string]any{"items": items, "next_cursor": nil})
+}
+
+func (h *fakeLeasesHandler) cancelLeaseRequest(w http.ResponseWriter, r *http.Request, requestID string) {
+	if r.Body != nil {
+		_ = r.Body.Close()
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	request, ok := h.requests[requestID]
+	if !ok {
+		writeFakeError(w, r, http.StatusNotFound, "not_found", "fake lease request not found", false)
+		return
+	}
+	if request.State == contracts.LeaseRequestPending {
+		request.State = contracts.LeaseRequestCanceled
+		request.QueuePosition = nil
+		request.UpdatedAt = h.cfg.Now().UTC().Format(time.RFC3339)
+		request.Links = fakeLeaseRequestLinks(request.RequestID, request.State)
+		h.requests[requestID] = request
+	}
+	writeFakeSuccess(w, r, http.StatusOK, cloneFakeLeaseRequest(request))
+}
+
+func (h *fakeLeasesHandler) heartbeatLease(w http.ResponseWriter, r *http.Request, leaseID string) {
+	var req contracts.LeaseHeartbeatRequest
+	if !decodeFakeBody(w, r, &req) {
+		return
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	lease, ok := h.leases[leaseID]
+	if !ok {
+		writeFakeError(w, r, http.StatusNotFound, "not_found", "fake lease not found", false)
+		return
+	}
+	if h.releasedLeases[leaseID] || lease.ReleasedAt != "" {
+		writeFakeError(w, r, http.StatusConflict, "lease_expired", "lease heartbeat rejected because lease has expired", false)
+		return
+	}
+	if req.HolderID != lease.HolderID {
+		writeFakeError(w, r, http.StatusForbidden, "forbidden", "holder_id does not match the active lease", false)
+		return
+	}
+	lease.ExpiresAt = h.cfg.Now().UTC().Add(60 * time.Second).Format(time.RFC3339)
+	h.leases[leaseID] = lease
+	if requestID := h.requestByLease[leaseID]; requestID != "" {
+		request := h.requests[requestID]
+		request.Lease = cloneFakeLeasePointer(lease)
+		request.UpdatedAt = h.cfg.Now().UTC().Format(time.RFC3339)
+		h.requests[requestID] = request
+	}
+	writeFakeSuccess(w, r, http.StatusOK, cloneFakeLease(lease))
+}
+
+func (h *fakeLeasesHandler) releaseLease(w http.ResponseWriter, r *http.Request, leaseID string) {
+	idempotencyKey := strings.TrimSpace(r.Header.Get("Idempotency-Key"))
+	if idempotencyKey == "" {
+		writeFakeError(w, r, http.StatusBadRequest, "missing_idempotency_key", "Idempotency-Key header is required for this lease operation", false)
+		return
+	}
+	var req contracts.LeaseReleaseRequest
+	if !decodeFakeBody(w, r, &req) {
+		return
+	}
+	fingerprint := fakeJSONFingerprint("release:"+leaseID, req)
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if existing, ok := h.idempotency[idempotencyKey]; ok {
+		if existing.operation != "release" || existing.leaseID != leaseID || existing.fingerprint != fingerprint {
+			writeFakeError(w, r, http.StatusConflict, "idempotency_conflict", "idempotency key was reused with different request content", false)
+			return
+		}
+		lease := h.leases[leaseID]
+		writeFakeSuccess(w, r, http.StatusOK, cloneFakeLease(lease))
+		return
+	}
+	lease, ok := h.leases[leaseID]
+	if !ok {
+		writeFakeError(w, r, http.StatusNotFound, "not_found", "fake lease not found", false)
+		return
+	}
+	if req.HolderID == "" {
+		writeFakeError(w, r, http.StatusBadRequest, "validation_failed", "holder_id is required", false)
+		return
+	}
+	if req.HolderID != lease.HolderID {
+		writeFakeError(w, r, http.StatusForbidden, "forbidden", "holder_id does not match the active lease", false)
+		return
+	}
+	now := h.cfg.Now().UTC().Format(time.RFC3339)
+	lease.ReleasedAt = now
+	lease.ReleasedBy = strings.TrimSpace(r.Header.Get("X-Actor-Subject-ID"))
+	if lease.ReleasedBy == "" {
+		lease.ReleasedBy = "sub_fake_actor"
+	}
+	lease.ReleaseReason = req.Reason
+	h.leases[leaseID] = lease
+	h.releasedLeases[leaseID] = true
+	h.idempotency[idempotencyKey] = fakeLeaseIdempotency{operation: "release", leaseID: leaseID, fingerprint: fingerprint}
+	h.promoteNextPendingLocked(h.selectorByLease[leaseID])
+	writeFakeSuccess(w, r, http.StatusOK, cloneFakeLease(lease))
+}
+
+func (h *fakeLeasesHandler) inspectResource(w http.ResponseWriter, r *http.Request, resourceID string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	resource, ok := h.resources[resourceID]
+	if !ok {
+		writeFakeError(w, r, http.StatusNotFound, "not_found", "fake resource not found", false)
+		return
+	}
+	queue := []contracts.LeaseQueueRecord{}
+	for _, requestID := range h.requestOrder {
+		request := h.requests[requestID]
+		if request.ResourceSelector != resource.Selector || request.State != contracts.LeaseRequestPending {
+			continue
+		}
+		position := 0
+		if request.QueuePosition != nil {
+			position = *request.QueuePosition
+		}
+		queue = append(queue, contracts.LeaseQueueRecord{
+			RequestID:     request.RequestID,
+			RequesterID:   request.RequesterID,
+			QueuePosition: position,
+		})
+	}
+	writeFakeSuccess(w, r, http.StatusOK, contracts.ResourceInspection{
+		Resource:    cloneFakeResource(resource),
+		ActiveLease: h.activeLeaseForResource(resourceID),
+		QueueLength: len(queue),
+		Queue:       queue,
+	})
+}
+
+func (h *fakeLeasesHandler) listResources(selector string) []contracts.ResourceRecord {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	items := make([]contracts.ResourceRecord, 0, len(h.resourceOrder))
+	for _, resourceID := range h.resourceOrder {
+		resource, ok := h.resources[resourceID]
+		if !ok {
+			continue
+		}
+		if selector != "" && resource.Selector != selector {
+			continue
+		}
+		items = append(items, cloneFakeResource(resource))
+	}
+	return items
+}
+
+func (h *fakeLeasesHandler) getResource(resourceID string) (contracts.ResourceRecord, bool) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	resource, ok := h.resources[resourceID]
+	if !ok {
+		return contracts.ResourceRecord{}, false
+	}
+	return cloneFakeResource(resource), true
+}
+
+func (h *fakeLeasesHandler) getLeaseRequest(requestID string) (contracts.LeaseRequest, bool) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	request, ok := h.requests[requestID]
+	if !ok {
+		return contracts.LeaseRequest{}, false
+	}
+	return cloneFakeLeaseRequest(request), true
+}
+
+func (h *fakeLeasesHandler) getLease(leaseID string) (contracts.Lease, bool) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	lease, ok := h.leases[leaseID]
+	if !ok {
+		return contracts.Lease{}, false
+	}
+	return cloneFakeLease(lease), true
+}
+
+func (h *fakeLeasesHandler) metricsSamples() []contracts.MetricSample {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	requestsByState := map[contracts.LeaseRequestState]int{}
+	for _, request := range h.requests {
+		requestsByState[request.State]++
+	}
+	samples := []contracts.MetricSample{
+		contracts.CountMetric("lease_resources_total", len(h.resources), nil),
+		contracts.CountMetric("leases_active_total", h.activeLeaseCountLocked(), nil),
+	}
+	for state, count := range requestsByState {
+		samples = append(samples, contracts.CountMetric("lease_requests_by_state", count, map[string]string{"state": string(state)}))
+	}
+	return samples
+}
+
+func (h *fakeLeasesHandler) firstResourceForSelector(selector string) (contracts.ResourceRecord, bool) {
+	for _, resourceID := range h.resourceOrder {
+		resource := h.resources[resourceID]
+		if resource.Selector == selector {
+			return resource, true
+		}
+	}
+	return contracts.ResourceRecord{}, false
+}
+
+func (h *fakeLeasesHandler) activeLeaseForResource(resourceID string) *contracts.Lease {
+	for _, lease := range h.leases {
+		if lease.ResourceID == resourceID && lease.ReleasedAt == "" && !h.releasedLeases[lease.LeaseID] {
+			return cloneFakeLeasePointer(lease)
+		}
+	}
+	return nil
+}
+
+func (h *fakeLeasesHandler) queuePositionLocked(selector string) int {
+	count := 0
+	for _, request := range h.requests {
+		if request.ResourceSelector == selector && request.State == contracts.LeaseRequestPending {
+			count++
+		}
+	}
+	return count
+}
+
+func (h *fakeLeasesHandler) grantRequestLocked(request contracts.LeaseRequest, resourceID, holderID string) contracts.LeaseRequest {
+	now := h.cfg.Now().UTC()
+	leaseID := fmt.Sprintf("lease_fake_created_%03d", h.nextLeaseID)
+	h.nextLeaseID++
+	lease := contracts.Lease{
+		LeaseID:    leaseID,
+		ResourceID: resourceID,
+		HolderID:   holderID,
+		ExpiresAt:  now.Add(60 * time.Second).Format(time.RFC3339),
+		Links:      fakeLeaseLinks(leaseID),
+	}
+	h.leases[leaseID] = lease
+	h.requestByLease[leaseID] = request.RequestID
+	h.selectorByLease[leaseID] = request.ResourceSelector
+	request.State = contracts.LeaseRequestGranted
+	request.QueuePosition = nil
+	request.Lease = cloneFakeLeasePointer(lease)
+	request.UpdatedAt = now.Format(time.RFC3339)
+	request.Links = fakeLeaseRequestLinks(request.RequestID, request.State)
+	return request
+}
+
+func (h *fakeLeasesHandler) promoteNextPendingLocked(selector string) {
+	if selector == "" {
+		return
+	}
+	for _, requestID := range h.requestOrder {
+		request := h.requests[requestID]
+		if request.ResourceSelector != selector || request.State != contracts.LeaseRequestPending {
+			continue
+		}
+		resource, ok := h.firstResourceForSelector(selector)
+		if !ok {
+			return
+		}
+		h.requests[requestID] = h.grantRequestLocked(request, resource.ResourceID, request.RequesterID)
+		return
+	}
+}
+
+func (h *fakeLeasesHandler) activeLeaseCountLocked() int {
+	count := 0
+	for _, lease := range h.leases {
+		if lease.ReleasedAt == "" && !h.releasedLeases[lease.LeaseID] {
+			count++
+		}
+	}
+	return count
+}
+
+func (h *fakeLeasesHandler) writeBlocked(w http.ResponseWriter, r *http.Request) bool {
+	switch h.cfg.Behavior {
+	case FakeComponentDenied:
+		writeFakeError(w, r, http.StatusForbidden, "forbidden", "fake leases access denied", false)
+		return true
+	case FakeComponentUnavailable:
+		writeFakeError(w, r, http.StatusServiceUnavailable, "component_unavailable", "fake leases unavailable", true)
+		return true
+	default:
+		return false
+	}
+}
+
 func (h *fakeComponentHandler) writeBlocked(w http.ResponseWriter, r *http.Request) bool {
 	switch h.cfg.Behavior {
 	case FakeComponentDenied:
@@ -1061,6 +1693,116 @@ func fakeNodeService(serviceID, status string) contracts.NodeService {
 	}
 }
 
+func fakeLeaseResources() []contracts.ResourceRecord {
+	return []contracts.ResourceRecord{{
+		ResourceID:  "res_fake_gpu",
+		Selector:    "gpu",
+		DisplayName: "Fake GPU",
+		Status:      contracts.ResourceAvailable,
+		NodeID:      "node_fake",
+		Tags:        []string{"gpu"},
+		Metadata:    map[string]any{"fake": true},
+		Links:       fakeResourceLinks("res_fake_gpu"),
+	}, {
+		ResourceID:  "res_fake_cpu",
+		Selector:    "cpu",
+		DisplayName: "Fake CPU",
+		Status:      contracts.ResourceAvailable,
+		NodeID:      "node_fake",
+		Tags:        []string{"cpu"},
+		Metadata:    map[string]any{"fake": true},
+		Links:       fakeResourceLinks("res_fake_cpu"),
+	}, {
+		ResourceID:  "res_fake_unavailable",
+		Selector:    "unavailable",
+		DisplayName: "Fake Unavailable Resource",
+		Status:      contracts.ResourceUnavailable,
+		NodeID:      "node_fake",
+		Tags:        []string{"offline"},
+		Metadata:    map[string]any{"fake": true},
+		Links:       fakeResourceLinks("res_fake_unavailable"),
+	}}
+}
+
+func fakeLeases() []contracts.Lease {
+	return []contracts.Lease{{
+		LeaseID:    "lease_fake_active",
+		ResourceID: "res_fake_gpu",
+		HolderID:   "job_fake_holder",
+		ExpiresAt:  "2026-06-08T00:10:00Z",
+		Links:      fakeLeaseLinks("lease_fake_active"),
+	}}
+}
+
+func fakeLeaseRequests(leases []contracts.Lease) []contracts.LeaseRequest {
+	now := "2026-06-08T00:00:00Z"
+	active := contracts.Lease{}
+	if len(leases) > 0 {
+		active = leases[0]
+	}
+	queuePosition := 1
+	return []contracts.LeaseRequest{{
+		RequestID:        "lease_req_fake_granted",
+		State:            contracts.LeaseRequestGranted,
+		RequesterID:      "job_fake_holder",
+		ResourceSelector: "gpu",
+		Lease:            cloneFakeLeasePointer(active),
+		CreatedAt:        now,
+		UpdatedAt:        now,
+		Links:            fakeLeaseRequestLinks("lease_req_fake_granted", contracts.LeaseRequestGranted),
+	}, {
+		RequestID:        "lease_req_fake_pending",
+		State:            contracts.LeaseRequestPending,
+		RequesterID:      "job_fake_waiting",
+		ResourceSelector: "gpu",
+		QueuePosition:    &queuePosition,
+		CreatedAt:        now,
+		UpdatedAt:        now,
+		Links:            fakeLeaseRequestLinks("lease_req_fake_pending", contracts.LeaseRequestPending),
+	}, {
+		RequestID:        "lease_req_fake_expired",
+		State:            contracts.LeaseRequestExpired,
+		RequesterID:      "job_fake_expired",
+		ResourceSelector: "gpu",
+		CreatedAt:        now,
+		UpdatedAt:        now,
+		Links:            fakeLeaseRequestLinks("lease_req_fake_expired", contracts.LeaseRequestExpired),
+	}, {
+		RequestID:        "lease_req_fake_canceled",
+		State:            contracts.LeaseRequestCanceled,
+		RequesterID:      "job_fake_canceled",
+		ResourceSelector: "gpu",
+		CreatedAt:        now,
+		UpdatedAt:        now,
+		Links:            fakeLeaseRequestLinks("lease_req_fake_canceled", contracts.LeaseRequestCanceled),
+	}}
+}
+
+func fakeResourceLinks(resourceID string) map[string]any {
+	return map[string]any{
+		"self":       map[string]any{"method": "GET", "href": "/v1/resources/" + resourceID},
+		"inspection": map[string]any{"method": "GET", "href": "/v1/resources/" + resourceID + "/inspection"},
+	}
+}
+
+func fakeLeaseRequestLinks(requestID string, state contracts.LeaseRequestState) map[string]any {
+	links := map[string]any{
+		"self": map[string]any{"method": "GET", "href": "/v1/lease-requests/" + requestID},
+	}
+	if state == contracts.LeaseRequestPending {
+		links["cancel"] = map[string]any{"method": "POST", "href": "/v1/lease-requests/" + requestID + "/cancel"}
+	}
+	return links
+}
+
+func fakeLeaseLinks(leaseID string) map[string]any {
+	return map[string]any{
+		"self":      map[string]any{"method": "GET", "href": "/v1/leases/" + leaseID},
+		"heartbeat": map[string]any{"method": "POST", "href": "/v1/leases/" + leaseID + "/heartbeat"},
+		"release":   map[string]any{"method": "POST", "href": "/v1/leases/" + leaseID + "/release"},
+	}
+}
+
 func cloneFakeNodeResources(resources []contracts.NodeResource) []contracts.NodeResource {
 	cloned := make([]contracts.NodeResource, len(resources))
 	for i, resource := range resources {
@@ -1078,6 +1820,49 @@ func cloneFakeNodeService(service contracts.NodeService) contracts.NodeService {
 		service.Manifest = &manifest
 	}
 	return service
+}
+
+func cloneFakeResource(resource contracts.ResourceRecord) contracts.ResourceRecord {
+	resource.Tags = append([]string(nil), resource.Tags...)
+	resource.Metadata = cloneMap(resource.Metadata)
+	resource.Links = cloneMap(resource.Links)
+	return resource
+}
+
+func cloneFakeLeaseRequest(request contracts.LeaseRequest) contracts.LeaseRequest {
+	request.QueuePosition = cloneIntPointer(request.QueuePosition)
+	request.Lease = cloneFakeLeasePointerValue(request.Lease)
+	request.Links = cloneMap(request.Links)
+	return request
+}
+
+func cloneFakeLease(lease contracts.Lease) contracts.Lease {
+	lease.Links = cloneMap(lease.Links)
+	return lease
+}
+
+func cloneFakeLeasePointer(lease contracts.Lease) *contracts.Lease {
+	if lease.LeaseID == "" {
+		return nil
+	}
+	cloned := cloneFakeLease(lease)
+	return &cloned
+}
+
+func cloneFakeLeasePointerValue(lease *contracts.Lease) *contracts.Lease {
+	if lease == nil {
+		return nil
+	}
+	cloned := cloneFakeLease(*lease)
+	return &cloned
+}
+
+func cloneIntPointer(value *int) *int {
+	if value == nil {
+		return nil
+	}
+	cloned := *value
+	return &cloned
 }
 
 func fakeJobs() []contracts.Job {
@@ -1261,13 +2046,12 @@ func fakeListItems(kind string) []any {
 		}
 		return items
 	case "leases":
-		return []any{contracts.ResourceRecord{
-			ResourceID: "res_fake_gpu",
-			Selector:   "gpu",
-			Status:     contracts.ResourceAvailable,
-			NodeID:     "node_fake",
-			Links:      map[string]any{},
-		}}
+		resources := fakeLeaseResources()
+		items := make([]any, 0, len(resources))
+		for _, resource := range resources {
+			items = append(items, resource)
+		}
+		return items
 	case "node":
 		return []any{contracts.NodeResource{
 			ResourceID: "res_fake_gpu",

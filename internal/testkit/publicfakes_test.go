@@ -369,6 +369,145 @@ func TestFakeJobsHandlerSupportsUnavailableBehavior(t *testing.T) {
 	}
 }
 
+func TestFakeLeasesHandlerExposesResourceAndRequestStates(t *testing.T) {
+	handler, err := NewFakeLeasesHandler(FakeLeasesConfig{Now: fixedFakeClock})
+	if err != nil {
+		t.Fatalf("new fake leases: %v", err)
+	}
+	server := httptest.NewServer(handler)
+	defer server.Close()
+
+	resourcesEnvelope := doFakeLeasesEnvelope(t, server, http.MethodGet, "/v1/resources", nil, nil, http.StatusOK)
+	var resources struct {
+		Items []contracts.ResourceRecord `json:"items"`
+	}
+	decodeEnvelopeData(t, resourcesEnvelope, &resources)
+	statuses := map[contracts.ResourceStatus]bool{}
+	for _, resource := range resources.Items {
+		statuses[resource.Status] = true
+	}
+	if !statuses[contracts.ResourceAvailable] || !statuses[contracts.ResourceUnavailable] {
+		t.Fatalf("resource statuses = %#v", resources.Items)
+	}
+
+	for requesterID, wantState := range map[string]contracts.LeaseRequestState{
+		"job_fake_holder":   contracts.LeaseRequestGranted,
+		"job_fake_waiting":  contracts.LeaseRequestPending,
+		"job_fake_expired":  contracts.LeaseRequestExpired,
+		"job_fake_canceled": contracts.LeaseRequestCanceled,
+	} {
+		envelope := doFakeLeasesEnvelope(t, server, http.MethodGet, "/v1/lease-requests?requester_id="+requesterID, nil, nil, http.StatusOK)
+		var list struct {
+			Items []contracts.LeaseRequest `json:"items"`
+		}
+		decodeEnvelopeData(t, envelope, &list)
+		if len(list.Items) != 1 || list.Items[0].State != wantState {
+			t.Fatalf("requester %s list = %#v, want %s", requesterID, list.Items, wantState)
+		}
+	}
+
+	inspectionEnvelope := doFakeLeasesEnvelope(t, server, http.MethodGet, "/v1/resources/res_fake_gpu/inspection", nil, nil, http.StatusOK)
+	var inspection contracts.ResourceInspection
+	decodeEnvelopeData(t, inspectionEnvelope, &inspection)
+	if inspection.ActiveLease == nil || inspection.QueueLength == 0 {
+		t.Fatalf("inspection = %#v", inspection)
+	}
+}
+
+func TestFakeLeasesHandlerCreatesQueuesReleasesAndPromotes(t *testing.T) {
+	handler, err := NewFakeLeasesHandler(FakeLeasesConfig{Now: fixedFakeClock})
+	if err != nil {
+		t.Fatalf("new fake leases: %v", err)
+	}
+	server := httptest.NewServer(handler)
+	defer server.Close()
+
+	grantedEnvelope := doFakeLeasesEnvelope(t, server, http.MethodPost, "/v1/lease-requests", nil, contracts.CreateLeaseRequest{
+		RequesterID:      "job_cpu",
+		ResourceSelector: "cpu",
+	}, http.StatusCreated)
+	var request contracts.LeaseRequest
+	decodeEnvelopeData(t, grantedEnvelope, &request)
+	if request.State != contracts.LeaseRequestGranted || request.Lease == nil || request.Lease.HolderID != "job_cpu" {
+		t.Fatalf("granted request = %#v", request)
+	}
+
+	queuedEnvelope := doFakeLeasesEnvelope(t, server, http.MethodPost, "/v1/lease-requests", nil, contracts.CreateLeaseRequest{
+		RequesterID:      "job_gpu_queued",
+		ResourceSelector: "gpu",
+	}, http.StatusCreated)
+	decodeEnvelopeData(t, queuedEnvelope, &request)
+	if request.State != contracts.LeaseRequestPending || request.QueuePosition == nil {
+		t.Fatalf("queued request = %#v", request)
+	}
+
+	heartbeatEnvelope := doFakeLeasesEnvelope(t, server, http.MethodPost, "/v1/leases/lease_fake_active/heartbeat", nil, contracts.LeaseHeartbeatRequest{
+		HolderID: "job_fake_holder",
+	}, http.StatusOK)
+	var lease contracts.Lease
+	decodeEnvelopeData(t, heartbeatEnvelope, &lease)
+	if lease.HolderID != "job_fake_holder" {
+		t.Fatalf("heartbeat lease = %#v", lease)
+	}
+
+	missingKey := doFakeLeasesEnvelope(t, server, http.MethodPost, "/v1/leases/lease_fake_active/release", nil, contracts.LeaseReleaseRequest{
+		HolderID: "job_fake_holder",
+	}, http.StatusBadRequest)
+	if missingKey.OK || missingKey.Error.Code != "missing_idempotency_key" {
+		t.Fatalf("missing key = %#v", missingKey)
+	}
+
+	releasedEnvelope := doFakeLeasesEnvelope(t, server, http.MethodPost, "/v1/leases/lease_fake_active/release", map[string]string{
+		"Idempotency-Key":    "release-1",
+		"X-Actor-Subject-ID": "sub_runner",
+	}, contracts.LeaseReleaseRequest{
+		HolderID: "job_fake_holder",
+		Reason:   "done",
+	}, http.StatusOK)
+	decodeEnvelopeData(t, releasedEnvelope, &lease)
+	if lease.ReleasedBy != "sub_runner" || lease.ReleaseReason != "done" {
+		t.Fatalf("released lease = %#v", lease)
+	}
+
+	promotedEnvelope := doFakeLeasesEnvelope(t, server, http.MethodGet, "/v1/lease-requests/lease_req_fake_pending", nil, nil, http.StatusOK)
+	decodeEnvelopeData(t, promotedEnvelope, &request)
+	if request.State != contracts.LeaseRequestGranted || request.Lease == nil || request.Lease.HolderID != "job_fake_waiting" {
+		t.Fatalf("promoted request = %#v", request)
+	}
+}
+
+func TestFakeLeasesHandlerSupportsDeniedAndUnavailableBehavior(t *testing.T) {
+	handler, err := NewFakeLeasesHandler(FakeLeasesConfig{Now: fixedFakeClock})
+	if err != nil {
+		t.Fatalf("new fake leases: %v", err)
+	}
+	server := httptest.NewServer(handler)
+	defer server.Close()
+
+	denied := doFakeLeasesEnvelope(t, server, http.MethodPost, "/v1/lease-requests", nil, contracts.CreateLeaseRequest{
+		RequesterID:      "job_denied",
+		ResourceSelector: "missing",
+	}, http.StatusConflict)
+	if denied.OK || denied.Error.Code != "resource_unavailable" || !denied.Error.Retryable {
+		t.Fatalf("denied = %#v", denied)
+	}
+
+	unavailable, err := NewFakeLeasesHandler(FakeLeasesConfig{
+		Behavior: FakeComponentUnavailable,
+		Now:      fixedFakeClock,
+	})
+	if err != nil {
+		t.Fatalf("new unavailable fake leases: %v", err)
+	}
+	unavailableServer := httptest.NewServer(unavailable)
+	defer unavailableServer.Close()
+
+	envelope := doFakeLeasesEnvelope(t, unavailableServer, http.MethodGet, "/v1/leases/health", nil, nil, http.StatusServiceUnavailable)
+	if envelope.OK || envelope.Error.Code != "component_unavailable" || !envelope.Error.Retryable {
+		t.Fatalf("envelope = %#v", envelope)
+	}
+}
+
 func TestFakePolicyHandlerSupportsAuthAllowAndDeny(t *testing.T) {
 	handler := NewFakePolicyHandler(FakePolicyConfig{
 		ValidCredential: "token_policy",
@@ -793,6 +932,44 @@ func doFakeJobsEnvelope(t *testing.T, server *httptest.Server, method, path stri
 		t.Fatalf("new request: %v", err)
 	}
 	req.Header.Set("X-Request-ID", "req_fake_jobs")
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	for key, value := range headers {
+		req.Header.Set(key, value)
+	}
+	resp, err := server.Client().Do(req)
+	if err != nil {
+		t.Fatalf("%s %s: %v", method, path, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != wantStatus {
+		t.Fatalf("%s %s status = %d, want %d", method, path, resp.StatusCode, wantStatus)
+	}
+	var envelope fakePolicyEnvelope
+	if err := json.NewDecoder(resp.Body).Decode(&envelope); err != nil {
+		t.Fatalf("decode envelope: %v", err)
+	}
+	return envelope
+}
+
+func doFakeLeasesEnvelope(t *testing.T, server *httptest.Server, method, path string, headers map[string]string, body any, wantStatus int) fakePolicyEnvelope {
+	t.Helper()
+	var req *http.Request
+	var err error
+	if body != nil {
+		raw, err := json.Marshal(body)
+		if err != nil {
+			t.Fatalf("marshal body: %v", err)
+		}
+		req, err = http.NewRequest(method, server.URL+path, bytes.NewReader(raw))
+	} else {
+		req, err = http.NewRequest(method, server.URL+path, nil)
+	}
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	req.Header.Set("X-Request-ID", "req_fake_leases")
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}

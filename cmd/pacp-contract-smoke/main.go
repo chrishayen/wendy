@@ -152,6 +152,7 @@ func runFakePublicAPISmoke(timeout time.Duration, stdout, stderr io.Writer) int 
 	}
 
 	appendFakeJobsChecks(ctx, &checks)
+	appendFakeLeasesChecks(ctx, &checks)
 
 	handler, err := testkit.NewFakeProviderHandler(testkit.FakeProviderConfig{Endpoint: "http://provider.fake"})
 	if err != nil {
@@ -455,6 +456,190 @@ func newFakeJSONRequest(ctx context.Context, method, endpoint string, body any) 
 	}
 	req.Header.Set("Content-Type", "application/json")
 	return req, nil
+}
+
+func appendFakeLeasesChecks(ctx context.Context, checks *[]fakePublicAPICheck) {
+	handler, err := testkit.NewFakeLeasesHandler(testkit.FakeLeasesConfig{})
+	if err != nil {
+		*checks = append(*checks, fakePublicAPICheck{Name: "fake.leases.create", Error: err.Error()})
+		return
+	}
+	server := httptest.NewServer(handler)
+	defer server.Close()
+	*checks = append(*checks,
+		checkFakeLeasesResourceStates(ctx, server.Client(), server.URL),
+		checkFakeLeasesRequestStates(ctx, server.Client(), server.URL),
+		checkFakeLeasesCreateGrant(ctx, server.Client(), server.URL),
+		checkFakeLeasesReleasePromotes(ctx, server.Client(), server.URL),
+		requestFakeLeasesExpectedError(ctx, server.Client(), server.URL, http.MethodPost, "/v1/lease-requests", "fake.leases.denied.resource_unavailable", http.StatusConflict, "resource_unavailable", nil, contracts.CreateLeaseRequest{
+			RequesterID:      "job_denied",
+			ResourceSelector: "missing",
+		}),
+	)
+
+	unavailable, err := testkit.NewFakeLeasesHandler(testkit.FakeLeasesConfig{Behavior: testkit.FakeComponentUnavailable})
+	if err != nil {
+		*checks = append(*checks, fakePublicAPICheck{Name: "fake.leases.unavailable.create", Error: err.Error()})
+		return
+	}
+	unavailableServer := httptest.NewServer(unavailable)
+	defer unavailableServer.Close()
+	*checks = append(*checks, requestFakeLeasesExpectedError(ctx, unavailableServer.Client(), unavailableServer.URL, http.MethodGet, "/v1/leases/health", "fake.leases.unavailable.component_unavailable", http.StatusServiceUnavailable, "component_unavailable", nil, nil))
+}
+
+func checkFakeLeasesResourceStates(ctx context.Context, client *http.Client, baseURL string) fakePublicAPICheck {
+	var list struct {
+		Items []contracts.ResourceRecord `json:"items"`
+	}
+	check := requestFakeLeasesJSON(ctx, client, baseURL, http.MethodGet, "/v1/resources", "fake.leases.resources.states", nil, nil, &list)
+	if !check.OK {
+		return check
+	}
+	statuses := map[contracts.ResourceStatus]bool{}
+	for _, resource := range list.Items {
+		statuses[resource.Status] = true
+	}
+	if !statuses[contracts.ResourceAvailable] || !statuses[contracts.ResourceUnavailable] {
+		check.OK = false
+		check.Error = "available and unavailable resources are required"
+	}
+	return check
+}
+
+func checkFakeLeasesRequestStates(ctx context.Context, client *http.Client, baseURL string) fakePublicAPICheck {
+	for requesterID, wantState := range map[string]contracts.LeaseRequestState{
+		"job_fake_holder":   contracts.LeaseRequestGranted,
+		"job_fake_waiting":  contracts.LeaseRequestPending,
+		"job_fake_expired":  contracts.LeaseRequestExpired,
+		"job_fake_canceled": contracts.LeaseRequestCanceled,
+	} {
+		var list struct {
+			Items []contracts.LeaseRequest `json:"items"`
+		}
+		check := requestFakeLeasesJSON(ctx, client, baseURL, http.MethodGet, "/v1/lease-requests?requester_id="+requesterID, "fake.leases.requests.states", nil, nil, &list)
+		if !check.OK {
+			return check
+		}
+		if len(list.Items) != 1 || list.Items[0].State != wantState {
+			check.OK = false
+			check.Error = fmt.Sprintf("requester %s state = %#v, want %s", requesterID, list.Items, wantState)
+			return check
+		}
+	}
+	return fakePublicAPICheck{Name: "fake.leases.requests.states", OK: true, HTTPStatus: http.StatusOK}
+}
+
+func checkFakeLeasesCreateGrant(ctx context.Context, client *http.Client, baseURL string) fakePublicAPICheck {
+	var request contracts.LeaseRequest
+	check := requestFakeLeasesJSON(ctx, client, baseURL, http.MethodPost, "/v1/lease-requests", "fake.leases.create.grant", nil, contracts.CreateLeaseRequest{
+		RequesterID:      "job_cpu_smoke",
+		ResourceSelector: "cpu",
+	}, &request)
+	if !check.OK {
+		return check
+	}
+	if request.State != contracts.LeaseRequestGranted || request.Lease == nil || request.Lease.HolderID != "job_cpu_smoke" {
+		check.OK = false
+		check.Error = fmt.Sprintf("request = %#v", request)
+	}
+	return check
+}
+
+func checkFakeLeasesReleasePromotes(ctx context.Context, client *http.Client, baseURL string) fakePublicAPICheck {
+	var released contracts.Lease
+	check := requestFakeLeasesJSON(ctx, client, baseURL, http.MethodPost, "/v1/leases/lease_fake_active/release", "fake.leases.release.promotes", map[string]string{
+		"Idempotency-Key":    "fake-leases-release",
+		"X-Actor-Subject-ID": "sub_runner",
+	}, contracts.LeaseReleaseRequest{
+		HolderID: "job_fake_holder",
+		Reason:   "done",
+	}, &released)
+	if !check.OK {
+		return check
+	}
+	if released.ReleasedBy != "sub_runner" {
+		check.OK = false
+		check.Error = fmt.Sprintf("released lease = %#v", released)
+		return check
+	}
+	var request contracts.LeaseRequest
+	check = requestFakeLeasesJSON(ctx, client, baseURL, http.MethodGet, "/v1/lease-requests/lease_req_fake_pending", "fake.leases.release.promotes", nil, nil, &request)
+	if !check.OK {
+		return check
+	}
+	if request.State != contracts.LeaseRequestGranted || request.Lease == nil || request.Lease.HolderID != "job_fake_waiting" {
+		check.OK = false
+		check.Error = fmt.Sprintf("promoted request = %#v", request)
+	}
+	return check
+}
+
+func requestFakeLeasesJSON(ctx context.Context, client *http.Client, baseURL, method, path, name string, headers map[string]string, body any, out any) fakePublicAPICheck {
+	req, err := newFakeJSONRequest(ctx, method, baseURL+path, body)
+	if err != nil {
+		return fakePublicAPICheck{Name: name, Error: err.Error()}
+	}
+	req.Header.Set("X-Request-ID", "req_contract_fake_leases")
+	for key, value := range headers {
+		req.Header.Set(key, value)
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return fakePublicAPICheck{Name: name, Error: err.Error()}
+	}
+	defer resp.Body.Close()
+	check := fakePublicAPICheck{Name: name, HTTPStatus: resp.StatusCode}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		check.Error = fmt.Sprintf("HTTP %d", resp.StatusCode)
+		return check
+	}
+	var envelope fakePolicyEnvelope
+	if err := json.NewDecoder(resp.Body).Decode(&envelope); err != nil {
+		check.Error = err.Error()
+		return check
+	}
+	if !envelope.OK {
+		check.Error = envelope.Error.Message
+		return check
+	}
+	if err := json.Unmarshal(envelope.Data, out); err != nil {
+		check.Error = err.Error()
+		return check
+	}
+	check.OK = true
+	return check
+}
+
+func requestFakeLeasesExpectedError(ctx context.Context, client *http.Client, baseURL, method, path, name string, wantStatus int, wantCode string, headers map[string]string, body any) fakePublicAPICheck {
+	req, err := newFakeJSONRequest(ctx, method, baseURL+path, body)
+	if err != nil {
+		return fakePublicAPICheck{Name: name, Error: err.Error()}
+	}
+	req.Header.Set("X-Request-ID", "req_contract_fake_leases")
+	for key, value := range headers {
+		req.Header.Set(key, value)
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return fakePublicAPICheck{Name: name, Error: err.Error()}
+	}
+	defer resp.Body.Close()
+	check := fakePublicAPICheck{Name: name, HTTPStatus: resp.StatusCode}
+	var envelope fakePolicyEnvelope
+	if err := json.NewDecoder(resp.Body).Decode(&envelope); err != nil {
+		check.Error = err.Error()
+		return check
+	}
+	if resp.StatusCode != wantStatus {
+		check.Error = fmt.Sprintf("HTTP %d, want %d", resp.StatusCode, wantStatus)
+		return check
+	}
+	if envelope.OK || envelope.Error.Code != wantCode {
+		check.Error = fmt.Sprintf("error code = %q, want %q", envelope.Error.Code, wantCode)
+		return check
+	}
+	check.OK = true
+	return check
 }
 
 func appendFakeNodeChecks(ctx context.Context, checks *[]fakePublicAPICheck) {

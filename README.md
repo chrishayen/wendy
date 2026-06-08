@@ -44,7 +44,10 @@ Contract simulation data is kept as test input, not as product behavior.
   running/stopped/starting/failed services, lifecycle idempotency, and
   unavailable-node behavior. The reusable jobs fake covers queued, claimed,
   running, succeeded, failed, canceled, and expired jobs plus create, claim,
-  heartbeat, completion, cancellation, logs, and unavailable behavior.
+  heartbeat, completion, cancellation, logs, and unavailable behavior. The
+  reusable leases fake covers available/unavailable resources, pending,
+  granted, expired, and canceled lease requests, denied resource requests,
+  heartbeat, release promotion, and unavailable behavior.
 - `cmd/pacp-contract-smoke`: CLI smoke check for contract simulation packages,
   OpenAPI contracts, live component contracts, distributed component wiring,
   and live provider compliance.
