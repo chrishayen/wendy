@@ -669,9 +669,9 @@ paths:
               $ref: "#/components/schemas/CreateArtifactUploadRequest"
       responses:
         "200":
-          $ref: "#/components/responses/Success"
+          $ref: "#/components/responses/ArtifactUploadResponse"
         "201":
-          $ref: "#/components/responses/Success"
+          $ref: "#/components/responses/ArtifactUploadResponse"
         default:
           $ref: "#/components/responses/Error"
   /v1/artifact-uploads/{upload_id}:
@@ -684,7 +684,7 @@ paths:
         - $ref: "#/components/parameters/UploadID"
       responses:
         "200":
-          $ref: "#/components/responses/Success"
+          $ref: "#/components/responses/ArtifactUploadResponse"
         default:
           $ref: "#/components/responses/Error"
   /v1/artifact-uploads/{upload_id}/content:
@@ -721,7 +721,7 @@ paths:
               format: binary
       responses:
         "200":
-          $ref: "#/components/responses/Success"
+          $ref: "#/components/responses/ArtifactUploadResponse"
         default:
           $ref: "#/components/responses/Error"
   /v1/artifact-uploads/{upload_id}/complete:
@@ -741,9 +741,9 @@ paths:
               $ref: "#/components/schemas/CompleteArtifactUploadRequest"
       responses:
         "200":
-          $ref: "#/components/responses/Success"
+          $ref: "#/components/responses/ArtifactResponse"
         "201":
-          $ref: "#/components/responses/Success"
+          $ref: "#/components/responses/ArtifactResponse"
         default:
           $ref: "#/components/responses/Error"
   /v1/artifacts:
@@ -765,7 +765,7 @@ paths:
         - $ref: "#/components/parameters/Limit"
       responses:
         "200":
-          $ref: "#/components/responses/Success"
+          $ref: "#/components/responses/ArtifactListResponse"
         default:
           $ref: "#/components/responses/Error"
   /v1/artifacts/retention/sweep:
@@ -776,7 +776,7 @@ paths:
       x-policy-action: artifact.retention.sweep
       responses:
         "200":
-          $ref: "#/components/responses/Success"
+          $ref: "#/components/responses/ArtifactRetentionSweepResponse"
         default:
           $ref: "#/components/responses/Error"
   /v1/artifacts/register-local:
@@ -793,7 +793,7 @@ paths:
               $ref: "#/components/schemas/RegisterLocalArtifactRequest"
       responses:
         "201":
-          $ref: "#/components/responses/Success"
+          $ref: "#/components/responses/ArtifactResponse"
         default:
           $ref: "#/components/responses/Error"
   /v1/artifacts/{artifact_id}:
@@ -806,7 +806,7 @@ paths:
         - $ref: "#/components/parameters/ArtifactID"
       responses:
         "200":
-          $ref: "#/components/responses/Success"
+          $ref: "#/components/responses/ArtifactResponse"
         default:
           $ref: "#/components/responses/Error"
   /v1/artifacts/{artifact_id}/policy-context:
@@ -819,7 +819,7 @@ paths:
         - $ref: "#/components/parameters/ArtifactID"
       responses:
         "200":
-          $ref: "#/components/responses/Success"
+          $ref: "#/components/responses/ArtifactPolicyContextResponse"
         default:
           $ref: "#/components/responses/Error"
   /v1/artifacts/{artifact_id}/content:
@@ -1595,6 +1595,61 @@ components:
                 properties:
                   data:
                     $ref: "#/components/schemas/Lease"
+    ArtifactUploadResponse:
+      description: Artifact upload session envelope.
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: "#/components/schemas/SuccessEnvelope"
+              - type: object
+                properties:
+                  data:
+                    $ref: "#/components/schemas/ArtifactUploadSession"
+    ArtifactResponse:
+      description: Artifact metadata envelope.
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: "#/components/schemas/SuccessEnvelope"
+              - type: object
+                properties:
+                  data:
+                    $ref: "#/components/schemas/Artifact"
+    ArtifactListResponse:
+      description: Artifact list envelope.
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: "#/components/schemas/SuccessEnvelope"
+              - type: object
+                properties:
+                  data:
+                    $ref: "#/components/schemas/ArtifactList"
+    ArtifactRetentionSweepResponse:
+      description: Artifact retention sweep envelope.
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: "#/components/schemas/SuccessEnvelope"
+              - type: object
+                properties:
+                  data:
+                    $ref: "#/components/schemas/ArtifactRetentionSweepResult"
+    ArtifactPolicyContextResponse:
+      description: Artifact policy context envelope.
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: "#/components/schemas/SuccessEnvelope"
+              - type: object
+                properties:
+                  data:
+                    $ref: "#/components/schemas/ArtifactPolicyContext"
     Success:
       description: Success envelope.
       content:
@@ -2390,6 +2445,107 @@ components:
         reason:
           type: string
 
+    ArtifactUploadState:
+      type: string
+      enum: [created, received, completed, aborted, expired]
+    ArtifactUploadSession:
+      type: object
+      required: [upload_id, state, received_size, artifact_id, links]
+      properties:
+        upload_id:
+          type: string
+        state:
+          $ref: "#/components/schemas/ArtifactUploadState"
+        name:
+          type: string
+        media_type:
+          type: string
+        producer_ref:
+          type: string
+        owner_subject_id:
+          type: string
+        received_size:
+          type: integer
+          format: int64
+          nullable: true
+        expected_size:
+          type: integer
+          format: int64
+        expected_checksum:
+          type: string
+        artifact_id:
+          type: string
+          nullable: true
+        expires_at:
+          type: string
+          format: date-time
+        completed_at:
+          type: string
+          format: date-time
+        links:
+          $ref: "#/components/schemas/Links"
+    Artifact:
+      type: object
+      required:
+        - artifact_id
+        - name
+        - media_type
+        - size
+        - checksum
+        - created_at
+        - owner_subject_id
+        - links
+      properties:
+        artifact_id:
+          type: string
+        name:
+          type: string
+        media_type:
+          type: string
+        size:
+          type: integer
+          format: int64
+        checksum:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        expires_at:
+          type: string
+          format: date-time
+        producer_ref:
+          type: string
+        owner_subject_id:
+          type: string
+        metadata:
+          $ref: "#/components/schemas/AnyMap"
+        links:
+          $ref: "#/components/schemas/Links"
+    ArtifactList:
+      type: object
+      required: [items, next_cursor]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/Artifact"
+        next_cursor:
+          type: string
+          nullable: true
+    ArtifactPolicyContext:
+      type: object
+      required: [resource_kind, artifact_id, owner_subject_id, policy_state]
+      properties:
+        resource_kind:
+          type: string
+        artifact_id:
+          type: string
+        owner_subject_id:
+          type: string
+        producer_ref:
+          type: string
+        policy_state:
+          type: string
     CreateArtifactUploadRequest:
       type: object
       required: [name, media_type, owner_subject_id]
