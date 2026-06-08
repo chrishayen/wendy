@@ -48,7 +48,8 @@ Contract simulation data is kept as test input, not as product behavior.
 - `cmd/pacp-policy`: runnable access policy and secrets service.
 - `cmd/pacp-node`: runnable runtime node agent for one configured service node.
 - `cmd/pacp-runner`: runnable composition runner.
-- `cmd/pacp-control`: JSON-first CLI for agent-facing gateway operations.
+- `cmd/pacp-control`: JSON-first CLI for gateway health and agent-facing
+  gateway operations.
 - `cmd/pacp-dev`: one-command local development stack using the real service
   HTTP boundaries.
 - `openapi/public-gateway.v1.yaml`: OpenAPI contract for the agent-facing
@@ -66,6 +67,7 @@ go run ./cmd/pacp-contract-smoke
 go run ./cmd/pacp-dev
 go run ./cmd/pacp-dev -state-dir /tmp/pacp-dev-state
 PACP_HTTP_ECHO_TOKEN='Bearer dev-token' go run ./cmd/pacp-http-provider -addr localhost:18088 -manifest testdata/http-provider/echo-manifest.json -routes testdata/http-provider/echo-routes.json -endpoint http://localhost:18088
+go run ./cmd/pacp-control -gateway-url http://localhost:18086 health
 go run ./cmd/pacp-control -gateway-url http://localhost:18086 -token token_agent tools
 go run ./cmd/pacp-control -gateway-url http://localhost:18086 -token token_agent invoke cap_dev_echo -idempotency-key echo-1 -input '{"message":"hello"}'
 go run ./cmd/pacp-control -gateway-url http://localhost:18086 -token token_agent invoke cap_dev_artifact -idempotency-key artifact-1 -input '{"prompt":"red mug"}'

@@ -37,16 +37,20 @@ func run(args []string, stdout, stderr io.Writer, httpClient *http.Client) int {
 		fmt.Fprintln(stderr, "gateway-url is required; set -gateway-url or PACP_GATEWAY_URL")
 		return 2
 	}
-	if *token == "" {
+	if *token == "" && commandRequiresToken(remaining[0]) {
 		fmt.Fprintln(stderr, "token is required; set -token or PACP_AGENT_TOKEN")
 		return 2
 	}
 	if httpClient == nil {
 		httpClient = &http.Client{}
 	}
+	auth := ""
+	if *token != "" {
+		auth = authorizationHeader(*token)
+	}
 	client := gatewayClient{
 		baseURL: strings.TrimRight(*gatewayURL, "/"),
-		auth:    authorizationHeader(*token),
+		auth:    auth,
 		client:  httpClient,
 		timeout: *timeout,
 	}
@@ -60,6 +64,8 @@ func run(args []string, stdout, stderr io.Writer, httpClient *http.Client) int {
 
 func runCommand(client gatewayClient, args []string, stdout, stderr io.Writer) (int, error) {
 	switch args[0] {
+	case "health":
+		return runJSONCommand(client, http.MethodGet, "/v1/gateway/health", nil, "", stdout, nil)
 	case "tools":
 		return runJSONCommand(client, http.MethodGet, "/v1/tools", nil, "", stdout, nil)
 	case "tool":
@@ -230,7 +236,9 @@ func (c gatewayClient) do(ctx context.Context, method, path string, body any, id
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("Authorization", c.auth)
+	if c.auth != "" {
+		req.Header.Set("Authorization", c.auth)
+	}
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
@@ -291,7 +299,11 @@ func authorizationHeader(token string) string {
 	return "Bearer " + token
 }
 
+func commandRequiresToken(command string) bool {
+	return command != "health"
+}
+
 func printUsage(w io.Writer) {
-	fmt.Fprintln(w, "usage: pacp-control -gateway-url URL -token TOKEN <command> [args]")
-	fmt.Fprintln(w, "commands: tools, tool, invoke, job, cancel, logs, artifacts, artifact-content")
+	fmt.Fprintln(w, "usage: pacp-control -gateway-url URL [-token TOKEN] <command> [args]")
+	fmt.Fprintln(w, "commands: health, tools, tool, invoke, job, cancel, logs, artifacts, artifact-content")
 }

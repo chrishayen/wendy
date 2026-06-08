@@ -9,6 +9,42 @@ import (
 	"testing"
 )
 
+func TestHealthDoesNotRequireToken(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/v1/gateway/health" {
+			t.Fatalf("request = %s %s", r.Method, r.URL.Path)
+		}
+		if got := r.Header.Get("Authorization"); got != "" {
+			t.Fatalf("Authorization = %q", got)
+		}
+		writeTestJSON(t, w, http.StatusOK, map[string]any{
+			"ok":   true,
+			"data": map[string]any{"status": "healthy"},
+		})
+	}))
+	defer server.Close()
+
+	var stdout, stderr bytes.Buffer
+	code := run([]string{"-gateway-url", server.URL, "health"}, &stdout, &stderr, server.Client())
+	if code != 0 {
+		t.Fatalf("code=%d stderr=%s", code, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), `"status": "healthy"`) {
+		t.Fatalf("stdout = %s", stdout.String())
+	}
+}
+
+func TestToolsRequiresToken(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := run([]string{"-gateway-url", "http://gateway.invalid", "tools"}, &stdout, &stderr, http.DefaultClient)
+	if code != 2 {
+		t.Fatalf("code=%d stderr=%s", code, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "token is required") {
+		t.Fatalf("stderr = %s", stderr.String())
+	}
+}
+
 func TestToolsSendsBearerTokenAndPrintsEnvelope(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet || r.URL.Path != "/v1/tools" {
