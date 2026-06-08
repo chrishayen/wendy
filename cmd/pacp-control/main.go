@@ -92,10 +92,7 @@ func runCommand(client gatewayClient, args []string, stdout, stderr io.Writer) (
 		}
 		return runJSONCommand(client, http.MethodGet, "/v1/agent/jobs/"+url.PathEscape(args[1])+"/artifacts", nil, "", stdout, nil)
 	case "artifact-content":
-		if len(args) != 2 {
-			return 2, errors.New("usage: pacp-control artifact-content <artifact-id>")
-		}
-		return contentCommand(client, args[1], stdout, stderr)
+		return contentCommand(client, args[1:], stdout, stderr)
 	default:
 		printUsage(stderr)
 		return 2, fmt.Errorf("unknown command %q", args[0])
@@ -280,7 +277,18 @@ func logsCommand(client gatewayClient, args []string, stdout, stderr io.Writer) 
 	return runJSONCommand(client, http.MethodGet, path, nil, "", stdout, nil)
 }
 
-func contentCommand(client gatewayClient, artifactID string, stdout, stderr io.Writer) (int, error) {
+func contentCommand(client gatewayClient, args []string, stdout, stderr io.Writer) (int, error) {
+	flags := flag.NewFlagSet("artifact-content", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	outPath := flags.String("out", "", "write artifact bytes to this file instead of stdout")
+	remaining, err := parseCommandFlags(flags, args)
+	if err != nil {
+		return 2, err
+	}
+	if len(remaining) != 1 {
+		return 2, errors.New("usage: pacp-control artifact-content <artifact-id> [-out file]")
+	}
+	artifactID := remaining[0]
 	resp, err := client.do(context.Background(), http.MethodGet, "/v1/artifacts/"+url.PathEscape(artifactID)+"/content", nil, "")
 	if err != nil {
 		return 1, err
@@ -290,7 +298,46 @@ func contentCommand(client gatewayClient, artifactID string, stdout, stderr io.W
 		_, _ = io.Copy(stderr, resp.Body)
 		return 1, fmt.Errorf("gateway returned HTTP %d", resp.StatusCode)
 	}
+	if *outPath != "" {
+		file, err := os.OpenFile(*outPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
+		if err != nil {
+			return 1, err
+		}
+		bytesWritten, copyErr := io.Copy(file, resp.Body)
+		closeErr := file.Close()
+		if copyErr != nil {
+			return 1, copyErr
+		}
+		if closeErr != nil {
+			return 1, closeErr
+		}
+		return writeArtifactFileResult(stdout, artifactID, *outPath, bytesWritten, resp.Header.Get("Content-Type"), resp.Header.Get("Digest"))
+	}
 	if _, err := io.Copy(stdout, resp.Body); err != nil {
+		return 1, err
+	}
+	return 0, nil
+}
+
+func writeArtifactFileResult(stdout io.Writer, artifactID, path string, size int64, contentType, digest string) (int, error) {
+	result := map[string]any{
+		"ok": true,
+		"data": map[string]any{
+			"artifact_id":  artifactID,
+			"path":         path,
+			"bytes":        size,
+			"content_type": contentType,
+			"digest":       digest,
+		},
+		"links": map[string]any{},
+		"meta":  map[string]string{"schema_version": "v1"},
+	}
+	encoded, err := json.MarshalIndent(result, "", "  ")
+	if err != nil {
+		return 1, err
+	}
+	_, err = fmt.Fprintln(stdout, string(encoded))
+	if err != nil {
 		return 1, err
 	}
 	return 0, nil

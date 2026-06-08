@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -209,6 +211,52 @@ func TestArtifactContentStreamsBody(t *testing.T) {
 	}
 	if stdout.String() != "artifact bytes" {
 		t.Fatalf("stdout = %q", stdout.String())
+	}
+}
+
+func TestArtifactContentWritesOutputFile(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/v1/artifacts/art_1/content" {
+			t.Fatalf("request = %s %s", r.Method, r.URL.Path)
+		}
+		if got := r.Header.Get("Authorization"); got != "Bearer token_agent" {
+			t.Fatalf("Authorization = %q", got)
+		}
+		w.Header().Set("Content-Type", "text/plain")
+		w.Header().Set("Digest", "sha256=testdigest")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("artifact bytes"))
+	}))
+	defer server.Close()
+
+	outPath := filepath.Join(t.TempDir(), "artifact.txt")
+	var stdout, stderr bytes.Buffer
+	code := run([]string{
+		"-gateway-url", server.URL,
+		"-token", "token_agent",
+		"artifact-content", "art_1",
+		"-out", outPath,
+	}, &stdout, &stderr, server.Client())
+	if code != 0 {
+		t.Fatalf("code=%d stderr=%s", code, stderr.String())
+	}
+	written, err := os.ReadFile(outPath)
+	if err != nil {
+		t.Fatalf("read output file: %v", err)
+	}
+	if string(written) != "artifact bytes" {
+		t.Fatalf("file body = %q", string(written))
+	}
+	output := stdout.String()
+	for _, expected := range []string{
+		`"artifact_id": "art_1"`,
+		`"bytes": 14`,
+		`"content_type": "text/plain"`,
+		`"digest": "sha256=testdigest"`,
+	} {
+		if !strings.Contains(output, expected) {
+			t.Fatalf("stdout missing %q:\n%s", expected, output)
+		}
 	}
 }
 
