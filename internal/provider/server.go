@@ -77,6 +77,14 @@ func (s *Server) invoke(w http.ResponseWriter, r *http.Request, capabilityID str
 	}
 	response, err := s.handlers[capabilityID](r.Context(), req)
 	if err != nil {
+		if errors.Is(err, ErrValidation) {
+			writeError(w, r, http.StatusBadRequest, "validation_failed", err.Error(), false)
+			return
+		}
+		if errors.Is(err, ErrNotFound) {
+			writeError(w, r, http.StatusNotFound, "not_found", err.Error(), false)
+			return
+		}
 		writeError(w, r, http.StatusInternalServerError, "provider_unavailable", err.Error(), true)
 		return
 	}

@@ -1,0 +1,16 @@
+{
+  "items": [
+    {
+      "title": "PACP artifact uploads",
+      "url": "https://docs.local/pacp/artifacts",
+      "snippet": "Create an upload session, PUT artifact bytes, and complete the upload with checksum and size.",
+      "tags": ["pacp", "artifacts", "uploads"]
+    },
+    {
+      "title": "PACP resource leases",
+      "url": "https://docs.local/pacp/leases",
+      "snippet": "Request, inspect, and release resources on distributed service nodes.",
+      "tags": ["pacp", "leases", "nodes"]
+    }
+  ]
+}

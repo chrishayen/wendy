@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -35,6 +36,24 @@ func TestServerRejectsInvalidInput(t *testing.T) {
 	server := newTestProvider(t)
 	envelope := doJSONEnvelope(t, server, http.MethodPost, "/v1/provider/capabilities/cap_echo/invoke", map[string]any{
 		"input": map[string]any{},
+	}, http.StatusBadRequest)
+	errObj := envelope["error"].(map[string]any)
+	if errObj["code"] != "validation_failed" {
+		t.Fatalf("error = %#v", errObj)
+	}
+}
+
+func TestServerMapsHandlerValidationError(t *testing.T) {
+	server, err := NewServer(testManifest(), map[string]CapabilityHandler{
+		"cap_echo": func(ctx context.Context, req contracts.ProviderInvokeRequest) (contracts.ProviderInvokeResponse, error) {
+			return contracts.ProviderInvokeResponse{}, fmt.Errorf("%w: unsafe url", ErrValidation)
+		},
+	})
+	if err != nil {
+		t.Fatalf("new provider: %v", err)
+	}
+	envelope := doJSONEnvelope(t, server, http.MethodPost, "/v1/provider/capabilities/cap_echo/invoke", map[string]any{
+		"input": map[string]any{"message": "hello"},
 	}, http.StatusBadRequest)
 	errObj := envelope["error"].(map[string]any)
 	if errObj["code"] != "validation_failed" {
