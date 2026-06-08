@@ -122,7 +122,7 @@ go run ./cmd/pacp-artifacts -addr localhost:18084 -root /tmp/pacp-artifacts -sta
 go run ./cmd/pacp-policy -addr localhost:18085 -state-file /tmp/pacp-policy-state.json -seed testdata/policy/local-seed.json
 go run ./cmd/pacp-gateway -addr localhost:18086 -catalog-url http://localhost:18081 -jobs-url http://localhost:18082 -artifacts-url http://localhost:18084 -policy-url http://localhost:18085 -idempotency-state-file /tmp/pacp-gateway-idempotency-state.json
 go run ./cmd/pacp-node -addr localhost:18087 -config testdata/node/linux-gpu-fake.json
-go run ./cmd/pacp-runner -once -worker-id runner_local -jobs-url http://localhost:18082 -leases-url http://localhost:18083 -artifacts-url http://localhost:18084 -node-urls node_linux_gpu=http://localhost:18087 -node-start-timeout 30s
+go run ./cmd/pacp-runner -once -worker-id runner_local -jobs-url http://localhost:18082 -leases-url http://localhost:18083 -artifacts-url http://localhost:18084 -policy-url http://localhost:18085 -credential token_worker -node-urls node_linux_gpu=http://localhost:18087 -node-start-timeout 30s
 ```
 
 Deployment bundles are offline packaging inputs for distributed nodes. Render a
@@ -140,7 +140,7 @@ For a single primary host, `pacp-primary` hosts the control-plane components in
 one process while preserving HTTP component boundaries:
 
 ```sh
-go run ./cmd/pacp-primary -manifest /tmp/pacp-bundle/catalog -resources /tmp/pacp-bundle/leases/resources.json -policy-seed /tmp/pacp-bundle/policy/policy-seed.json -state-dir /tmp/pacp-primary-state -artifact-root /tmp/pacp-primary-artifacts -node-urls node_linux_gpu=http://linux-box:18087
+go run ./cmd/pacp-primary -manifest /tmp/pacp-bundle/catalog -resources /tmp/pacp-bundle/leases/resources.json -policy-seed /tmp/pacp-bundle/policy/policy-seed.json -runner-credential token_runner -state-dir /tmp/pacp-primary-state -artifact-root /tmp/pacp-primary-artifacts -node-urls node_linux_gpu=http://linux-box:18087
 ```
 
 Node resource declarations can be converted into lease resource seed files:
@@ -158,6 +158,9 @@ both accepted. Leaving the token unset keeps local service endpoints open for
 quick isolated testing. The example policy seed creates logical policy
 credentials for the gateway, runner, and local agent; component endpoint
 authentication is a separate transport guard.
+When `pacp-runner` is given `-policy-url`, or when the primary embedded runner
+uses the co-hosted policy service, the runner credential should identify a
+subject with `worker` scope so `provider.invoke` is allowed intentionally.
 
 Use `pacp-runner -node-urls` or `PACP_NODE_URLS` for distributed nodes. The
 format is comma-separated `node_id=URL` entries, for example

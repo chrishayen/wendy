@@ -24,11 +24,13 @@ type Config struct {
 	JobsURL             string
 	LeasesURL           string
 	ArtifactsURL        string
+	PolicyURL           string
 	NodeURL             string
 	NodeURLs            map[string]string
 	NodeStartTimeout    time.Duration
 	NodePollInterval    time.Duration
 	ComponentCredential string
+	WorkerSubjectID     string
 	Client              *http.Client
 }
 
@@ -60,6 +62,7 @@ func New(cfg Config) *Runner {
 	cfg.JobsURL = strings.TrimRight(cfg.JobsURL, "/")
 	cfg.LeasesURL = strings.TrimRight(cfg.LeasesURL, "/")
 	cfg.ArtifactsURL = strings.TrimRight(cfg.ArtifactsURL, "/")
+	cfg.PolicyURL = strings.TrimRight(cfg.PolicyURL, "/")
 	cfg.NodeURL = strings.TrimRight(cfg.NodeURL, "/")
 	cfg.NodeURLs = normalizeNodeURLs(cfg.NodeURLs)
 	return &Runner{cfg: cfg, client: client}
@@ -103,6 +106,10 @@ func (r *Runner) runJob(ctx context.Context, job contracts.Job) error {
 	}
 	_ = claimed
 	if err := r.appendLog(ctx, job.JobID, "info", "claimed job"); err != nil {
+		return err
+	}
+	if err := r.checkProviderInvokePolicy(ctx, job, plan); err != nil {
+		_ = r.failJob(ctx, job.JobID, "policy_denied", err.Error())
 		return err
 	}
 
@@ -318,6 +325,64 @@ func (r *Runner) invokeProvider(ctx context.Context, jobID string, plan executio
 	target := strings.TrimRight(plan.Route.ProviderEndpoint, "/") + plan.Route.ProviderInvokePath
 	err := r.postJSON(ctx, target, contracts.ProviderInvokeRequest{Input: plan.Input, Context: invokeCtx}, "", &response)
 	return response, err
+}
+
+func (r *Runner) checkProviderInvokePolicy(ctx context.Context, job contracts.Job, plan executionPlan) error {
+	if r.cfg.PolicyURL == "" {
+		return nil
+	}
+	subjectID := strings.TrimSpace(r.cfg.WorkerSubjectID)
+	if subjectID == "" {
+		var err error
+		subjectID, err = r.verifyWorkerSubject(ctx)
+		if err != nil {
+			return err
+		}
+	}
+	context := map[string]any{
+		"job_id":           job.JobID,
+		"owner_subject_id": plan.SubjectID,
+		"capability_id":    plan.CapabilityID,
+		"service_id":       plan.Route.ServiceID,
+		"node_managed":     plan.Route.NodeManaged,
+	}
+	if plan.Route.NodeID != nil {
+		context["node_id"] = *plan.Route.NodeID
+	}
+	var decision contracts.PolicyDecision
+	if err := r.postJSON(ctx, r.cfg.PolicyURL+"/v1/policy/check", contracts.PolicyCheckRequest{
+		SubjectID: subjectID,
+		Action:    "provider.invoke",
+		Resource:  plan.CapabilityID,
+		Context:   context,
+	}, "", &decision); err != nil {
+		return err
+	}
+	if !decision.Allowed {
+		reason := decision.Reason
+		if reason == "" {
+			reason = "policy_denied"
+		}
+		return fmt.Errorf("provider.invoke denied for %s: %s", plan.CapabilityID, reason)
+	}
+	return nil
+}
+
+func (r *Runner) verifyWorkerSubject(ctx context.Context) (string, error) {
+	if r.cfg.ComponentCredential == "" {
+		return "", errors.New("runner credential is required for provider.invoke policy checks")
+	}
+	var verification contracts.CredentialVerification
+	if err := r.postJSON(ctx, r.cfg.PolicyURL+"/v1/auth/verify", contracts.VerifyCredentialRequest{
+		Credential: r.cfg.ComponentCredential,
+		Context:    map[string]any{"caller": "runner"},
+	}, "", &verification); err != nil {
+		return "", err
+	}
+	if !verification.Valid || verification.SubjectID == nil || *verification.SubjectID == "" {
+		return "", errors.New("runner credential could not be verified for provider.invoke policy checks")
+	}
+	return *verification.SubjectID, nil
 }
 
 func (r *Runner) uploadArtifacts(ctx context.Context, jobID, ownerSubjectID string, artifacts []contracts.ProviderArtifact) ([]string, error) {

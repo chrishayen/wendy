@@ -17,9 +17,11 @@ func main() {
 	jobsURL := flag.String("jobs-url", os.Getenv("PACP_JOBS_URL"), "jobs service base URL")
 	leasesURL := flag.String("leases-url", os.Getenv("PACP_LEASES_URL"), "lease service base URL")
 	artifactsURL := flag.String("artifacts-url", os.Getenv("PACP_ARTIFACTS_URL"), "artifact service base URL")
+	policyURL := flag.String("policy-url", os.Getenv("PACP_POLICY_URL"), "optional policy service base URL for provider.invoke checks")
 	nodeURL := flag.String("node-url", os.Getenv("PACP_NODE_URL"), "optional node service base URL")
 	nodeURLsRaw := flag.String("node-urls", os.Getenv("PACP_NODE_URLS"), "optional comma-separated node_id=URL mappings for node-managed services")
 	credential := flag.String("credential", componentCredentialDefault("PACP_RUNNER_CREDENTIAL"), "component credential for downstream calls; defaults to PACP_RUNNER_CREDENTIAL or PACP_COMPONENT_TOKEN")
+	workerSubjectID := flag.String("worker-subject-id", os.Getenv("PACP_RUNNER_SUBJECT_ID"), "optional worker subject id for policy checks; defaults to verifying the runner credential")
 	nodeStartTimeout := flag.Duration("node-start-timeout", 30*time.Second, "maximum time to wait for node-managed service startup")
 	nodeStartPoll := flag.Duration("node-start-poll", 500*time.Millisecond, "poll interval while waiting for node-managed service startup")
 	once := flag.Bool("once", false, "process at most one queued job and exit")
@@ -38,11 +40,13 @@ func main() {
 		JobsURL:             *jobsURL,
 		LeasesURL:           *leasesURL,
 		ArtifactsURL:        *artifactsURL,
+		PolicyURL:           *policyURL,
 		NodeURL:             *nodeURL,
 		NodeURLs:            nodeURLs,
 		NodeStartTimeout:    *nodeStartTimeout,
 		NodePollInterval:    *nodeStartPoll,
 		ComponentCredential: authorizationHeader(*credential),
+		WorkerSubjectID:     *workerSubjectID,
 	})
 	for {
 		jobID, ok, err := r.RunOnce(context.Background())

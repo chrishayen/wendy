@@ -40,6 +40,7 @@ type primaryConfig struct {
 	ComponentToken    string
 	GatewayCredential string
 	RunnerCredential  string
+	RunnerSubjectID   string
 	WorkerID          string
 	NodeURL           string
 	NodeURLsRaw       string
@@ -89,6 +90,7 @@ func main() {
 	flag.StringVar(&cfg.ComponentToken, "component-token", os.Getenv("PACP_COMPONENT_TOKEN"), "optional bearer token required for component API calls")
 	flag.StringVar(&cfg.GatewayCredential, "gateway-credential", componentCredentialDefault("PACP_GATEWAY_CREDENTIAL"), "component credential used by the gateway for downstream calls")
 	flag.StringVar(&cfg.RunnerCredential, "runner-credential", componentCredentialDefault("PACP_RUNNER_CREDENTIAL"), "component credential used by the runner for downstream calls")
+	flag.StringVar(&cfg.RunnerSubjectID, "runner-subject-id", os.Getenv("PACP_RUNNER_SUBJECT_ID"), "optional runner subject id for policy checks")
 	flag.StringVar(&cfg.WorkerID, "worker-id", "runner_primary", "runner worker id")
 	flag.StringVar(&cfg.NodeURL, "node-url", os.Getenv("PACP_NODE_URL"), "optional default node service base URL")
 	flag.StringVar(&cfg.NodeURLsRaw, "node-urls", os.Getenv("PACP_NODE_URLS"), "optional comma-separated node_id=URL mappings")
@@ -159,11 +161,13 @@ func runPrimaryStack(ctx context.Context, cfg primaryConfig) error {
 			JobsURL:             endpoints.JobsURL,
 			LeasesURL:           endpoints.LeasesURL,
 			ArtifactsURL:        endpoints.ArtifactsURL,
+			PolicyURL:           endpoints.PolicyURL,
 			NodeURL:             strings.TrimRight(cfg.NodeURL, "/"),
 			NodeURLs:            nodeURLs,
 			NodeStartTimeout:    cfg.NodeStartTimeout,
 			NodePollInterval:    cfg.NodeStartPoll,
 			ComponentCredential: authorizationHeader(cfg.RunnerCredential),
+			WorkerSubjectID:     cfg.RunnerSubjectID,
 		})
 		go runnerLoop(ctx, r, cfg.PollInterval)
 	}

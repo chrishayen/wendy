@@ -14,6 +14,7 @@ import (
 	"pacp/internal/components/artifacts"
 	"pacp/internal/components/jobs"
 	"pacp/internal/components/leases"
+	"pacp/internal/components/policy"
 	"pacp/internal/contracts"
 	"pacp/internal/provider"
 )
@@ -94,6 +95,116 @@ func TestRunnerCompletesJobAndUploadsArtifact(t *testing.T) {
 	}
 	if artifact.ProducerRef != created.JobID || artifact.OwnerSubjectID != "sub_agent" {
 		t.Fatalf("artifact = %#v", artifact)
+	}
+}
+
+func TestRunnerChecksProviderInvokePolicy(t *testing.T) {
+	jobStore := jobs.NewStore()
+	jobsServer := httptest.NewServer(jobs.NewHandler(jobStore))
+	defer jobsServer.Close()
+
+	policyStore := policy.NewStore()
+	if _, err := policyStore.CreateAPIKey(contracts.CreateAPIKeyRequest{SubjectID: "sub_runner", Scopes: []string{"worker"}, Token: "token_worker"}); err != nil {
+		t.Fatalf("create runner key: %v", err)
+	}
+	policyServer := httptest.NewServer(policy.NewHandler(policyStore))
+	defer policyServer.Close()
+
+	invoked := false
+	providerServer, err := provider.NewServer(providerManifest("svc_policy_provider", "cap_policy_echo"), map[string]provider.CapabilityHandler{
+		"cap_policy_echo": func(ctx context.Context, req contracts.ProviderInvokeRequest) (contracts.ProviderInvokeResponse, error) {
+			invoked = true
+			return contracts.ProviderInvokeResponse{Output: map[string]any{"message": "ok"}}, nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("new provider: %v", err)
+	}
+	providerHTTP := httptest.NewServer(providerServer)
+	defer providerHTTP.Close()
+
+	created := createRunnerPolicyJob(t, jobStore, providerHTTP.URL, "cap_policy_echo")
+	r := New(Config{
+		WorkerID:            "runner_test",
+		JobsURL:             jobsServer.URL,
+		ArtifactsURL:        "http://artifacts.invalid",
+		PolicyURL:           policyServer.URL,
+		ComponentCredential: "Bearer token_worker",
+		Client:              jobsServer.Client(),
+	})
+	jobID, ok, err := r.RunOnce(context.Background())
+	if err != nil {
+		t.Fatalf("run once: %v", err)
+	}
+	if !ok || jobID != created.JobID {
+		t.Fatalf("run result jobID=%q ok=%v", jobID, ok)
+	}
+	if !invoked {
+		t.Fatal("provider was not invoked")
+	}
+	completed, err := jobStore.Get(created.JobID)
+	if err != nil {
+		t.Fatalf("get completed job: %v", err)
+	}
+	if completed.State != contracts.JobSucceeded {
+		t.Fatalf("job = %#v", completed)
+	}
+	events := policyStore.AuditEvents()
+	if len(events) == 0 || events[len(events)-1].Action != "provider.invoke" || !events[len(events)-1].Allowed {
+		t.Fatalf("audit events = %#v", events)
+	}
+}
+
+func TestRunnerFailsJobWhenProviderInvokePolicyDenied(t *testing.T) {
+	jobStore := jobs.NewStore()
+	jobsServer := httptest.NewServer(jobs.NewHandler(jobStore))
+	defer jobsServer.Close()
+
+	policyStore := policy.NewStore()
+	if _, err := policyStore.CreateAPIKey(contracts.CreateAPIKeyRequest{SubjectID: "sub_runner", Scopes: []string{"component"}, Token: "token_component"}); err != nil {
+		t.Fatalf("create runner key: %v", err)
+	}
+	policyServer := httptest.NewServer(policy.NewHandler(policyStore))
+	defer policyServer.Close()
+
+	invoked := false
+	providerServer, err := provider.NewServer(providerManifest("svc_policy_provider", "cap_policy_echo"), map[string]provider.CapabilityHandler{
+		"cap_policy_echo": func(ctx context.Context, req contracts.ProviderInvokeRequest) (contracts.ProviderInvokeResponse, error) {
+			invoked = true
+			return contracts.ProviderInvokeResponse{Output: map[string]any{"message": "ok"}}, nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("new provider: %v", err)
+	}
+	providerHTTP := httptest.NewServer(providerServer)
+	defer providerHTTP.Close()
+
+	created := createRunnerPolicyJob(t, jobStore, providerHTTP.URL, "cap_policy_echo")
+	r := New(Config{
+		WorkerID:            "runner_test",
+		JobsURL:             jobsServer.URL,
+		ArtifactsURL:        "http://artifacts.invalid",
+		PolicyURL:           policyServer.URL,
+		ComponentCredential: "Bearer token_component",
+		Client:              jobsServer.Client(),
+	})
+	jobID, ok, err := r.RunOnce(context.Background())
+	if err == nil {
+		t.Fatal("expected policy denial error")
+	}
+	if !ok || jobID != created.JobID {
+		t.Fatalf("run result jobID=%q ok=%v", jobID, ok)
+	}
+	if invoked {
+		t.Fatal("provider was invoked despite policy denial")
+	}
+	failed, err := jobStore.Get(created.JobID)
+	if err != nil {
+		t.Fatalf("get failed job: %v", err)
+	}
+	if failed.State != contracts.JobFailed || failed.TerminalError == nil || failed.TerminalError.Code != "policy_denied" {
+		t.Fatalf("failed job = %#v", failed)
 	}
 }
 
@@ -279,6 +390,74 @@ func TestRunnerRequiresConfiguredNodeURLForNodeID(t *testing.T) {
 	route := contracts.CapabilityRoute{ServiceID: "svc_remote_provider", NodeID: &nodeID, NodeManaged: true}
 	if err := r.ensureNodeService(context.Background(), route); err == nil {
 		t.Fatal("expected missing node URL error")
+	}
+}
+
+func createRunnerPolicyJob(t *testing.T, store *jobs.Store, providerEndpoint, capabilityID string) contracts.Job {
+	t.Helper()
+	route := contracts.CapabilityRoute{
+		CapabilityID:       capabilityID,
+		ServiceID:          "svc_policy_provider",
+		ProviderEndpoint:   providerEndpoint,
+		ProviderHealthPath: "/v1/provider/health",
+		ProviderInvokePath: "/v1/provider/capabilities/" + capabilityID + "/invoke",
+		ServiceStartMode:   "manual",
+	}
+	created, _, err := store.Create(contracts.CreateJobRequest{
+		RequesterID:  "sub_agent",
+		CapabilityID: capabilityID,
+		InputSummary: map[string]any{"message_present": true},
+		Metadata: map[string]any{"execution_plan": map[string]any{
+			"capability_id":   capabilityID,
+			"subject_id":      "sub_agent",
+			"input":           map[string]any{"message": "hello"},
+			"route":           route,
+			"timeout_seconds": 30,
+		}},
+	}, "create-policy-job-"+capabilityID)
+	if err != nil {
+		t.Fatalf("create policy job: %v", err)
+	}
+	return created
+}
+
+func providerManifest(serviceID, capabilityID string) contracts.ProviderManifest {
+	return contracts.ProviderManifest{
+		SchemaVersion: "v1",
+		Service: contracts.Service{
+			ID:           serviceID,
+			Name:         "Policy Provider",
+			Description:  "Policy provider.",
+			Version:      "0.1.0",
+			ProviderKind: "fake",
+			Tags:         []string{"fake"},
+		},
+		Provider: contracts.Provider{Endpoint: "http://provider.invalid"},
+		Capabilities: []contracts.Capability{{
+			ID:            capabilityID,
+			Name:          "Policy echo",
+			Description:   "Policy echo.",
+			ExecutionMode: "sync",
+			InputSchema: map[string]any{
+				"type":     "object",
+				"required": []any{"message"},
+				"properties": map[string]any{
+					"message": map[string]any{"type": "string"},
+				},
+			},
+			OutputSchema: map[string]any{
+				"type":     "object",
+				"required": []any{"message"},
+				"properties": map[string]any{
+					"message": map[string]any{"type": "string"},
+				},
+			},
+			Examples:      []map[string]any{},
+			SideEffects:   "none",
+			ResourceHints: []contracts.ResourceHint{},
+			ArtifactHints: []contracts.ArtifactHint{},
+			TimeoutHint:   "30s",
+		}},
 	}
 }
 
