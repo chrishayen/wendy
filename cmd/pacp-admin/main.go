@@ -22,6 +22,7 @@ type adminConfig struct {
 	GatewayURL     string
 	NodeURL        string
 	ComponentToken string
+	GatewayToken   string
 	NodeToken      string
 	Timeout        time.Duration
 }
@@ -78,6 +79,7 @@ func run(args []string, stdout, stderr io.Writer, httpClient *http.Client) int {
 	flags.StringVar(&cfg.GatewayURL, "gateway-url", envOrDefault("PACP_GATEWAY_URL", "http://localhost:18086"), "gateway service base URL")
 	flags.StringVar(&cfg.NodeURL, "node-url", os.Getenv("PACP_NODE_URL"), "optional node service base URL")
 	flags.StringVar(&cfg.ComponentToken, "component-token", os.Getenv("PACP_COMPONENT_TOKEN"), "optional component API bearer token or raw token")
+	flags.StringVar(&cfg.GatewayToken, "gateway-token", envFirst("PACP_GATEWAY_TOKEN", "PACP_AGENT_TOKEN"), "optional gateway API bearer token or raw token")
 	flags.StringVar(&cfg.NodeToken, "node-token", os.Getenv("PACP_NODE_TOKEN"), "optional node API bearer token or raw token")
 	flags.DurationVar(&cfg.Timeout, "timeout", 5*time.Second, "per-command timeout")
 	if err := flags.Parse(args); err != nil {
@@ -166,7 +168,7 @@ func catalogCommand(cfg adminConfig, httpClient *http.Client, args []string, std
 
 func jobsCommand(cfg adminConfig, httpClient *http.Client, args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
-		return usage(stderr, "usage: pacp-admin [flags] jobs <list|job|logs> [id]")
+		return usage(stderr, "usage: pacp-admin [flags] jobs <list|job|logs|cancel> [id]")
 	}
 	switch args[0] {
 	case "list":
@@ -184,9 +186,37 @@ func jobsCommand(cfg adminConfig, httpClient *http.Client, args []string, stdout
 			return usage(stderr, "usage: pacp-admin [flags] jobs logs <job-id>")
 		}
 		return getJSON(cfg, httpClient, cfg.JobsURL, "/v1/jobs/"+url.PathEscape(args[1])+"/logs", authorizationHeader(cfg.ComponentToken), stdout, stderr)
+	case "cancel":
+		return jobsCancelCommand(cfg, httpClient, args[1:], stdout, stderr)
 	default:
-		return usage(stderr, "usage: pacp-admin [flags] jobs <list|job|logs> [id]")
+		return usage(stderr, "usage: pacp-admin [flags] jobs <list|job|logs|cancel> [id]")
 	}
+}
+
+func jobsCancelCommand(cfg adminConfig, httpClient *http.Client, args []string, stdout, stderr io.Writer) int {
+	flags := flag.NewFlagSet("jobs cancel", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	reason := flags.String("reason", "", "cancel reason")
+	idempotencyKey := flags.String("idempotency-key", "", "idempotency key for this job cancellation")
+	remaining, err := parseSubcommandFlags(flags, args)
+	if err != nil {
+		return 2
+	}
+	if len(remaining) != 1 {
+		return usage(stderr, "usage: pacp-admin [flags] jobs cancel <job-id> -idempotency-key <key> [-reason text]")
+	}
+	if *idempotencyKey == "" {
+		return usage(stderr, "idempotency-key is required for jobs cancel")
+	}
+	if cfg.GatewayToken == "" {
+		return usage(stderr, "gateway-token is required for jobs cancel; set -gateway-token, PACP_GATEWAY_TOKEN, or PACP_AGENT_TOKEN")
+	}
+	body := map[string]any{}
+	if *reason != "" {
+		body["reason"] = *reason
+	}
+	path := "/v1/agent/jobs/" + url.PathEscape(remaining[0]) + "/cancel"
+	return postJSONBody(cfg, httpClient, cfg.GatewayURL, path, authorizationHeader(cfg.GatewayToken), *idempotencyKey, body, stdout, stderr)
 }
 
 func leasesCommand(cfg adminConfig, httpClient *http.Client, args []string, stdout, stderr io.Writer) int {
@@ -447,6 +477,10 @@ func getJSON(cfg adminConfig, httpClient *http.Client, baseURL, path, credential
 }
 
 func postJSON(cfg adminConfig, httpClient *http.Client, baseURL, path, credential, idempotencyKey string, stdout, stderr io.Writer) int {
+	return postJSONBody(cfg, httpClient, baseURL, path, credential, idempotencyKey, nil, stdout, stderr)
+}
+
+func postJSONBody(cfg adminConfig, httpClient *http.Client, baseURL, path, credential, idempotencyKey string, body any, stdout, stderr io.Writer) int {
 	baseURL = strings.TrimRight(strings.TrimSpace(baseURL), "/")
 	if baseURL == "" {
 		fmt.Fprintf(stderr, "service URL is required for %s\n", path)
@@ -458,10 +492,22 @@ func postJSON(cfg adminConfig, httpClient *http.Client, baseURL, path, credentia
 		ctx, cancel = context.WithTimeout(ctx, cfg.Timeout)
 		defer cancel()
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, baseURL+path, nil)
+	var reader io.Reader
+	if body != nil {
+		raw, err := json.Marshal(body)
+		if err != nil {
+			fmt.Fprintln(stderr, err)
+			return 2
+		}
+		reader = strings.NewReader(string(raw))
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, baseURL+path, reader)
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return 2
+	}
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
 	}
 	if credential != "" {
 		req.Header.Set("Authorization", credential)
@@ -517,6 +563,15 @@ func envOrDefault(name, fallback string) string {
 		return value
 	}
 	return fallback
+}
+
+func envFirst(names ...string) string {
+	for _, name := range names {
+		if value := os.Getenv(name); value != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 func authorizationHeader(token string) string {

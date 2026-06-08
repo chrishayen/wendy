@@ -163,6 +163,59 @@ func TestNodeServicesCommandUsesNodeToken(t *testing.T) {
 	}
 }
 
+func TestJobsCancelCommandUsesGatewayTokenAndIdempotencyKey(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/v1/agent/jobs/job_1/cancel" {
+			t.Fatalf("request = %s %s", r.Method, r.URL.Path)
+		}
+		if r.Header.Get("Authorization") != "Bearer gateway-token" {
+			t.Fatalf("Authorization = %q", r.Header.Get("Authorization"))
+		}
+		if r.Header.Get("Idempotency-Key") != "cancel-1" {
+			t.Fatalf("Idempotency-Key = %q", r.Header.Get("Idempotency-Key"))
+		}
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatalf("decode body: %v", err)
+		}
+		if body["reason"] != "stop running" {
+			t.Fatalf("reason = %#v", body["reason"])
+		}
+		writeEnvelope(t, w, http.StatusOK, map[string]any{"job_id": "job_1", "state": "canceled"})
+	}))
+	defer server.Close()
+
+	var stdout, stderr bytes.Buffer
+	code := run([]string{
+		"-gateway-url", server.URL,
+		"-gateway-token", "gateway-token",
+		"jobs", "cancel", "job_1", "-idempotency-key", "cancel-1", "-reason", "stop running",
+	}, &stdout, &stderr, server.Client())
+	if code != 0 {
+		t.Fatalf("code=%d stderr=%s stdout=%s", code, stderr.String(), stdout.String())
+	}
+	if !strings.Contains(stdout.String(), `"state": "canceled"`) {
+		t.Fatalf("stdout = %s", stdout.String())
+	}
+}
+
+func TestJobsCancelRequiresGatewayToken(t *testing.T) {
+	t.Setenv("PACP_GATEWAY_TOKEN", "")
+	t.Setenv("PACP_AGENT_TOKEN", "")
+
+	var stdout, stderr bytes.Buffer
+	code := run([]string{
+		"-gateway-url", "http://gateway.invalid",
+		"jobs", "cancel", "job_1", "-idempotency-key", "cancel-1",
+	}, &stdout, &stderr, http.DefaultClient)
+	if code != 2 {
+		t.Fatalf("code=%d stderr=%s", code, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "gateway-token is required") {
+		t.Fatalf("stderr = %s", stderr.String())
+	}
+}
+
 func TestNodeCommandRequiresNodeURL(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	code := run([]string{"-node-url", "", "node", "services"}, &stdout, &stderr, http.DefaultClient)

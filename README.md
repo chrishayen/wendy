@@ -51,7 +51,7 @@ Contract simulation data is kept as test input, not as product behavior.
 - `cmd/pacp-bundle`: renders one deployment bundle into catalog manifests,
   node config, lease resource seed, and optional policy seed files.
 - `cmd/pacp-admin`: JSON-first operator CLI for component, gateway, and node
-  health and read-only inspection commands.
+  health, inspection, job cancellation through C04, and node lifecycle actions.
 - `cmd/pacp-control`: JSON-first CLI for gateway health and agent-facing
   gateway operations.
 - `cmd/pacp-dev`: one-command local development stack using the real service
@@ -74,6 +74,7 @@ PACP_HTTP_ECHO_TOKEN='Bearer dev-token' go run ./cmd/pacp-http-provider -addr lo
 go run ./cmd/pacp-admin health
 go run ./cmd/pacp-admin catalog capabilities
 go run ./cmd/pacp-admin jobs list
+go run ./cmd/pacp-admin -gateway-token token_agent jobs cancel job_000001 -idempotency-key cancel-1 -reason "stop requested"
 go run ./cmd/pacp-admin leases resources
 go run ./cmd/pacp-admin artifacts list
 go run ./cmd/pacp-bundle -bundle testdata/deploy/generic-gpu-bundle.json -out-dir /tmp/pacp-bundle
