@@ -125,6 +125,47 @@ func TestGatewayDiscoveryInvokeAndJobProjection(t *testing.T) {
 	}
 }
 
+func TestGatewayPropagatesRequestIDToDownstreams(t *testing.T) {
+	seen := map[string]string{}
+	downstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seen[r.URL.Path] = r.Header.Get("X-Request-ID")
+		switch r.URL.Path {
+		case "/v1/auth/verify":
+			writeGatewayTestEnvelope(t, w, http.StatusOK, map[string]any{
+				"valid":      true,
+				"subject_id": "sub_agent",
+				"scopes":     []string{"agent"},
+			})
+		case "/v1/policy/check":
+			writeGatewayTestEnvelope(t, w, http.StatusOK, map[string]any{"allowed": true, "reason": "test_allow"})
+		case "/v1/catalog/capabilities":
+			writeGatewayTestEnvelope(t, w, http.StatusOK, map[string]any{"items": []any{}, "next_cursor": nil})
+		default:
+			t.Fatalf("unexpected downstream request: %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer downstream.Close()
+
+	handler := NewHandler(Config{
+		CatalogURL: downstream.URL,
+		PolicyURL:  downstream.URL,
+		Client:     downstream.Client(),
+	})
+	req := httptest.NewRequest(http.MethodGet, "/v1/tools", nil)
+	req.Header.Set("Authorization", "Bearer token_agent")
+	req.Header.Set("X-Request-ID", "req_gateway_trace")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	for _, path := range []string{"/v1/auth/verify", "/v1/policy/check", "/v1/catalog/capabilities"} {
+		if seen[path] != "req_gateway_trace" {
+			t.Fatalf("%s request id = %q; seen=%#v", path, seen[path], seen)
+		}
+	}
+}
+
 func assertMetric(t *testing.T, data map[string]any, name string, labels map[string]string, value float64) {
 	t.Helper()
 	for _, rawSample := range data["samples"].([]any) {
@@ -141,6 +182,20 @@ func assertMetric(t *testing.T, data map[string]any, name string, labels map[str
 		return
 	}
 	t.Fatalf("metric %s labels=%#v not found in %#v", name, labels, data["samples"])
+}
+
+func writeGatewayTestEnvelope(t *testing.T, w http.ResponseWriter, status int, data any) {
+	t.Helper()
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	if err := json.NewEncoder(w).Encode(map[string]any{
+		"ok":    status >= 200 && status < 300,
+		"data":  data,
+		"links": map[string]any{},
+		"meta":  map[string]any{"request_id": "req_test", "schema_version": "v1"},
+	}); err != nil {
+		t.Fatalf("encode envelope: %v", err)
+	}
 }
 
 func labelsMatch(raw any, want map[string]string) bool {

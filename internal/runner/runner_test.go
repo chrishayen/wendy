@@ -16,6 +16,7 @@ import (
 	"pacp/internal/components/leases"
 	"pacp/internal/components/policy"
 	"pacp/internal/contracts"
+	"pacp/internal/observability"
 	"pacp/internal/provider"
 )
 
@@ -95,6 +96,42 @@ func TestRunnerCompletesJobAndUploadsArtifact(t *testing.T) {
 	}
 	if artifact.ProducerRef != created.JobID || artifact.OwnerSubjectID != "sub_agent" {
 		t.Fatalf("artifact = %#v", artifact)
+	}
+}
+
+func TestRunnerPropagatesRequestIDToComponentRequests(t *testing.T) {
+	seenRequestID := ""
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/jobs" || r.Method != http.MethodGet {
+			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.String())
+		}
+		seenRequestID = r.Header.Get("X-Request-ID")
+		w.Header().Set("Content-Type", "application/json")
+		if err := json.NewEncoder(w).Encode(map[string]any{
+			"ok":    true,
+			"data":  map[string]any{"items": []any{}, "next_cursor": nil},
+			"links": map[string]any{},
+			"meta":  map[string]any{"request_id": "req_test", "schema_version": "v1"},
+		}); err != nil {
+			t.Fatalf("encode response: %v", err)
+		}
+	}))
+	defer server.Close()
+
+	r := New(Config{
+		WorkerID: "runner_test",
+		JobsURL:  server.URL,
+		Client:   server.Client(),
+	})
+	_, ok, err := r.RunOnce(observability.WithRequestID(context.Background(), "req_runner_trace"))
+	if err != nil {
+		t.Fatalf("run once: %v", err)
+	}
+	if ok {
+		t.Fatal("expected no queued job")
+	}
+	if seenRequestID != "req_runner_trace" {
+		t.Fatalf("X-Request-ID = %q", seenRequestID)
 	}
 }
 

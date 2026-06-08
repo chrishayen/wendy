@@ -227,6 +227,9 @@ go run ./cmd/pacp-control -gateway-url http://localhost:18086 -token token_agent
 
 Component metrics include component-specific state samples plus HTTP request
 count, error count, and average latency by method and normalized route group.
+Gateway and runner requests propagate `X-Request-ID` to downstream component,
+node, artifact, and provider calls so logs and response metadata can be
+correlated across the distributed flow.
 
 This is not the full production control plane yet. It is a usable service stack
 with public HTTP boundaries, file-backed local durability, a provider SDK, a

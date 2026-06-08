@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"pacp/internal/contracts"
+	"pacp/internal/observability"
 )
 
 type Config struct {
@@ -84,6 +85,7 @@ func normalizeNodeURLs(raw map[string]string) map[string]string {
 }
 
 func (r *Runner) RunOnce(ctx context.Context) (string, bool, error) {
+	ctx = observability.EnsureContextRequestID(ctx, "req_runner")
 	job, ok, err := r.nextQueuedJob(ctx)
 	if err != nil || !ok {
 		return "", ok, err
@@ -315,6 +317,7 @@ func (r *Runner) invokeProvider(ctx context.Context, jobID string, plan executio
 	invokeCtx := contracts.ProviderInvokeContext{
 		SubjectID:       plan.SubjectID,
 		JobID:           jobID,
+		RequestID:       observability.RequestIDFromContext(ctx),
 		ArtifactBaseURL: r.cfg.ArtifactsURL,
 		DryRun:          false,
 	}
@@ -513,6 +516,7 @@ func (r *Runner) addAuth(req *http.Request) {
 	if r.cfg.ComponentCredential != "" {
 		req.Header.Set("Authorization", r.cfg.ComponentCredential)
 	}
+	observability.PropagateRequestID(req.Context(), req)
 }
 
 func decodeEnvelope(resp *http.Response, out any) error {

@@ -89,6 +89,7 @@ func NewPersistentHandler(cfg Config, idempotencyStatePath string) (http.Handler
 }
 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	r = observability.EnsureRequestID(r, "req_gateway")
 	h.httpMetrics.Record(w, r, h.serveHTTP)
 }
 
@@ -614,6 +615,7 @@ func (h *Handler) downstreamRequest(ctx context.Context, method, target string, 
 	if h.cfg.GatewayCredential != "" {
 		req.Header.Set("Authorization", h.cfg.GatewayCredential)
 	}
+	observability.PropagateRequestID(ctx, req)
 	return h.client.Do(req)
 }
 
@@ -856,11 +858,7 @@ func stringToJobState(value string) contracts.JobState {
 }
 
 func requestID(r *http.Request) string {
-	id := r.Header.Get("X-Request-ID")
-	if id == "" {
-		id = "req_gateway"
-	}
-	return id
+	return observability.RequestIDFromRequest(r, "req_gateway")
 }
 
 func decodeBody(w http.ResponseWriter, r *http.Request, out any) bool {
