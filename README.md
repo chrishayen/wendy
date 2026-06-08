@@ -7,14 +7,15 @@ Contract simulation data is kept as test input, not as product behavior.
 
 ## What Exists
 
-- `internal/contracts`: shared fixture and envelope validation helpers.
+- `internal/contracts`: shared public API types, envelopes, and validation
+  helpers.
 - `internal/provider`: provider SDK helpers for manifest, health, invoke,
   simple schema validation, and provider response envelopes.
 - `internal/runner`: composition runner that claims jobs, acquires leases,
   invokes providers, uploads artifacts, and completes or fails jobs through
   public APIs.
-- `internal/components/catalog`: first isolated real component, C03 Service
-  Catalog, with in-memory storage and HTTP handlers.
+- `internal/components/catalog`: service catalog with in-memory storage and
+  HTTP handlers.
 - `internal/components/gateway`: agent-facing tool discovery, invocation, job,
   log, artifact, and content gateway that composes public component APIs.
 - `internal/components/jobs`: async job lifecycle service with in-memory
@@ -29,7 +30,8 @@ Contract simulation data is kept as test input, not as product behavior.
   reference, and redaction service.
 - `internal/components/node`: runtime node agent with local auth, resource
   advertisement, fake service lifecycle, health, and service status APIs.
-- `internal/testkit`: S003 fixture loader and fixture-backed HTTP fake server.
+- `internal/testkit`: contract-simulation fixture loader and fixture-backed
+  HTTP fake server.
 - `cmd/pacp-contract-smoke`: CLI smoke check for a contract simulation package.
 - `cmd/pacp-fixture-server`: serves one fixture owner as an HTTP fake.
 - `cmd/pacp-fake-provider`: runnable sample provider using the provider SDK.
@@ -49,8 +51,7 @@ Contract simulation data is kept as test input, not as product behavior.
 ```sh
 go test ./...
 go run ./cmd/pacp-contract-smoke
-go run ./cmd/pacp-fixture-server -owner c04-agent-tool-gateway -addr localhost:18080
-go run ./cmd/pacp-fake-provider -addr localhost:18088 -endpoint http://localhost:18088
+go run ./cmd/pacp-fake-provider -addr localhost:18088
 go run ./cmd/pacp-catalog -addr localhost:18081 -manifest testdata/manifests/s003-comfyui-gpu.json
 go run ./cmd/pacp-jobs -addr localhost:18082
 go run ./cmd/pacp-leases -addr localhost:18083
@@ -61,6 +62,9 @@ go run ./cmd/pacp-node -addr localhost:18087 -config testdata/node/linux-gpu-fak
 go run ./cmd/pacp-runner -once -worker-id runner_local -jobs-url http://localhost:18082 -leases-url http://localhost:18083 -artifacts-url http://localhost:18084
 ```
 
+The fixture server can also serve individual contract-simulation fixture
+owners when a test needs a fixed fake dependency.
+
 The catalog can then be queried:
 
 ```sh
@@ -69,4 +73,6 @@ curl http://localhost:18081/v1/catalog/capabilities/cap_image_generate_gpu/route
 ```
 
 This is not the full control plane yet. It is the first implementation-facing
-contract test kit slice plus the first isolated component.
+in-memory service stack with public HTTP boundaries, a provider SDK, and a
+composition runner. Durable storage, production node adapters, provider-specific
+wrappers, and hardening remain.

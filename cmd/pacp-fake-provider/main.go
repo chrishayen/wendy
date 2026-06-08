@@ -8,6 +8,8 @@ import (
 	"flag"
 	"log"
 	"net/http"
+	"os"
+	"strings"
 
 	"pacp/internal/contracts"
 	"pacp/internal/provider"
@@ -15,10 +17,14 @@ import (
 
 func main() {
 	addr := flag.String("addr", "localhost:18088", "listen address")
-	endpoint := flag.String("endpoint", "http://localhost:18088", "provider endpoint advertised in manifest")
+	endpoint := flag.String("endpoint", os.Getenv("PACP_PROVIDER_ENDPOINT"), "provider endpoint advertised in manifest")
 	flag.Parse()
+	advertisedEndpoint := *endpoint
+	if advertisedEndpoint == "" {
+		advertisedEndpoint = defaultEndpoint(*addr)
+	}
 
-	manifest := fakeManifest(*endpoint)
+	manifest := fakeManifest(advertisedEndpoint)
 	server, err := provider.NewServer(manifest, map[string]provider.CapabilityHandler{
 		"cap_echo":       echoHandler,
 		"cap_fake_image": fakeImageHandler,
@@ -30,6 +36,13 @@ func main() {
 	if err := http.ListenAndServe(*addr, server); err != nil {
 		log.Fatal(err)
 	}
+}
+
+func defaultEndpoint(addr string) string {
+	if strings.HasPrefix(addr, ":") {
+		addr = "localhost" + addr
+	}
+	return "http://" + addr
 }
 
 func echoHandler(ctx context.Context, req contracts.ProviderInvokeRequest) (contracts.ProviderInvokeResponse, error) {
