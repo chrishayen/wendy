@@ -196,11 +196,14 @@ func TestLoadManifestsFromDirectory(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load manifests: %v", err)
 	}
-	if len(manifests) != 1 {
-		t.Fatalf("manifest count = %d, want 1", len(manifests))
+	serviceIDs := map[string]bool{}
+	for _, manifest := range manifests {
+		serviceIDs[manifest.Service.ID] = true
 	}
-	if manifests[0].Service.ID != "svc_comfyui_gpu" {
-		t.Fatalf("service id = %q", manifests[0].Service.ID)
+	for _, serviceID := range []string{"svc_comfyui_gpu", "svc_sample_comfyui_gpu"} {
+		if !serviceIDs[serviceID] {
+			t.Fatalf("loaded service ids = %#v, missing %s", serviceIDs, serviceID)
+		}
 	}
 }
 
