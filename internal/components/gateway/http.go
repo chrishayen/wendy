@@ -35,6 +35,7 @@ type Config struct {
 	ArtifactsURL      string
 	GatewayCredential string
 	Client            *http.Client
+	DependencyTimeout time.Duration
 }
 
 type Handler struct {
@@ -66,6 +67,23 @@ func (e downstreamError) Error() string {
 	return e.message
 }
 
+type gatewayDependencyStatus struct {
+	Name       string `json:"name"`
+	Required   bool   `json:"required"`
+	Configured bool   `json:"configured"`
+	Reachable  bool   `json:"reachable"`
+	Status     string `json:"status"`
+	HTTPStatus int    `json:"http_status,omitempty"`
+	Error      string `json:"error,omitempty"`
+}
+
+type gatewayDependencyTarget struct {
+	name     string
+	baseURL  string
+	path     string
+	required bool
+}
+
 func NewHandler(cfg Config) http.Handler {
 	handler, err := NewPersistentHandler(cfg, "")
 	if err != nil {
@@ -84,6 +102,9 @@ func NewPersistentHandler(cfg Config, idempotencyStatePath string) (http.Handler
 	cfg.JobsURL = strings.TrimRight(cfg.JobsURL, "/")
 	cfg.LeasesURL = strings.TrimRight(cfg.LeasesURL, "/")
 	cfg.ArtifactsURL = strings.TrimRight(cfg.ArtifactsURL, "/")
+	if cfg.DependencyTimeout <= 0 {
+		cfg.DependencyTimeout = 2 * time.Second
+	}
 	idempotency, err := newPersistentIdempotencyStore(idempotencyStatePath)
 	if err != nil {
 		return nil, err
@@ -100,9 +121,9 @@ func (h *Handler) serveHTTP(w http.ResponseWriter, r *http.Request) {
 	path := strings.TrimSuffix(r.URL.Path, "/")
 	switch {
 	case path == "/v1/gateway/health" && r.Method == http.MethodGet:
-		writeSuccess(w, r, http.StatusOK, contracts.NewComponentHealth("gateway", h.healthDetails()))
+		writeSuccess(w, r, http.StatusOK, h.health(r.Context()))
 	case path == "/v1/gateway/metrics" && r.Method == http.MethodGet:
-		writeSuccess(w, r, http.StatusOK, h.metrics())
+		writeSuccess(w, r, http.StatusOK, h.metrics(r.Context()))
 	case path == "/v1/tools" && r.Method == http.MethodGet:
 		h.listTools(w, r)
 	case strings.HasPrefix(path, "/v1/tools/"):
@@ -117,30 +138,26 @@ func (h *Handler) serveHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (h *Handler) metrics() contracts.ComponentMetrics {
+func (h *Handler) metrics(ctx context.Context) contracts.ComponentMetrics {
 	samples := []contracts.MetricSample{
 		contracts.CountMetric("gateway_idempotency_records_total", h.idempotency.recordCount(), nil),
 	}
-	downstreams := map[string]bool{
-		"catalog":   h.cfg.CatalogURL != "",
-		"policy":    h.cfg.PolicyURL != "",
-		"jobs":      h.cfg.JobsURL != "",
-		"leases":    h.cfg.LeasesURL != "",
-		"artifacts": h.cfg.ArtifactsURL != "",
-	}
-	for name, configured := range downstreams {
-		value := 0
-		if configured {
-			value = 1
+	for _, dependency := range h.dependencyStatuses(ctx) {
+		labels := map[string]string{
+			"downstream": dependency.Name,
+			"required":   boolLabel(dependency.Required),
+			"status":     dependency.Status,
 		}
-		samples = append(samples, contracts.CountMetric("gateway_downstream_configured", value, map[string]string{"downstream": name}))
+		samples = append(samples, contracts.CountMetric("gateway_downstream_configured", boolCount(dependency.Configured), labels))
+		samples = append(samples, contracts.GaugeMetric("gateway_downstream_reachable", metricBool(dependency.Reachable), "boolean", labels))
 	}
 	samples = append(samples, h.httpMetrics.Samples()...)
 	return contracts.NewComponentMetrics("gateway", samples)
 }
 
-func (h *Handler) healthDetails() map[string]any {
-	return map[string]any{
+func (h *Handler) health(ctx context.Context) contracts.ComponentHealth {
+	dependencies := h.dependencyStatuses(ctx)
+	health := contracts.NewComponentHealth("gateway", map[string]any{
 		"schema_version": "v1",
 		"downstreams_configured": map[string]bool{
 			"catalog":   h.cfg.CatalogURL != "",
@@ -149,8 +166,81 @@ func (h *Handler) healthDetails() map[string]any {
 			"leases":    h.cfg.LeasesURL != "",
 			"artifacts": h.cfg.ArtifactsURL != "",
 		},
-		"idempotency": h.idempotency.healthDetails(),
+		"dependencies": dependencies,
+		"idempotency":  h.idempotency.healthDetails(),
+	})
+	for _, dependency := range dependencies {
+		if dependency.Configured && !dependency.Reachable {
+			health.Status = "degraded"
+			return health
+		}
 	}
+	return health
+}
+
+func (h *Handler) dependencyStatuses(ctx context.Context) []gatewayDependencyStatus {
+	targets := []gatewayDependencyTarget{
+		{name: "catalog", baseURL: h.cfg.CatalogURL, path: "/v1/catalog/health", required: true},
+		{name: "policy", baseURL: h.cfg.PolicyURL, path: "/v1/policy/health", required: true},
+		{name: "jobs", baseURL: h.cfg.JobsURL, path: "/v1/jobs/health", required: true},
+		{name: "leases", baseURL: h.cfg.LeasesURL, path: "/v1/leases/health"},
+		{name: "artifacts", baseURL: h.cfg.ArtifactsURL, path: "/v1/artifacts/health", required: true},
+	}
+	statuses := make([]gatewayDependencyStatus, 0, len(targets))
+	for _, target := range targets {
+		statuses = append(statuses, h.checkDependency(ctx, target))
+	}
+	return statuses
+}
+
+func (h *Handler) checkDependency(ctx context.Context, target gatewayDependencyTarget) gatewayDependencyStatus {
+	status := gatewayDependencyStatus{Name: target.name, Required: target.required}
+	baseURL := strings.TrimRight(strings.TrimSpace(target.baseURL), "/")
+	if baseURL == "" {
+		status.Status = "missing"
+		status.Error = "base URL is not configured"
+		return status
+	}
+	status.Configured = true
+	checkCtx, cancel := context.WithTimeout(ctx, h.cfg.DependencyTimeout)
+	defer cancel()
+	resp, err := h.downstreamRequest(checkCtx, http.MethodGet, baseURL+target.path, nil, "")
+	if err != nil {
+		status.Status = "unreachable"
+		status.Error = err.Error()
+		return status
+	}
+	defer resp.Body.Close()
+	status.HTTPStatus = resp.StatusCode
+	var envelope struct {
+		OK    bool                      `json:"ok"`
+		Data  contracts.ComponentHealth `json:"data"`
+		Error contracts.ErrorObject     `json:"error"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&envelope); err != nil {
+		status.Status = "invalid_response"
+		status.Error = err.Error()
+		return status
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		status.Status = "unreachable"
+		status.Error = envelope.Error.Message
+		if status.Error == "" {
+			status.Error = resp.Status
+		}
+		return status
+	}
+	if !envelope.OK || envelope.Data.Status == "" {
+		status.Status = "invalid_response"
+		status.Error = "health response was not ok"
+		return status
+	}
+	status.Status = envelope.Data.Status
+	status.Reachable = envelope.Data.Status == "healthy"
+	if !status.Reachable {
+		status.Error = "reported status " + envelope.Data.Status
+	}
+	return status
 }
 
 func (h *Handler) toolRoute(w http.ResponseWriter, r *http.Request, tail string) {
@@ -996,6 +1086,27 @@ func stringToJobState(value string) contracts.JobState {
 
 func requestID(r *http.Request) string {
 	return observability.RequestIDFromRequest(r, "req_gateway")
+}
+
+func boolLabel(value bool) string {
+	if value {
+		return "true"
+	}
+	return "false"
+}
+
+func metricBool(value bool) float64 {
+	if value {
+		return 1
+	}
+	return 0
+}
+
+func boolCount(value bool) int {
+	if value {
+		return 1
+	}
+	return 0
 }
 
 func decodeBody(w http.ResponseWriter, r *http.Request, out any) bool {

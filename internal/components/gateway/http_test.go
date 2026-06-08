@@ -51,6 +51,10 @@ func TestGatewayHealthDoesNotRequireDownstreamServices(t *testing.T) {
 	if downstreams["catalog"] != false || downstreams["jobs"] != false {
 		t.Fatalf("health response = %#v", envelope)
 	}
+	catalogDependency := dependencyStatusByName(t, details["dependencies"], "catalog")
+	if catalogDependency["configured"] != false || catalogDependency["status"] != "missing" {
+		t.Fatalf("catalog dependency = %#v", catalogDependency)
+	}
 	idempotency := details["idempotency"].(map[string]any)
 	if idempotency["store_backend"] != "memory" || idempotency["record_count"] != float64(0) {
 		t.Fatalf("health response = %#v", envelope)
@@ -58,12 +62,37 @@ func TestGatewayHealthDoesNotRequireDownstreamServices(t *testing.T) {
 }
 
 func TestGatewayMetricsReportsConfiguredDownstreams(t *testing.T) {
-	handler := NewHandler(Config{CatalogURL: "http://catalog.local", JobsURL: "http://jobs.local"})
+	downstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/catalog/health":
+			writeGatewayTestEnvelope(t, w, http.StatusOK, contracts.NewComponentHealth("catalog", nil))
+		case "/v1/jobs/health":
+			writeGatewayTestEnvelope(t, w, http.StatusOK, contracts.NewComponentHealth("jobs", nil))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(downstream.Close)
+
+	handler := NewHandler(Config{CatalogURL: downstream.URL, JobsURL: downstream.URL})
 	healthReq := httptest.NewRequest(http.MethodGet, "/v1/gateway/health", nil)
 	healthRec := httptest.NewRecorder()
 	handler.ServeHTTP(healthRec, healthReq)
 	if healthRec.Code != http.StatusOK {
 		t.Fatalf("health status=%d body=%s", healthRec.Code, healthRec.Body.String())
+	}
+	var healthEnvelope map[string]any
+	if err := json.NewDecoder(healthRec.Body).Decode(&healthEnvelope); err != nil {
+		t.Fatalf("decode health response: %v", err)
+	}
+	healthData := healthEnvelope["data"].(map[string]any)
+	healthDetails := healthData["details"].(map[string]any)
+	if healthData["status"] != "healthy" {
+		t.Fatalf("health response = %#v", healthEnvelope)
+	}
+	jobsDependency := dependencyStatusByName(t, healthDetails["dependencies"], "jobs")
+	if jobsDependency["configured"] != true || jobsDependency["reachable"] != true || jobsDependency["status"] != "healthy" {
+		t.Fatalf("jobs dependency = %#v", jobsDependency)
 	}
 
 	req := httptest.NewRequest(http.MethodGet, "/v1/gateway/metrics", nil)
@@ -83,7 +112,35 @@ func TestGatewayMetricsReportsConfiguredDownstreams(t *testing.T) {
 	}
 	assertMetric(t, data, "gateway_downstream_configured", map[string]string{"downstream": "catalog"}, 1)
 	assertMetric(t, data, "gateway_downstream_configured", map[string]string{"downstream": "policy"}, 0)
+	assertMetric(t, data, "gateway_downstream_reachable", map[string]string{"downstream": "jobs", "status": "healthy"}, 1)
 	assertMetric(t, data, "http_requests_total", map[string]string{"method": "GET", "route_group": "/v1/gateway/health", "status_class": "2xx"}, 1)
+}
+
+func TestGatewayHealthDegradesWhenConfiguredDependencyFails(t *testing.T) {
+	downstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		health := contracts.NewComponentHealth("catalog", map[string]any{"store": "offline"})
+		health.Status = "degraded"
+		writeGatewayTestEnvelope(t, w, http.StatusOK, health)
+	}))
+	t.Cleanup(downstream.Close)
+
+	handler := NewHandler(Config{CatalogURL: downstream.URL})
+	req := httptest.NewRequest(http.MethodGet, "/v1/gateway/health", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("health status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var envelope map[string]any
+	if err := json.NewDecoder(rec.Body).Decode(&envelope); err != nil {
+		t.Fatalf("decode health response: %v", err)
+	}
+	data := envelope["data"].(map[string]any)
+	details := data["details"].(map[string]any)
+	dependency := dependencyStatusByName(t, details["dependencies"], "catalog")
+	if data["status"] != "degraded" || dependency["reachable"] != false || dependency["status"] != "degraded" {
+		t.Fatalf("health response = %#v", envelope)
+	}
 }
 
 func TestGatewayDiscoveryInvokeAndJobProjection(t *testing.T) {
@@ -333,6 +390,18 @@ func assertMetric(t *testing.T, data map[string]any, name string, labels map[str
 		return
 	}
 	t.Fatalf("metric %s labels=%#v not found in %#v", name, labels, data["samples"])
+}
+
+func dependencyStatusByName(t *testing.T, raw any, name string) map[string]any {
+	t.Helper()
+	for _, item := range raw.([]any) {
+		dependency := item.(map[string]any)
+		if dependency["name"] == name {
+			return dependency
+		}
+	}
+	t.Fatalf("dependency %s not found in %#v", name, raw)
+	return nil
 }
 
 func writeGatewayTestEnvelope(t *testing.T, w http.ResponseWriter, status int, data any) {
