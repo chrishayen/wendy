@@ -174,6 +174,72 @@ func TestNodeCommandRequiresNodeURL(t *testing.T) {
 	}
 }
 
+func TestNodeStartCommandPostsWithIdempotencyKey(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/v1/node/services/svc_gpu/start" {
+			t.Fatalf("request = %s %s", r.Method, r.URL.Path)
+		}
+		if r.Header.Get("Authorization") != "Bearer node-token" {
+			t.Fatalf("Authorization = %q", r.Header.Get("Authorization"))
+		}
+		if r.Header.Get("Idempotency-Key") != "start-1" {
+			t.Fatalf("Idempotency-Key = %q", r.Header.Get("Idempotency-Key"))
+		}
+		writeEnvelope(t, w, http.StatusAccepted, map[string]any{"service_id": "svc_gpu", "status": "starting"})
+	}))
+	defer server.Close()
+
+	var stdout, stderr bytes.Buffer
+	code := run([]string{
+		"-node-url", server.URL,
+		"-node-token", "node-token",
+		"node", "start", "svc_gpu", "-idempotency-key", "start-1",
+	}, &stdout, &stderr, server.Client())
+	if code != 0 {
+		t.Fatalf("code=%d stderr=%s stdout=%s", code, stderr.String(), stdout.String())
+	}
+	if !strings.Contains(stdout.String(), `"status": "starting"`) {
+		t.Fatalf("stdout = %s", stdout.String())
+	}
+}
+
+func TestNodeStartRequiresIdempotencyKey(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := run([]string{"-node-url", "http://node.invalid", "node", "start", "svc_gpu"}, &stdout, &stderr, http.DefaultClient)
+	if code != 2 {
+		t.Fatalf("code=%d stderr=%s", code, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "idempotency-key is required") {
+		t.Fatalf("stderr = %s", stderr.String())
+	}
+}
+
+func TestNodeStopCommandPosts(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/v1/node/services/svc_gpu/stop" {
+			t.Fatalf("request = %s %s", r.Method, r.URL.Path)
+		}
+		if r.Header.Get("Authorization") != "Bearer node-token" {
+			t.Fatalf("Authorization = %q", r.Header.Get("Authorization"))
+		}
+		writeEnvelope(t, w, http.StatusAccepted, map[string]any{"service_id": "svc_gpu", "status": "stopped"})
+	}))
+	defer server.Close()
+
+	var stdout, stderr bytes.Buffer
+	code := run([]string{
+		"-node-url", server.URL,
+		"-node-token", "node-token",
+		"node", "stop", "svc_gpu",
+	}, &stdout, &stderr, server.Client())
+	if code != 0 {
+		t.Fatalf("code=%d stderr=%s stdout=%s", code, stderr.String(), stdout.String())
+	}
+	if !strings.Contains(stdout.String(), `"status": "stopped"`) {
+		t.Fatalf("stdout = %s", stdout.String())
+	}
+}
+
 func coreURLArgs(url string) []string {
 	return []string{
 		"-catalog-url", url,

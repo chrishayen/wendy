@@ -144,6 +144,8 @@ curl http://localhost:18086/v1/gateway/health
 go run ./cmd/pacp-admin -node-url http://localhost:18087 -node-token token_agent_smoke health
 go run ./cmd/pacp-admin catalog route cap_image_generate_gpu
 go run ./cmd/pacp-admin -node-url http://localhost:18087 -node-token token_agent_smoke node services
+go run ./cmd/pacp-admin -node-url http://localhost:18087 -node-token token_runner_smoke node start svc_comfyui_gpu -idempotency-key start-comfy-1
+go run ./cmd/pacp-admin -node-url http://localhost:18087 -node-token token_runner_smoke node stop svc_comfyui_gpu
 go run ./cmd/pacp-control -gateway-url http://localhost:18086 -token token_agent tools
 ```
 
@@ -151,4 +153,4 @@ This is not the full production control plane yet. It is a usable service stack
 with public HTTP boundaries, file-backed local durability, a provider SDK, a
 generic HTTP provider bridge, a composition runner, runtime node adapters, and a
 gateway control CLI. Production databases, richer provider-specific wrappers,
-mutating admin commands, and hardening remain.
+broader mutating admin commands, and hardening remain.

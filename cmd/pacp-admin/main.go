@@ -255,7 +255,7 @@ func nodeCommand(cfg adminConfig, httpClient *http.Client, args []string, stdout
 		return 2
 	}
 	if len(args) == 0 {
-		return usage(stderr, "usage: pacp-admin [flags] node <resources|services|service> [id]")
+		return usage(stderr, "usage: pacp-admin [flags] node <resources|services|service|start|stop> [id]")
 	}
 	switch args[0] {
 	case "resources":
@@ -273,9 +273,34 @@ func nodeCommand(cfg adminConfig, httpClient *http.Client, args []string, stdout
 			return usage(stderr, "usage: pacp-admin [flags] node service <service-id>")
 		}
 		return getJSON(cfg, httpClient, cfg.NodeURL, "/v1/node/services/"+url.PathEscape(args[1]), authorizationHeader(cfg.NodeToken), stdout, stderr)
+	case "start":
+		return nodeStartCommand(cfg, httpClient, args[1:], stdout, stderr)
+	case "stop":
+		if len(args) != 2 {
+			return usage(stderr, "usage: pacp-admin [flags] node stop <service-id>")
+		}
+		return postJSON(cfg, httpClient, cfg.NodeURL, "/v1/node/services/"+url.PathEscape(args[1])+"/stop", authorizationHeader(cfg.NodeToken), "", stdout, stderr)
 	default:
-		return usage(stderr, "usage: pacp-admin [flags] node <resources|services|service> [id]")
+		return usage(stderr, "usage: pacp-admin [flags] node <resources|services|service|start|stop> [id]")
 	}
+}
+
+func nodeStartCommand(cfg adminConfig, httpClient *http.Client, args []string, stdout, stderr io.Writer) int {
+	flags := flag.NewFlagSet("node start", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	idempotencyKey := flags.String("idempotency-key", "", "idempotency key for this node start")
+	remaining, err := parseSubcommandFlags(flags, args)
+	if err != nil {
+		return 2
+	}
+	if len(remaining) != 1 {
+		return usage(stderr, "usage: pacp-admin [flags] node start <service-id> -idempotency-key <key>")
+	}
+	if *idempotencyKey == "" {
+		return usage(stderr, "idempotency-key is required for node start")
+	}
+	path := "/v1/node/services/" + url.PathEscape(remaining[0]) + "/start"
+	return postJSON(cfg, httpClient, cfg.NodeURL, path, authorizationHeader(cfg.NodeToken), *idempotencyKey, stdout, stderr)
 }
 
 func checkHealth(cfg adminConfig, httpClient *http.Client) healthReport {
@@ -419,6 +444,67 @@ func getJSON(cfg adminConfig, httpClient *http.Client, baseURL, path, credential
 		return 1
 	}
 	return 0
+}
+
+func postJSON(cfg adminConfig, httpClient *http.Client, baseURL, path, credential, idempotencyKey string, stdout, stderr io.Writer) int {
+	baseURL = strings.TrimRight(strings.TrimSpace(baseURL), "/")
+	if baseURL == "" {
+		fmt.Fprintf(stderr, "service URL is required for %s\n", path)
+		return 2
+	}
+	ctx := context.Background()
+	if cfg.Timeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, cfg.Timeout)
+		defer cancel()
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, baseURL+path, nil)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 2
+	}
+	if credential != "" {
+		req.Header.Set("Authorization", credential)
+	}
+	if idempotencyKey != "" {
+		req.Header.Set("Idempotency-Key", idempotencyKey)
+	}
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	defer resp.Body.Close()
+	raw, err := io.ReadAll(resp.Body)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	if err := writePrettyJSON(stdout, raw); err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		fmt.Fprintf(stderr, "component returned HTTP %d\n", resp.StatusCode)
+		return 1
+	}
+	return 0
+}
+
+func parseSubcommandFlags(flags *flag.FlagSet, args []string) ([]string, error) {
+	var leading string
+	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
+		leading = args[0]
+		args = args[1:]
+	}
+	if err := flags.Parse(args); err != nil {
+		return nil, err
+	}
+	remaining := flags.Args()
+	if leading != "" {
+		remaining = append([]string{leading}, remaining...)
+	}
+	return remaining, nil
 }
 
 func usage(stderr io.Writer, message string) int {
