@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -137,6 +139,74 @@ func TestCatalogRouteCommandUsesComponentToken(t *testing.T) {
 	}
 }
 
+func TestCatalogImportCommandPostsManifestWithComponentToken(t *testing.T) {
+	manifestPath := writeAdminTestManifest(t, t.TempDir(), "svc_admin_import", "cap_admin_import")
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/v1/catalog/manifests" {
+			t.Fatalf("request = %s %s", r.Method, r.URL.Path)
+		}
+		if r.Header.Get("Authorization") != "Bearer component-token" {
+			t.Fatalf("Authorization = %q", r.Header.Get("Authorization"))
+		}
+		var manifest map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&manifest); err != nil {
+			t.Fatalf("decode manifest: %v", err)
+		}
+		service := manifest["service"].(map[string]any)
+		if service["id"] != "svc_admin_import" {
+			t.Fatalf("service id = %#v", service["id"])
+		}
+		writeEnvelope(t, w, http.StatusCreated, map[string]any{"service_id": "svc_admin_import", "capability_ids": []string{"cap_admin_import"}})
+	}))
+	defer server.Close()
+
+	var stdout, stderr bytes.Buffer
+	code := run([]string{
+		"-catalog-url", server.URL,
+		"-component-token", "component-token",
+		"catalog", "import", manifestPath,
+	}, &stdout, &stderr, server.Client())
+	if code != 0 {
+		t.Fatalf("code=%d stderr=%s stdout=%s", code, stderr.String(), stdout.String())
+	}
+	if !strings.Contains(stdout.String(), `"service_id": "svc_admin_import"`) {
+		t.Fatalf("stdout = %s", stdout.String())
+	}
+}
+
+func TestCatalogImportCommandLoadsManifestDirectory(t *testing.T) {
+	dir := t.TempDir()
+	writeAdminTestManifest(t, dir, "svc_admin_import_one", "cap_admin_import_one")
+	writeAdminTestManifest(t, dir, "svc_admin_import_two", "cap_admin_import_two")
+	seen := map[string]bool{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/v1/catalog/manifests" {
+			t.Fatalf("request = %s %s", r.Method, r.URL.Path)
+		}
+		var manifest map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&manifest); err != nil {
+			t.Fatalf("decode manifest: %v", err)
+		}
+		service := manifest["service"].(map[string]any)
+		serviceID := service["id"].(string)
+		seen[serviceID] = true
+		writeEnvelope(t, w, http.StatusCreated, map[string]any{"service_id": serviceID})
+	}))
+	defer server.Close()
+
+	var stdout, stderr bytes.Buffer
+	code := run([]string{
+		"-catalog-url", server.URL,
+		"catalog", "import", dir,
+	}, &stdout, &stderr, server.Client())
+	if code != 0 {
+		t.Fatalf("code=%d stderr=%s stdout=%s", code, stderr.String(), stdout.String())
+	}
+	if !seen["svc_admin_import_one"] || !seen["svc_admin_import_two"] {
+		t.Fatalf("seen imports = %#v", seen)
+	}
+}
+
 func TestNodeServicesCommandUsesNodeToken(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet || r.URL.Path != "/v1/node/services" {
@@ -161,6 +231,43 @@ func TestNodeServicesCommandUsesNodeToken(t *testing.T) {
 	if !strings.Contains(stdout.String(), `"items": []`) {
 		t.Fatalf("stdout = %s", stdout.String())
 	}
+}
+
+func writeAdminTestManifest(t *testing.T, dir, serviceID, capabilityID string) string {
+	t.Helper()
+	manifest := map[string]any{
+		"schema_version": "v1",
+		"service": map[string]any{
+			"id":            serviceID,
+			"name":          serviceID,
+			"description":   "Admin import test provider.",
+			"version":       "v1",
+			"provider_kind": "test",
+		},
+		"provider": map[string]any{
+			"endpoint": "http://provider.invalid",
+		},
+		"capabilities": []map[string]any{{
+			"id":             capabilityID,
+			"name":           capabilityID,
+			"description":    "Admin import test capability.",
+			"execution_mode": "sync",
+			"input_schema":   map[string]any{"type": "object"},
+			"output_schema":  map[string]any{"type": "object"},
+			"examples":       []any{},
+			"side_effects":   "none",
+			"timeout_hint":   "30s",
+		}},
+	}
+	raw, err := json.MarshalIndent(manifest, "", "  ")
+	if err != nil {
+		t.Fatalf("marshal manifest: %v", err)
+	}
+	path := filepath.Join(dir, serviceID+".json")
+	if err := os.WriteFile(path, raw, 0o600); err != nil {
+		t.Fatalf("write manifest: %v", err)
+	}
+	return path
 }
 
 func TestJobsCancelCommandUsesGatewayTokenAndIdempotencyKey(t *testing.T) {

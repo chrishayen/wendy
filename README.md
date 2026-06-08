@@ -76,6 +76,7 @@ go run ./cmd/pacp-dev -state-dir /tmp/pacp-dev-state
 PACP_HTTP_ECHO_TOKEN='Bearer dev-token' go run ./cmd/pacp-http-provider -addr localhost:18088 -manifest testdata/http-provider/echo-manifest.json -routes testdata/http-provider/echo-routes.json -endpoint http://localhost:18088
 go run ./cmd/pacp-admin health
 go run ./cmd/pacp-admin catalog capabilities
+go run ./cmd/pacp-admin catalog import /tmp/pacp-bundle/catalog
 go run ./cmd/pacp-admin jobs list
 go run ./cmd/pacp-admin -gateway-token token_agent jobs cancel job_000001 -idempotency-key cancel-1 -reason "stop requested"
 go run ./cmd/pacp-admin leases resources

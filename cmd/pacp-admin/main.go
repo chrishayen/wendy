@@ -9,8 +9,11 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
+
+	"pacp/internal/contracts"
 )
 
 type adminConfig struct {
@@ -127,10 +130,12 @@ func run(args []string, stdout, stderr io.Writer, httpClient *http.Client) int {
 
 func catalogCommand(cfg adminConfig, httpClient *http.Client, args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
-		fmt.Fprintln(stderr, "usage: pacp-admin [flags] catalog <services|service|capabilities|capability|route|tags> [id]")
+		fmt.Fprintln(stderr, "usage: pacp-admin [flags] catalog <services|service|capabilities|capability|route|tags|import> [id]")
 		return 2
 	}
 	switch args[0] {
+	case "import":
+		return catalogImportCommand(cfg, httpClient, args[1:], stdout, stderr)
 	case "services":
 		if len(args) != 1 {
 			return usage(stderr, "usage: pacp-admin [flags] catalog services")
@@ -162,8 +167,46 @@ func catalogCommand(cfg adminConfig, httpClient *http.Client, args []string, std
 		}
 		return getJSON(cfg, httpClient, cfg.CatalogURL, "/v1/catalog/tags", authorizationHeader(cfg.ComponentToken), stdout, stderr)
 	default:
-		return usage(stderr, "usage: pacp-admin [flags] catalog <services|service|capabilities|capability|route|tags> [id]")
+		return usage(stderr, "usage: pacp-admin [flags] catalog <services|service|capabilities|capability|route|tags|import> [id]")
 	}
+}
+
+func catalogImportCommand(cfg adminConfig, httpClient *http.Client, args []string, stdout, stderr io.Writer) int {
+	if len(args) != 1 {
+		return usage(stderr, "usage: pacp-admin [flags] catalog import <manifest-file-or-dir>")
+	}
+	manifests, err := loadManifestInputs(args[0])
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	results := make([]any, 0, len(manifests))
+	for _, manifest := range manifests {
+		var envelope map[string]any
+		status, err := postJSONDecode(cfg, httpClient, cfg.CatalogURL, "/v1/catalog/manifests", authorizationHeader(cfg.ComponentToken), "", manifest, &envelope)
+		if err != nil {
+			fmt.Fprintln(stderr, err)
+			return 1
+		}
+		results = append(results, map[string]any{
+			"status":     status,
+			"service_id": manifest.Service.ID,
+			"response":   envelope,
+		})
+		if status < 200 || status >= 300 {
+			if err := writeJSON(stdout, map[string]any{"ok": false, "data": map[string]any{"items": results}, "links": map[string]any{}, "meta": map[string]string{"schema_version": "v1"}}); err != nil {
+				fmt.Fprintln(stderr, err)
+			}
+			fmt.Fprintf(stderr, "component returned HTTP %d\n", status)
+			return 1
+		}
+	}
+	return writeCommandJSON(stdout, stderr, map[string]any{
+		"ok":    true,
+		"data":  map[string]any{"items": results},
+		"links": map[string]any{},
+		"meta":  map[string]string{"schema_version": "v1", "admin_command": "catalog import"},
+	})
 }
 
 func jobsCommand(cfg adminConfig, httpClient *http.Client, args []string, stdout, stderr io.Writer) int {
@@ -481,10 +524,32 @@ func postJSON(cfg adminConfig, httpClient *http.Client, baseURL, path, credentia
 }
 
 func postJSONBody(cfg adminConfig, httpClient *http.Client, baseURL, path, credential, idempotencyKey string, body any, stdout, stderr io.Writer) int {
+	var envelope any
+	status, err := postJSONDecode(cfg, httpClient, baseURL, path, credential, idempotencyKey, body, &envelope)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	raw, err := json.Marshal(envelope)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	if err := writePrettyJSON(stdout, raw); err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	if status < 200 || status >= 300 {
+		fmt.Fprintf(stderr, "component returned HTTP %d\n", status)
+		return 1
+	}
+	return 0
+}
+
+func postJSONDecode(cfg adminConfig, httpClient *http.Client, baseURL, path, credential, idempotencyKey string, body any, out any) (int, error) {
 	baseURL = strings.TrimRight(strings.TrimSpace(baseURL), "/")
 	if baseURL == "" {
-		fmt.Fprintf(stderr, "service URL is required for %s\n", path)
-		return 2
+		return 0, fmt.Errorf("service URL is required for %s", path)
 	}
 	ctx := context.Background()
 	if cfg.Timeout > 0 {
@@ -496,15 +561,13 @@ func postJSONBody(cfg adminConfig, httpClient *http.Client, baseURL, path, crede
 	if body != nil {
 		raw, err := json.Marshal(body)
 		if err != nil {
-			fmt.Fprintln(stderr, err)
-			return 2
+			return 0, err
 		}
 		reader = strings.NewReader(string(raw))
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, baseURL+path, reader)
 	if err != nil {
-		fmt.Fprintln(stderr, err)
-		return 2
+		return 0, err
 	}
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
@@ -517,24 +580,17 @@ func postJSONBody(cfg adminConfig, httpClient *http.Client, baseURL, path, crede
 	}
 	resp, err := httpClient.Do(req)
 	if err != nil {
-		fmt.Fprintln(stderr, err)
-		return 1
+		return 0, err
 	}
 	defer resp.Body.Close()
-	raw, err := io.ReadAll(resp.Body)
-	if err != nil {
-		fmt.Fprintln(stderr, err)
-		return 1
+	if out != nil {
+		if err := json.NewDecoder(resp.Body).Decode(out); err != nil {
+			return resp.StatusCode, err
+		}
+	} else if _, err := io.Copy(io.Discard, resp.Body); err != nil {
+		return resp.StatusCode, err
 	}
-	if err := writePrettyJSON(stdout, raw); err != nil {
-		fmt.Fprintln(stderr, err)
-		return 1
-	}
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		fmt.Fprintf(stderr, "component returned HTTP %d\n", resp.StatusCode)
-		return 1
-	}
-	return 0
+	return resp.StatusCode, nil
 }
 
 func parseSubcommandFlags(flags *flag.FlagSet, args []string) ([]string, error) {
@@ -593,6 +649,14 @@ func writeJSON(w io.Writer, body any) error {
 	return err
 }
 
+func writeCommandJSON(stdout, stderr io.Writer, body any) int {
+	if err := writeJSON(stdout, body); err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	return 0
+}
+
 func writePrettyJSON(w io.Writer, raw []byte) error {
 	var decoded any
 	if err := json.Unmarshal(raw, &decoded); err != nil {
@@ -613,4 +677,50 @@ func writePrettyJSON(w io.Writer, raw []byte) error {
 func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "usage: pacp-admin [flags] <command>")
 	fmt.Fprintln(w, "commands: health, catalog, jobs, leases, artifacts, node")
+}
+
+func loadManifestInputs(path string) ([]contracts.ProviderManifest, error) {
+	info, err := os.Stat(path)
+	if err != nil {
+		return nil, err
+	}
+	if !info.IsDir() {
+		manifest, err := loadManifestInputFile(path)
+		if err != nil {
+			return nil, err
+		}
+		return []contracts.ProviderManifest{manifest}, nil
+	}
+	entries, err := os.ReadDir(path)
+	if err != nil {
+		return nil, err
+	}
+	manifests := []contracts.ProviderManifest{}
+	for _, entry := range entries {
+		if entry.IsDir() || filepath.Ext(entry.Name()) != ".json" {
+			continue
+		}
+		manifest, err := loadManifestInputFile(filepath.Join(path, entry.Name()))
+		if err != nil {
+			return nil, err
+		}
+		manifests = append(manifests, manifest)
+	}
+	if len(manifests) == 0 {
+		return nil, fmt.Errorf("manifest directory %s contains no .json files", path)
+	}
+	return manifests, nil
+}
+
+func loadManifestInputFile(path string) (contracts.ProviderManifest, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return contracts.ProviderManifest{}, err
+	}
+	defer file.Close()
+	var manifest contracts.ProviderManifest
+	if err := json.NewDecoder(file).Decode(&manifest); err != nil {
+		return contracts.ProviderManifest{}, fmt.Errorf("decode manifest %s: %w", path, err)
+	}
+	return manifest, nil
 }
