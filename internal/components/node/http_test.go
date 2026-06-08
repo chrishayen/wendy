@@ -146,6 +146,106 @@ func TestHandlerNodeEventsStartsAsEmptyArray(t *testing.T) {
 	}
 }
 
+func TestHandlerNodeResourcesPaginate(t *testing.T) {
+	handler := NewHandler(newPaginatedNodeStore(t))
+	headers := map[string]string{"Authorization": "Bearer token_runner"}
+
+	first := doJSON(t, handler, http.MethodGet, "/v1/node/resources?limit=1", headers, http.StatusOK)
+	items := first["items"].([]any)
+	if len(items) != 1 || items[0].(map[string]any)["resource_id"] != "res_gpu_0" {
+		t.Fatalf("first resources page = %#v", first)
+	}
+	cursor, ok := first["next_cursor"].(string)
+	if !ok || cursor == "" {
+		t.Fatalf("first resources page missing cursor = %#v", first)
+	}
+
+	second := doJSON(t, handler, http.MethodGet, "/v1/node/resources?limit=1&cursor="+cursor, headers, http.StatusOK)
+	items = second["items"].([]any)
+	if len(items) != 1 || items[0].(map[string]any)["resource_id"] != "res_gpu_1" || second["next_cursor"] != nil {
+		t.Fatalf("second resources page = %#v", second)
+	}
+
+	invalidLimit := doJSONEnvelope(t, handler, http.MethodGet, "/v1/node/resources?limit=0", headers, http.StatusBadRequest)
+	if invalidLimit["error"].(map[string]any)["code"] != "validation_failed" {
+		t.Fatalf("invalid resource limit error = %#v", invalidLimit)
+	}
+	invalidCursor := doJSONEnvelope(t, handler, http.MethodGet, "/v1/node/resources?cursor=cursor_node_events_000001", headers, http.StatusBadRequest)
+	if invalidCursor["error"].(map[string]any)["code"] != "invalid_cursor" {
+		t.Fatalf("invalid resource cursor error = %#v", invalidCursor)
+	}
+}
+
+func TestHandlerNodeServicesPaginate(t *testing.T) {
+	handler := NewHandler(newPaginatedNodeStore(t))
+	headers := map[string]string{"Authorization": "Bearer token_runner"}
+
+	first := doJSON(t, handler, http.MethodGet, "/v1/node/services?limit=1", headers, http.StatusOK)
+	items := first["items"].([]any)
+	if len(items) != 1 || items[0].(map[string]any)["service_id"] != "svc_a" {
+		t.Fatalf("first services page = %#v", first)
+	}
+	cursor, ok := first["next_cursor"].(string)
+	if !ok || cursor == "" {
+		t.Fatalf("first services page missing cursor = %#v", first)
+	}
+
+	second := doJSON(t, handler, http.MethodGet, "/v1/node/services?limit=1&cursor="+cursor, headers, http.StatusOK)
+	items = second["items"].([]any)
+	if len(items) != 1 || items[0].(map[string]any)["service_id"] != "svc_z" || second["next_cursor"] != nil {
+		t.Fatalf("second services page = %#v", second)
+	}
+
+	invalidLimit := doJSONEnvelope(t, handler, http.MethodGet, "/v1/node/services?limit=0", headers, http.StatusBadRequest)
+	if invalidLimit["error"].(map[string]any)["code"] != "validation_failed" {
+		t.Fatalf("invalid service limit error = %#v", invalidLimit)
+	}
+	invalidCursor := doJSONEnvelope(t, handler, http.MethodGet, "/v1/node/services?cursor=cursor_node_resources_000001", headers, http.StatusBadRequest)
+	if invalidCursor["error"].(map[string]any)["code"] != "invalid_cursor" {
+		t.Fatalf("invalid service cursor error = %#v", invalidCursor)
+	}
+}
+
+func TestHandlerNodeEventsPaginate(t *testing.T) {
+	store := newTestStore(t)
+	if _, _, err := store.StartService("svc_comfyui_gpu", "start-http-events"); err != nil {
+		t.Fatalf("start service: %v", err)
+	}
+	if _, err := store.TouchService("svc_comfyui_gpu"); err != nil {
+		t.Fatalf("touch service: %v", err)
+	}
+	if _, _, err := store.StopService("svc_comfyui_gpu", "stop-http-events"); err != nil {
+		t.Fatalf("stop service: %v", err)
+	}
+	handler := NewHandler(store)
+	headers := map[string]string{"Authorization": "Bearer token_runner"}
+
+	first := doJSON(t, handler, http.MethodGet, "/v1/node/events?limit=2", headers, http.StatusOK)
+	items := first["items"].([]any)
+	if len(items) != 2 || items[0].(map[string]any)["action"] != "start" || items[1].(map[string]any)["action"] != "touch" {
+		t.Fatalf("first events page = %#v", first)
+	}
+	cursor, ok := first["next_cursor"].(string)
+	if !ok || cursor == "" {
+		t.Fatalf("first events page missing cursor = %#v", first)
+	}
+
+	second := doJSON(t, handler, http.MethodGet, "/v1/node/events?limit=2&cursor="+cursor, headers, http.StatusOK)
+	items = second["items"].([]any)
+	if len(items) != 1 || items[0].(map[string]any)["action"] != "stop" || second["next_cursor"] != nil {
+		t.Fatalf("second events page = %#v", second)
+	}
+
+	invalidLimit := doJSONEnvelope(t, handler, http.MethodGet, "/v1/node/events?limit=0", headers, http.StatusBadRequest)
+	if invalidLimit["error"].(map[string]any)["code"] != "validation_failed" {
+		t.Fatalf("invalid event limit error = %#v", invalidLimit)
+	}
+	invalidCursor := doJSONEnvelope(t, handler, http.MethodGet, "/v1/node/events?cursor=cursor_node_services_000001", headers, http.StatusBadRequest)
+	if invalidCursor["error"].(map[string]any)["code"] != "invalid_cursor" {
+		t.Fatalf("invalid event cursor error = %#v", invalidCursor)
+	}
+}
+
 func TestHandlerRejectsUnauthorizedLifecycle(t *testing.T) {
 	handler := NewHandler(newTestStore(t))
 	envelope := doJSONEnvelope(t, handler, http.MethodPost, "/v1/node/services/svc_comfyui_gpu/start", map[string]string{
@@ -238,4 +338,22 @@ func labelsMatch(raw any, want map[string]string) bool {
 		}
 	}
 	return true
+}
+
+func newPaginatedNodeStore(t *testing.T) *Store {
+	t.Helper()
+	cfg := testConfig()
+	cfg.Resources = []contracts.NodeResource{
+		{ResourceID: "res_gpu_0", Tags: []string{"gpu"}},
+		{ResourceID: "res_gpu_1", Tags: []string{"gpu"}},
+	}
+	cfg.Services = []contracts.NodeServiceConfig{
+		{ServiceID: "svc_z", RuntimeAdapter: "fake", ProviderEndpoint: "http://node_linux_gpu:9002", InitialStatus: "stopped"},
+		{ServiceID: "svc_a", RuntimeAdapter: "fake", ProviderEndpoint: "http://node_linux_gpu:9001", InitialStatus: "stopped"},
+	}
+	store, err := NewStore(cfg)
+	if err != nil {
+		t.Fatalf("new store: %v", err)
+	}
+	return store
 }

@@ -1054,6 +1054,9 @@ paths:
       x-policy-action: node.read
       security:
         - nodeBearer: []
+      parameters:
+        - $ref: "#/components/parameters/Cursor"
+        - $ref: "#/components/parameters/Limit"
       responses:
         "200":
           $ref: "#/components/responses/Success"
@@ -1067,6 +1070,9 @@ paths:
       x-policy-action: node.read
       security:
         - nodeBearer: []
+      parameters:
+        - $ref: "#/components/parameters/Cursor"
+        - $ref: "#/components/parameters/Limit"
       responses:
         "200":
           $ref: "#/components/responses/Success"
@@ -1080,6 +1086,9 @@ paths:
       x-policy-action: node.read
       security:
         - nodeBearer: []
+      parameters:
+        - $ref: "#/components/parameters/Cursor"
+        - $ref: "#/components/parameters/Limit"
       responses:
         "200":
           $ref: "#/components/responses/Success"

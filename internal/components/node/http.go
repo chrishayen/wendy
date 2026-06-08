@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"pacp/internal/contracts"
@@ -42,22 +43,61 @@ func (h Handler) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		if !h.require(w, r, "node.read") {
 			return
 		}
-		writeSuccess(w, r, http.StatusOK, map[string]any{"items": h.store.Resources(), "next_cursor": nil})
+		h.listResources(w, r)
 	case path == "/v1/node/events" && r.Method == http.MethodGet:
 		if !h.require(w, r, "node.read") {
 			return
 		}
-		writeSuccess(w, r, http.StatusOK, map[string]any{"items": h.store.LifecycleEvents(), "next_cursor": nil})
+		h.listEvents(w, r)
 	case path == "/v1/node/services" && r.Method == http.MethodGet:
 		if !h.require(w, r, "node.read") {
 			return
 		}
-		writeSuccess(w, r, http.StatusOK, map[string]any{"items": h.store.ListServices(), "next_cursor": nil})
+		h.listServices(w, r)
 	case strings.HasPrefix(path, "/v1/node/services/"):
 		h.serviceRoute(w, r, strings.TrimPrefix(path, "/v1/node/services/"))
 	default:
 		writeError(w, r, http.StatusNotFound, "not_found", "node route not found", false)
 	}
+}
+
+func (h Handler) listResources(w http.ResponseWriter, r *http.Request) {
+	opts, ok := listOptions(w, r)
+	if !ok {
+		return
+	}
+	items, next, err := h.store.Resources(opts)
+	if err != nil {
+		writeStoreError(w, r, err)
+		return
+	}
+	writeSuccess(w, r, http.StatusOK, map[string]any{"items": items, "next_cursor": next})
+}
+
+func (h Handler) listEvents(w http.ResponseWriter, r *http.Request) {
+	opts, ok := listOptions(w, r)
+	if !ok {
+		return
+	}
+	items, next, err := h.store.LifecycleEvents(opts)
+	if err != nil {
+		writeStoreError(w, r, err)
+		return
+	}
+	writeSuccess(w, r, http.StatusOK, map[string]any{"items": items, "next_cursor": next})
+}
+
+func (h Handler) listServices(w http.ResponseWriter, r *http.Request) {
+	opts, ok := listOptions(w, r)
+	if !ok {
+		return
+	}
+	items, next, err := h.store.ListServices(opts)
+	if err != nil {
+		writeStoreError(w, r, err)
+		return
+	}
+	writeSuccess(w, r, http.StatusOK, map[string]any{"items": items, "next_cursor": next})
 }
 
 func (h Handler) serviceRoute(w http.ResponseWriter, r *http.Request, tail string) {
@@ -133,6 +173,8 @@ func writeStoreError(w http.ResponseWriter, r *http.Request, err error) {
 		writeError(w, r, http.StatusNotFound, "not_found", "service not found", false)
 	case errors.Is(err, ErrValidation):
 		writeError(w, r, http.StatusBadRequest, "validation_failed", err.Error(), false)
+	case errors.Is(err, ErrInvalidCursor):
+		writeError(w, r, http.StatusBadRequest, "invalid_cursor", "cursor is invalid or expired", false)
 	case errors.Is(err, ErrUnauthorized):
 		writeError(w, r, http.StatusUnauthorized, "unauthorized", "credential is missing, malformed, or unknown", false)
 	case errors.Is(err, ErrForbidden):
@@ -146,6 +188,26 @@ func writeStoreError(w http.ResponseWriter, r *http.Request, err error) {
 	default:
 		writeError(w, r, http.StatusInternalServerError, "internal_error", "node operation failed", false)
 	}
+}
+
+func listOptions(w http.ResponseWriter, r *http.Request) (ListOptions, bool) {
+	limit, err := positiveInt(r.URL.Query().Get("limit"))
+	if err != nil {
+		writeError(w, r, http.StatusBadRequest, "validation_failed", "limit must be a positive integer", false)
+		return ListOptions{}, false
+	}
+	return ListOptions{Cursor: r.URL.Query().Get("cursor"), Limit: limit}, true
+}
+
+func positiveInt(raw string) (int, error) {
+	if raw == "" {
+		return 0, nil
+	}
+	value, err := strconv.Atoi(raw)
+	if err != nil || value < 1 {
+		return 0, ErrValidation
+	}
+	return value, nil
 }
 
 func writeSuccess(w http.ResponseWriter, r *http.Request, status int, data any) {

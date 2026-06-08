@@ -69,7 +69,10 @@ func TestStoreLifecycleAndAuth(t *testing.T) {
 	if status != 200 || replayedStop.Status != "stopped" {
 		t.Fatalf("stop replay status=%d service=%#v", status, replayedStop)
 	}
-	events := store.LifecycleEvents()
+	events, _, err := store.LifecycleEvents(ListOptions{})
+	if err != nil {
+		t.Fatalf("lifecycle events: %v", err)
+	}
 	if len(events) != 2 {
 		t.Fatalf("lifecycle events = %#v", events)
 	}
@@ -83,7 +86,10 @@ func TestStoreLifecycleAndAuth(t *testing.T) {
 
 func TestStoreResources(t *testing.T) {
 	store := newTestStore(t)
-	resources := store.Resources()
+	resources, _, err := store.Resources(ListOptions{})
+	if err != nil {
+		t.Fatalf("resources: %v", err)
+	}
 	if len(resources) != 1 || resources[0].ResourceID != "res_gpu_0" {
 		t.Fatalf("resources = %#v", resources)
 	}
@@ -117,7 +123,10 @@ func TestStoreIdleShutdownStopsFakeService(t *testing.T) {
 	if stopped.Status != "stopped" {
 		t.Fatalf("idle-stopped service = %#v", stopped)
 	}
-	events := store.LifecycleEvents()
+	events, _, err := store.LifecycleEvents(ListOptions{})
+	if err != nil {
+		t.Fatalf("lifecycle events: %v", err)
+	}
 	if len(events) != 2 || events[1].Action != "idle_stop" || events[1].Status != "stopped" {
 		t.Fatalf("idle lifecycle events = %#v", events)
 	}
@@ -314,6 +323,121 @@ func TestStoreRejectsNegativeIdleTimeout(t *testing.T) {
 	cfg.Services[0].IdleTimeoutSeconds = -1
 	if _, err := NewStore(cfg); !errors.Is(err, ErrValidation) {
 		t.Fatalf("expected validation error, got %v", err)
+	}
+}
+
+func TestStoreListResourcesPaginatesWithOpaqueCursor(t *testing.T) {
+	cfg := testConfig()
+	cfg.Resources = []contracts.NodeResource{
+		{ResourceID: "res_gpu_0", Tags: []string{"gpu"}},
+		{ResourceID: "res_gpu_1", Tags: []string{"gpu"}},
+	}
+	store, err := NewStore(cfg)
+	if err != nil {
+		t.Fatalf("new store: %v", err)
+	}
+
+	first, next, err := store.Resources(ListOptions{Limit: 1})
+	if err != nil {
+		t.Fatalf("list first page: %v", err)
+	}
+	if len(first) != 1 || first[0].ResourceID != "res_gpu_0" || next == nil {
+		t.Fatalf("first page resources=%#v next=%v", first, next)
+	}
+	if *next != resourceListCursor(1) {
+		t.Fatalf("next cursor = %q", *next)
+	}
+
+	second, next, err := store.Resources(ListOptions{Cursor: *next, Limit: 1})
+	if err != nil {
+		t.Fatalf("list second page: %v", err)
+	}
+	if len(second) != 1 || second[0].ResourceID != "res_gpu_1" || next != nil {
+		t.Fatalf("second page resources=%#v next=%v", second, next)
+	}
+
+	if _, _, err := store.Resources(ListOptions{Cursor: "cursor_node_events_000001"}); !errors.Is(err, ErrInvalidCursor) {
+		t.Fatalf("expected invalid cursor prefix, got %v", err)
+	}
+	if _, _, err := store.Resources(ListOptions{Cursor: resourceListCursor(3)}); !errors.Is(err, ErrInvalidCursor) {
+		t.Fatalf("expected past-end cursor error, got %v", err)
+	}
+}
+
+func TestStoreListServicesPaginatesWithOpaqueCursor(t *testing.T) {
+	cfg := testConfig()
+	cfg.Services = []contracts.NodeServiceConfig{
+		{ServiceID: "svc_z", RuntimeAdapter: "fake", ProviderEndpoint: "http://node_linux_gpu:9002", InitialStatus: "stopped"},
+		{ServiceID: "svc_a", RuntimeAdapter: "fake", ProviderEndpoint: "http://node_linux_gpu:9001", InitialStatus: "stopped"},
+	}
+	store, err := NewStore(cfg)
+	if err != nil {
+		t.Fatalf("new store: %v", err)
+	}
+
+	first, next, err := store.ListServices(ListOptions{Limit: 1})
+	if err != nil {
+		t.Fatalf("list first page: %v", err)
+	}
+	if len(first) != 1 || first[0].ServiceID != "svc_a" || next == nil {
+		t.Fatalf("first page services=%#v next=%v", first, next)
+	}
+	if *next != serviceListCursor(1) {
+		t.Fatalf("next cursor = %q", *next)
+	}
+
+	second, next, err := store.ListServices(ListOptions{Cursor: *next, Limit: 1})
+	if err != nil {
+		t.Fatalf("list second page: %v", err)
+	}
+	if len(second) != 1 || second[0].ServiceID != "svc_z" || next != nil {
+		t.Fatalf("second page services=%#v next=%v", second, next)
+	}
+
+	if _, _, err := store.ListServices(ListOptions{Cursor: "cursor_node_resources_000001"}); !errors.Is(err, ErrInvalidCursor) {
+		t.Fatalf("expected invalid cursor prefix, got %v", err)
+	}
+	if _, _, err := store.ListServices(ListOptions{Cursor: serviceListCursor(3)}); !errors.Is(err, ErrInvalidCursor) {
+		t.Fatalf("expected past-end cursor error, got %v", err)
+	}
+}
+
+func TestStoreListLifecycleEventsPaginatesWithOpaqueCursor(t *testing.T) {
+	store := newTestStore(t)
+	if _, _, err := store.StartService("svc_comfyui_gpu", "start-events"); err != nil {
+		t.Fatalf("start service: %v", err)
+	}
+	if _, err := store.TouchService("svc_comfyui_gpu"); err != nil {
+		t.Fatalf("touch service: %v", err)
+	}
+	if _, _, err := store.StopService("svc_comfyui_gpu", "stop-events"); err != nil {
+		t.Fatalf("stop service: %v", err)
+	}
+
+	first, next, err := store.LifecycleEvents(ListOptions{Limit: 2})
+	if err != nil {
+		t.Fatalf("list first page: %v", err)
+	}
+	if len(first) != 2 || first[0].Action != "start" || first[1].Action != "touch" || next == nil {
+		t.Fatalf("first page events=%#v next=%v", first, next)
+	}
+	if *next != eventListCursor(2) {
+		t.Fatalf("next cursor = %q", *next)
+	}
+
+	second, next, err := store.LifecycleEvents(ListOptions{Cursor: *next, Limit: 2})
+	if err != nil {
+		t.Fatalf("list second page: %v", err)
+	}
+	if len(second) != 1 || second[0].Action != "stop" || next != nil {
+		t.Fatalf("second page events=%#v next=%v", second, next)
+	}
+
+	if _, _, err := store.LifecycleEvents(ListOptions{Cursor: "cursor_node_services_000001"}); !errors.Is(err, ErrInvalidCursor) {
+		t.Fatalf("expected invalid cursor prefix, got %v", err)
+	}
+	if _, _, err := store.LifecycleEvents(ListOptions{Cursor: eventListCursor(4)}); !errors.Is(err, ErrInvalidCursor) {
+		t.Fatalf("expected past-end cursor error, got %v", err)
 	}
 }
 

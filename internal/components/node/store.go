@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"sort"
 	"strings"
 	"sync"
 	"syscall"
@@ -24,6 +25,7 @@ var (
 	ErrRuntimeUnavailable  = errors.New("runtime adapter unavailable")
 	ErrMissingIdempotency  = errors.New("missing idempotency key")
 	ErrIdempotencyConflict = errors.New("idempotency conflict")
+	ErrInvalidCursor       = errors.New("invalid cursor")
 )
 
 type Store struct {
@@ -51,6 +53,11 @@ type serviceRecord struct {
 type idempotentLifecycle struct {
 	fingerprint string
 	serviceID   string
+}
+
+type ListOptions struct {
+	Cursor string
+	Limit  int
 }
 
 type processRuntime struct {
@@ -175,32 +182,118 @@ func (s *Store) Metrics() contracts.ComponentMetrics {
 	return contracts.NewComponentMetrics("node", samples)
 }
 
-func (s *Store) Resources() []contracts.NodeResource {
+func (s *Store) Resources(opts ListOptions) ([]contracts.NodeResource, *string, error) {
+	start, end, next, err := paginationWindow(len(s.config.Resources), opts, parseResourceListCursor, resourceListCursor)
+	if err != nil {
+		return nil, nil, err
+	}
+
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	resources := make([]contracts.NodeResource, len(s.config.Resources))
-	copy(resources, s.config.Resources)
-	return resources
+	resources := make([]contracts.NodeResource, end-start)
+	copy(resources, s.config.Resources[start:end])
+	return resources, next, nil
 }
 
-func (s *Store) ListServices() []contracts.NodeService {
+func (s *Store) ListServices(opts ListOptions) ([]contracts.NodeService, *string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	services := make([]contracts.NodeService, 0, len(s.services))
-	for _, rec := range s.services {
+	ids := make([]string, 0, len(s.services))
+	for serviceID := range s.services {
+		ids = append(ids, serviceID)
+	}
+	sort.Strings(ids)
+	for _, serviceID := range ids {
+		rec := s.services[serviceID]
 		s.advanceRuntimeLocked(rec)
 		services = append(services, serviceProjection(rec))
 	}
-	return services
+	start, end, next, err := paginationWindow(len(services), opts, parseServiceListCursor, serviceListCursor)
+	if err != nil {
+		return nil, nil, err
+	}
+	return services[start:end], next, nil
 }
 
-func (s *Store) LifecycleEvents() []contracts.NodeLifecycleEvent {
+func (s *Store) LifecycleEvents(opts ListOptions) ([]contracts.NodeLifecycleEvent, *string, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	if len(s.events) == 0 {
-		return []contracts.NodeLifecycleEvent{}
+	start, end, next, err := paginationWindow(len(s.events), opts, parseEventListCursor, eventListCursor)
+	if err != nil {
+		return nil, nil, err
 	}
-	return append([]contracts.NodeLifecycleEvent(nil), s.events...)
+	if start == end {
+		return []contracts.NodeLifecycleEvent{}, next, nil
+	}
+	return append([]contracts.NodeLifecycleEvent(nil), s.events[start:end]...), next, nil
+}
+
+func paginationWindow(count int, opts ListOptions, parse func(string) (int, error), build func(int) string) (int, int, *string, error) {
+	start := 0
+	if opts.Cursor != "" {
+		parsed, err := parse(opts.Cursor)
+		if err != nil {
+			return 0, 0, nil, ErrInvalidCursor
+		}
+		start = parsed
+	}
+	if start > count {
+		return 0, 0, nil, ErrInvalidCursor
+	}
+	end := count
+	var next *string
+	if opts.Limit > 0 && start+opts.Limit < end {
+		end = start + opts.Limit
+		cursor := build(end)
+		next = &cursor
+	}
+	return start, end, next, nil
+}
+
+func resourceListCursor(index int) string {
+	return fmt.Sprintf("cursor_node_resources_%06d", index)
+}
+
+func parseResourceListCursor(cursor string) (int, error) {
+	var index int
+	if _, err := fmt.Sscanf(cursor, "cursor_node_resources_%06d", &index); err != nil {
+		return 0, err
+	}
+	if index < 0 || resourceListCursor(index) != cursor {
+		return 0, ErrInvalidCursor
+	}
+	return index, nil
+}
+
+func eventListCursor(index int) string {
+	return fmt.Sprintf("cursor_node_events_%06d", index)
+}
+
+func parseEventListCursor(cursor string) (int, error) {
+	var index int
+	if _, err := fmt.Sscanf(cursor, "cursor_node_events_%06d", &index); err != nil {
+		return 0, err
+	}
+	if index < 0 || eventListCursor(index) != cursor {
+		return 0, ErrInvalidCursor
+	}
+	return index, nil
+}
+
+func serviceListCursor(index int) string {
+	return fmt.Sprintf("cursor_node_services_%06d", index)
+}
+
+func parseServiceListCursor(cursor string) (int, error) {
+	var index int
+	if _, err := fmt.Sscanf(cursor, "cursor_node_services_%06d", &index); err != nil {
+		return 0, err
+	}
+	if index < 0 || serviceListCursor(index) != cursor {
+		return 0, ErrInvalidCursor
+	}
+	return index, nil
 }
 
 func (s *Store) GetService(serviceID string) (contracts.NodeService, error) {
