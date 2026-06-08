@@ -1,6 +1,7 @@
 package runner
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/base64"
@@ -8,6 +9,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"testing"
 	"time"
 
@@ -108,6 +110,116 @@ func TestRunnerCompletesJobAndUploadsArtifact(t *testing.T) {
 	assertContractMetric(t, metrics.Samples, "runner_job_heartbeats_total", nil, 1)
 	assertContractMetric(t, metrics.Samples, "runner_dependency_reachable", map[string]string{"dependency": "jobs", "required": "true", "status": "healthy"}, 1)
 	assertContractMetricExists(t, metrics.Samples, "runner_last_successful_heartbeat_unix_seconds", nil)
+}
+
+func TestRunnerFetchesProviderContentRefsAndUploadsArtifact(t *testing.T) {
+	jobStore := jobs.NewStore()
+	jobsServer := httptest.NewServer(jobs.NewHandler(jobStore))
+	defer jobsServer.Close()
+
+	artifactStore, err := artifacts.NewStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("artifact store: %v", err)
+	}
+	artifactsServer := httptest.NewServer(artifacts.NewHandler(artifactStore))
+	defer artifactsServer.Close()
+
+	providerBody := []byte("provider content bytes")
+	checksum, digest := checksumAndDigest(providerBody)
+	contentFetched := false
+	providerServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("Authorization"); got != "Bearer token_runner" {
+			t.Fatalf("provider Authorization = %q", got)
+		}
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/v1/provider/capabilities/cap_ref_image/invoke":
+			writeRunnerTestSuccess(w, http.StatusOK, contracts.ProviderInvokeResponse{
+				Output: map[string]any{"result": "image_generated", "media_type": "image/png", "filename": "provider-image.png"},
+				ContentRefs: []contracts.ProviderContentRef{{
+					ContentRef: "pcr_test",
+					Name:       "provider-image.png",
+					MediaType:  "image/png",
+					Size:       int64(len(providerBody)),
+					Checksum:   checksum,
+					ExpiresAt:  "2030-01-01T00:00:00Z",
+				}},
+			})
+		case r.Method == http.MethodGet && r.URL.Path == "/v1/provider/artifacts/pcr_test/content":
+			contentFetched = true
+			w.Header().Set("Content-Type", "image/png")
+			w.Header().Set("Content-Length", strconv.Itoa(len(providerBody)))
+			w.Header().Set("Digest", digest)
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write(providerBody)
+		default:
+			t.Fatalf("unexpected provider request %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer providerServer.Close()
+
+	route := contracts.CapabilityRoute{
+		CapabilityID:       "cap_ref_image",
+		ServiceID:          "svc_ref_provider",
+		ProviderEndpoint:   providerServer.URL,
+		ProviderHealthPath: "/v1/provider/health",
+		ProviderInvokePath: "/v1/provider/capabilities/cap_ref_image/invoke",
+		ServiceStartMode:   "manual",
+		ArtifactHints:      []contracts.ArtifactHint{{MediaType: "image/png", Count: "one"}},
+	}
+	created, _, err := jobStore.Create(contracts.CreateJobRequest{
+		RequesterID:  "sub_agent",
+		CapabilityID: "cap_ref_image",
+		InputSummary: map[string]any{"prompt_present": true},
+		Metadata: map[string]any{"execution_plan": map[string]any{
+			"capability_id":   "cap_ref_image",
+			"subject_id":      "sub_agent",
+			"input":           map[string]any{"prompt": "red mug"},
+			"route":           route,
+			"timeout_seconds": 30,
+		}},
+	}, "create-ref-job")
+	if err != nil {
+		t.Fatalf("create job: %v", err)
+	}
+
+	r := New(Config{
+		WorkerID:            "runner_test",
+		JobsURL:             jobsServer.URL,
+		ArtifactsURL:        artifactsServer.URL,
+		ComponentCredential: "Bearer token_runner",
+		Client:              jobsServer.Client(),
+	})
+	jobID, ok, err := r.RunOnce(context.Background())
+	if err != nil {
+		t.Fatalf("run once: %v", err)
+	}
+	if !ok || jobID != created.JobID {
+		t.Fatalf("run result jobID=%q ok=%v", jobID, ok)
+	}
+	if !contentFetched {
+		t.Fatal("provider content ref was not fetched")
+	}
+	completed, err := jobStore.Get(created.JobID)
+	if err != nil {
+		t.Fatalf("get completed job: %v", err)
+	}
+	if completed.State != contracts.JobSucceeded || len(completed.ArtifactRefs) != 1 {
+		t.Fatalf("completed job = %#v", completed)
+	}
+	artifact, err := artifactStore.GetArtifact(completed.ArtifactRefs[0])
+	if err != nil {
+		t.Fatalf("get artifact: %v", err)
+	}
+	if artifact.Name != "provider-image.png" || artifact.MediaType != "image/png" || artifact.ProducerRef != created.JobID || artifact.OwnerSubjectID != "sub_agent" {
+		t.Fatalf("artifact = %#v", artifact)
+	}
+	content, err := artifactStore.ReadContent(completed.ArtifactRefs[0])
+	if err != nil {
+		t.Fatalf("read artifact content: %v", err)
+	}
+	if !bytes.Equal(content.Body, providerBody) || content.Digest != digest {
+		t.Fatalf("content = %#v", content)
+	}
 }
 
 func TestRunnerMonitorHTTPReportsHealthAndMetrics(t *testing.T) {

@@ -168,7 +168,16 @@ func (r *Runner) runJob(ctx context.Context, job contracts.Job) error {
 	} else if terminal {
 		return nil
 	}
-	artifactIDs, err := r.uploadArtifacts(ctx, job.JobID, plan.SubjectID, response.Artifacts)
+	artifactsToUpload := response.Artifacts
+	if len(response.ContentRefs) > 0 {
+		fetched, err := r.fetchProviderContentRefs(ctx, plan.Route.ProviderEndpoint, response.ContentRefs)
+		if err != nil {
+			_ = r.failJob(ctx, job.JobID, "artifact_upload_failed", err.Error())
+			return err
+		}
+		artifactsToUpload = append(artifactsToUpload, fetched...)
+	}
+	artifactIDs, err := r.uploadArtifacts(ctx, job.JobID, plan.SubjectID, artifactsToUpload)
 	if err != nil {
 		_ = r.failJob(ctx, job.JobID, "artifact_upload_failed", err.Error())
 		return err
@@ -460,6 +469,58 @@ func (r *Runner) uploadArtifacts(ctx context.Context, jobID, ownerSubjectID stri
 	return ids, nil
 }
 
+func (r *Runner) fetchProviderContentRefs(ctx context.Context, providerEndpoint string, refs []contracts.ProviderContentRef) ([]contracts.ProviderArtifact, error) {
+	providerEndpoint = strings.TrimRight(providerEndpoint, "/")
+	artifacts := make([]contracts.ProviderArtifact, 0, len(refs))
+	for index, ref := range refs {
+		if ref.ContentRef == "" {
+			return nil, errors.New("provider content_ref is required")
+		}
+		target := providerEndpoint + "/v1/provider/artifacts/" + url.PathEscape(ref.ContentRef) + "/content"
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
+		if err != nil {
+			return nil, err
+		}
+		r.addAuth(req)
+		resp, err := r.client.Do(req)
+		if err != nil {
+			return nil, err
+		}
+		body, readErr := readProviderContentResponse(resp)
+		if readErr != nil {
+			return nil, readErr
+		}
+		checksum, digest := checksumAndDigest(body)
+		if ref.Checksum != "" && ref.Checksum != checksum {
+			return nil, fmt.Errorf("provider content checksum mismatch")
+		}
+		if ref.Size > 0 && int64(len(body)) != ref.Size {
+			return nil, fmt.Errorf("provider content size mismatch")
+		}
+		if got := resp.Header.Get("Digest"); got != "" && got != digest {
+			return nil, fmt.Errorf("provider content digest mismatch")
+		}
+		name := ref.Name
+		if name == "" {
+			name = "provider-content-" + strconv.Itoa(index+1)
+		}
+		mediaType := ref.MediaType
+		if mediaType == "" {
+			mediaType = resp.Header.Get("Content-Type")
+		}
+		if mediaType == "" {
+			mediaType = "application/octet-stream"
+		}
+		artifacts = append(artifacts, contracts.ProviderArtifact{
+			Name:          name,
+			MediaType:     mediaType,
+			ContentBase64: base64.StdEncoding.EncodeToString(body),
+			Checksum:      checksum,
+		})
+	}
+	return artifacts, nil
+}
+
 func parseExecutionPlan(job contracts.Job) (executionPlan, error) {
 	rawPlan, ok := job.Metadata["execution_plan"]
 	if !ok {
@@ -579,6 +640,21 @@ func decodeEnvelope(resp *http.Response, out any) error {
 		return nil
 	}
 	return json.Unmarshal(envelope.Data, out)
+}
+
+func readProviderContentResponse(resp *http.Response) ([]byte, error) {
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		var envelope struct {
+			Error contracts.ErrorObject `json:"error"`
+		}
+		_ = json.NewDecoder(resp.Body).Decode(&envelope)
+		if envelope.Error.Message == "" {
+			envelope.Error.Message = resp.Status
+		}
+		return nil, errors.New(envelope.Error.Message)
+	}
+	return io.ReadAll(io.LimitReader(resp.Body, 100<<20))
 }
 
 func checksumAndDigest(body []byte) (string, string) {
