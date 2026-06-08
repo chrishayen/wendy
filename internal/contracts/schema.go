@@ -78,8 +78,8 @@ func matchesJSONType(value any, expected string) bool {
 		_, ok := value.(map[string]any)
 		return ok
 	case "array":
-		_, ok := value.([]any)
-		return ok
+		kind := reflect.TypeOf(value).Kind()
+		return kind == reflect.Slice || kind == reflect.Array
 	default:
 		return true
 	}

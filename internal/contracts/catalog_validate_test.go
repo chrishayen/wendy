@@ -39,6 +39,24 @@ func TestValidateProviderManifestRejectsInvalidCapabilityEnums(t *testing.T) {
 	}
 }
 
+func TestValidateProviderManifestValidatesExamplesAgainstInputSchema(t *testing.T) {
+	manifest := validTestManifest()
+	manifest.Capabilities[0].InputSchema = map[string]any{
+		"type":     "object",
+		"required": []any{"message"},
+		"properties": map[string]any{
+			"message": map[string]any{"type": "string"},
+		},
+	}
+	manifest.Capabilities[0].Examples = []map[string]any{{"message": 123}}
+
+	errs := ValidateProviderManifest(manifest)
+	want := "capabilities[0].examples[0] must match input_schema: message must be string"
+	if !containsValidationError(errs, want) {
+		t.Fatalf("errors missing %q: %#v", want, errs)
+	}
+}
+
 func validTestManifest() ProviderManifest {
 	return ProviderManifest{
 		SchemaVersion: "v1",

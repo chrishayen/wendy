@@ -82,3 +82,15 @@ func TestValidateObjectRejectsTypeEnumAndBounds(t *testing.T) {
 		})
 	}
 }
+
+func TestValidateObjectAcceptsTypedGoSlicesAsArrays(t *testing.T) {
+	schema := map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"tags": map[string]any{"type": "array"},
+		},
+	}
+	if err := ValidateObject(map[string]any{"tags": []string{"gpu", "image"}}, schema); err != nil {
+		t.Fatalf("ValidateObject returned error for typed slice: %v", err)
+	}
+}

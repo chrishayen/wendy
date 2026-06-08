@@ -60,6 +60,12 @@ func ValidateProviderManifest(manifest ProviderManifest) []string {
 		}
 		if cap.Examples == nil {
 			errs = append(errs, prefix+".examples is required")
+		} else if cap.InputSchema != nil {
+			for j, example := range cap.Examples {
+				if err := ValidateObject(example, cap.InputSchema); err != nil {
+					errs = append(errs, fmt.Sprintf("%s.examples[%d] must match input_schema: %s", prefix, j, err.Error()))
+				}
+			}
 		}
 		if cap.SideEffects == "" {
 			errs = append(errs, prefix+".side_effects is required")
