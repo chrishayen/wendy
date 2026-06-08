@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"pacp/internal/components/leases"
+	"pacp/internal/routeauth"
 	"pacp/internal/transportauth"
 )
 
@@ -52,7 +53,7 @@ func main() {
 		handler = transportauth.RequireVerifiedScopes(handler, transportauth.ScopeConfig{
 			PolicyURL:        *policyURL,
 			PolicyCredential: authorizationHeader(*policyCredential),
-			Rules:            leaseScopeRules(),
+			Rules:            routeauth.LeaseScopeRules(),
 		})
 		authMode = "policy"
 	} else if *componentToken != "" {
@@ -62,25 +63,6 @@ func main() {
 	log.Printf("serving leases addr=%s state_file=%s resources_loaded=%d auth_mode=%s", *addr, *stateFile, resourcesLoaded, authMode)
 	if err := http.ListenAndServe(*addr, handler); err != nil {
 		log.Fatal(err)
-	}
-}
-
-func leaseScopeRules() []transportauth.ScopeRule {
-	componentMessage := "lease component operation requires a valid component credential"
-	workerMessage := "lease worker operation requires a valid runner credential"
-	mixedMessage := "lease operation requires a valid component or runner credential"
-	forbiddenMessage := "caller is not authorized for this lease operation"
-	return []transportauth.ScopeRule{
-		{Method: http.MethodGet, Path: "/v1/resources", Scopes: []string{"component", "worker"}, UnauthorizedMessage: mixedMessage, ForbiddenMessage: forbiddenMessage},
-		{Method: http.MethodPost, Path: "/v1/resources", Scopes: []string{"component"}, UnauthorizedMessage: componentMessage, ForbiddenMessage: forbiddenMessage},
-		{Method: http.MethodGet, Path: "/v1/resources/{resource_id}", Scopes: []string{"component", "worker"}, UnauthorizedMessage: mixedMessage, ForbiddenMessage: forbiddenMessage},
-		{Method: http.MethodGet, Path: "/v1/resources/{resource_id}/inspection", Scopes: []string{"component", "worker"}, UnauthorizedMessage: mixedMessage, ForbiddenMessage: forbiddenMessage},
-		{Method: http.MethodPost, Path: "/v1/lease-requests", Scopes: []string{"worker"}, UnauthorizedMessage: workerMessage, ForbiddenMessage: forbiddenMessage},
-		{Method: http.MethodGet, Path: "/v1/lease-requests/{request_id}", Scopes: []string{"component", "worker"}, UnauthorizedMessage: mixedMessage, ForbiddenMessage: forbiddenMessage},
-		{Method: http.MethodPost, Path: "/v1/lease-requests/{request_id}/cancel", Scopes: []string{"component", "worker"}, UnauthorizedMessage: mixedMessage, ForbiddenMessage: forbiddenMessage},
-		{Method: http.MethodGet, Path: "/v1/leases/{lease_id}", Scopes: []string{"component", "worker"}, UnauthorizedMessage: mixedMessage, ForbiddenMessage: forbiddenMessage},
-		{Method: http.MethodPost, Path: "/v1/leases/{lease_id}/heartbeat", Scopes: []string{"worker"}, UnauthorizedMessage: workerMessage, ForbiddenMessage: forbiddenMessage},
-		{Method: http.MethodPost, Path: "/v1/leases/{lease_id}/release", Scopes: []string{"worker"}, UnauthorizedMessage: workerMessage, ForbiddenMessage: forbiddenMessage},
 	}
 }
 

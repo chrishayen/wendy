@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"pacp/internal/components/artifacts"
+	"pacp/internal/routeauth"
 	"pacp/internal/transportauth"
 )
 
@@ -33,7 +34,7 @@ func main() {
 		handler = transportauth.RequireVerifiedScopes(handler, transportauth.ScopeConfig{
 			PolicyURL:        *policyURL,
 			PolicyCredential: authorizationHeader(*policyCredential),
-			Rules:            artifactScopeRules(),
+			Rules:            routeauth.ArtifactScopeRules(),
 		})
 		authMode = "policy"
 	} else if *componentToken != "" {
@@ -43,23 +44,6 @@ func main() {
 	log.Printf("serving artifacts addr=%s root=%s state_file=%s auth_mode=%s", *addr, *root, *stateFile, authMode)
 	if err := http.ListenAndServe(*addr, handler); err != nil {
 		log.Fatal(err)
-	}
-}
-
-func artifactScopeRules() []transportauth.ScopeRule {
-	componentMessage := "artifact component operation requires a valid component credential"
-	workerMessage := "artifact worker operation requires a valid runner credential"
-	forbiddenMessage := "caller is not authorized for this artifact operation"
-	return []transportauth.ScopeRule{
-		{Method: http.MethodPost, Path: "/v1/artifact-uploads", Scopes: []string{"worker"}, UnauthorizedMessage: workerMessage, ForbiddenMessage: forbiddenMessage},
-		{Method: http.MethodGet, Path: "/v1/artifact-uploads/{upload_id}", Scopes: []string{"worker"}, UnauthorizedMessage: workerMessage, ForbiddenMessage: forbiddenMessage},
-		{Method: http.MethodPut, Path: "/v1/artifact-uploads/{upload_id}/content", Scopes: []string{"worker"}, UnauthorizedMessage: workerMessage, ForbiddenMessage: forbiddenMessage},
-		{Method: http.MethodPost, Path: "/v1/artifact-uploads/{upload_id}/complete", Scopes: []string{"worker"}, UnauthorizedMessage: workerMessage, ForbiddenMessage: forbiddenMessage},
-		{Method: http.MethodGet, Path: "/v1/artifacts", Scopes: []string{"component"}, UnauthorizedMessage: componentMessage, ForbiddenMessage: forbiddenMessage},
-		{Method: http.MethodPost, Path: "/v1/artifacts/register-local", Scopes: []string{"worker"}, UnauthorizedMessage: workerMessage, ForbiddenMessage: forbiddenMessage},
-		{Method: http.MethodGet, Path: "/v1/artifacts/{artifact_id}", Scopes: []string{"component"}, UnauthorizedMessage: componentMessage, ForbiddenMessage: forbiddenMessage},
-		{Method: http.MethodGet, Path: "/v1/artifacts/{artifact_id}/policy-context", Scopes: []string{"component"}, UnauthorizedMessage: componentMessage, ForbiddenMessage: forbiddenMessage},
-		{Method: http.MethodGet, Path: "/v1/artifacts/{artifact_id}/content", Scopes: []string{"component"}, UnauthorizedMessage: componentMessage, ForbiddenMessage: forbiddenMessage},
 	}
 }
 

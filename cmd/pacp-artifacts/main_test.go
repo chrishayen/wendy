@@ -4,11 +4,12 @@ import (
 	"net/http"
 	"testing"
 
+	"pacp/internal/routeauth"
 	"pacp/internal/transportauth"
 )
 
 func TestArtifactScopeRulesSeparateComponentAndWorkerRoutes(t *testing.T) {
-	rules := artifactScopeRules()
+	rules := routeauth.ArtifactScopeRules()
 	assertRuleScopes(t, rules, http.MethodPost, "/v1/artifact-uploads", []string{"worker"})
 	assertRuleScopes(t, rules, http.MethodPut, "/v1/artifact-uploads/{upload_id}/content", []string{"worker"})
 	assertRuleScopes(t, rules, http.MethodPost, "/v1/artifact-uploads/{upload_id}/complete", []string{"worker"})

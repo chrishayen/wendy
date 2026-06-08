@@ -81,6 +81,40 @@ func TestRunPrimaryStackProtectsCoreComponentsWithToken(t *testing.T) {
 	}
 }
 
+func TestRunPrimaryStackRouteAwareComponentAuth(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ready := make(chan primaryEndpoints, 1)
+	errCh := make(chan error, 1)
+	cfg := ephemeralPrimaryConfig(t)
+	cfg.ComponentToken = "component-token"
+	cfg.RouteAwareAuth = true
+	cfg.PolicySeedPath = writePrimaryPolicySeed(t)
+	cfg.ready = ready
+	go func() {
+		errCh <- runPrimaryStack(ctx, cfg)
+	}()
+
+	endpoints := waitForPrimaryReady(t, ready)
+	client := &http.Client{Timeout: time.Second}
+	unauthorized := assertStatus(t, client, endpoints.CatalogURL+"/v1/catalog/capabilities", "", http.StatusUnauthorized)
+	_ = unauthorized.Body.Close()
+	forbidden := assertStatus(t, client, endpoints.CatalogURL+"/v1/catalog/capabilities", "Bearer worker-token", http.StatusForbidden)
+	_ = forbidden.Body.Close()
+	authorized := assertStatus(t, client, endpoints.CatalogURL+"/v1/catalog/capabilities", "Bearer component-token", http.StatusOK)
+	_ = authorized.Body.Close()
+
+	cancel()
+	select {
+	case err := <-errCh:
+		if err != nil {
+			t.Fatalf("run primary: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("primary stack did not stop after context cancellation")
+	}
+}
+
 func TestParseNodeURLMap(t *testing.T) {
 	parsed, err := parseNodeURLMap("node_linux=http://linux:18087, node_mac=http://mac:18087/")
 	if err != nil {
@@ -154,6 +188,21 @@ func TestLoadPrimaryInputsFromRenderedBundle(t *testing.T) {
 	if !verification.Valid || verification.SubjectID == nil || *verification.SubjectID != "sub_agent" {
 		t.Fatalf("verification = %#v", verification)
 	}
+}
+
+func writePrimaryPolicySeed(t *testing.T) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "policy-seed.json")
+	raw := []byte(`{
+  "api_keys": [
+    {"subject_id": "sub_component", "scopes": ["component"], "token": "component-token"},
+    {"subject_id": "sub_worker", "scopes": ["worker"], "token": "worker-token"}
+  ]
+}`)
+	if err := os.WriteFile(path, raw, 0o600); err != nil {
+		t.Fatalf("write policy seed: %v", err)
+	}
+	return path
 }
 
 func ephemeralPrimaryConfig(t *testing.T) primaryConfig {

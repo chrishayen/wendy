@@ -10,12 +10,13 @@ import (
 
 	"pacp/internal/components/jobs"
 	"pacp/internal/contracts"
+	"pacp/internal/routeauth"
 	"pacp/internal/testkit"
 	"pacp/internal/transportauth"
 )
 
 func TestJobScopeRulesSeparateComponentAndWorkerRoutes(t *testing.T) {
-	rules := jobScopeRules()
+	rules := routeauth.JobScopeRules()
 	assertRuleScopes(t, rules, http.MethodPost, "/v1/jobs", []string{"component"})
 	assertRuleScopes(t, rules, http.MethodPost, "/v1/jobs/{job_id}/heartbeat", []string{"worker"})
 	assertRuleScopes(t, rules, http.MethodPost, "/v1/jobs/{job_id}/cancel", []string{"component"})
@@ -63,7 +64,7 @@ func TestJobsHandlerReplaysS003EdgeAuthFixtures(t *testing.T) {
 
 	handler := transportauth.RequireVerifiedScopes(jobs.NewHandler(jobs.NewStore()), transportauth.ScopeConfig{
 		PolicyURL: "http://policy.test",
-		Rules:     jobScopeRules(),
+		Rules:     routeauth.JobScopeRules(),
 		Client:    &http.Client{Transport: jobsPolicyTransport{t: t}},
 	})
 	for _, fixtureID := range []string{

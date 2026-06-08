@@ -164,6 +164,12 @@ one process while preserving HTTP component boundaries:
 go run ./cmd/pacp-primary -manifest /tmp/pacp-bundle/catalog -resources /tmp/pacp-bundle/leases/resources.json -policy-seed /tmp/pacp-bundle/policy/policy-seed.json -runner-credential token_runner -runner-actor-subject-id sub_runner_local -state-dir /tmp/pacp-primary-state -artifact-root /tmp/pacp-primary-artifacts -node-urls node_linux_gpu=http://linux-box:18087
 ```
 
+Add `-route-aware-component-auth` to `pacp-primary` when the embedded catalog,
+jobs, leases, and artifact services should enforce the same C08-backed route
+auth as their standalone binaries. In that mode `-component-token` still
+protects the embedded policy service and is used by co-hosted components when
+calling C08 `/v1/auth/verify`.
+
 Node resource declarations can be converted into lease resource seed files:
 
 ```sh
@@ -227,6 +233,8 @@ credentials can register resources and inspect resource or lease state.
 
 `pacp-catalog` supports C08-backed route-aware auth for component credentials
 that register manifests, list catalog records, and read provider routes.
+`pacp-dev` uses these route-aware component boundaries by default with its
+seeded local component and worker credentials.
 
 Command provider bridge route files map each capability id to a command array.
 The command receives `ProviderInvokeRequest` JSON on stdin and must write

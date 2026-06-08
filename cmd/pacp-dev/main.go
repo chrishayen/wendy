@@ -27,7 +27,9 @@ import (
 	"pacp/internal/contracts"
 	"pacp/internal/observability"
 	"pacp/internal/provider"
+	"pacp/internal/routeauth"
 	"pacp/internal/runner"
+	"pacp/internal/transportauth"
 )
 
 type devConfig struct {
@@ -116,16 +118,17 @@ func runDevStack(ctx context.Context, cfg devConfig) error {
 	}
 
 	servers := []*http.Server{}
+	handlers := devComponentHandlers(stores, policyURL)
 	for _, svc := range []struct {
 		name    string
 		addr    string
 		handler http.Handler
 	}{
-		{name: "catalog", addr: cfg.CatalogAddr, handler: catalog.NewHandler(stores.catalogStore)},
-		{name: "jobs", addr: cfg.JobsAddr, handler: jobs.NewHandler(stores.jobStore)},
-		{name: "leases", addr: cfg.LeasesAddr, handler: leases.NewHandler(stores.leaseStore)},
-		{name: "artifacts", addr: cfg.ArtifactsAddr, handler: artifacts.NewHandler(stores.artifactStore)},
-		{name: "policy", addr: cfg.PolicyAddr, handler: policy.NewHandler(stores.policyStore)},
+		{name: "catalog", addr: cfg.CatalogAddr, handler: handlers["catalog"]},
+		{name: "jobs", addr: cfg.JobsAddr, handler: handlers["jobs"]},
+		{name: "leases", addr: cfg.LeasesAddr, handler: handlers["leases"]},
+		{name: "artifacts", addr: cfg.ArtifactsAddr, handler: handlers["artifacts"]},
+		{name: "policy", addr: cfg.PolicyAddr, handler: handlers["policy"]},
 		{name: "provider", addr: cfg.ProviderAddr, handler: providerServer},
 		{name: "gateway", addr: cfg.GatewayAddr, handler: gatewayHandler},
 	} {
@@ -143,7 +146,9 @@ func runDevStack(ctx context.Context, cfg devConfig) error {
 			JobsURL:             jobsURL,
 			LeasesURL:           leasesURL,
 			ArtifactsURL:        artifactsURL,
+			PolicyURL:           policyURL,
 			ComponentCredential: authorizationHeader(cfg.WorkerToken),
+			WorkerSubjectID:     "sub_runner_local",
 			ActorSubjectID:      "sub_runner_local",
 		})
 		go runnerLoop(ctx, r, cfg.PollInterval, cfg.WorkerToken)
@@ -155,6 +160,28 @@ func runDevStack(ctx context.Context, cfg devConfig) error {
 	defer cancel()
 	shutdownServers(shutdownCtx, servers)
 	return nil
+}
+
+func devComponentHandlers(stores devStores, policyURL string) map[string]http.Handler {
+	return map[string]http.Handler{
+		"catalog": transportauth.RequireVerifiedScopes(catalog.NewHandler(stores.catalogStore), transportauth.ScopeConfig{
+			PolicyURL: policyURL,
+			Rules:     routeauth.CatalogScopeRules(),
+		}),
+		"jobs": transportauth.RequireVerifiedScopes(jobs.NewHandler(stores.jobStore), transportauth.ScopeConfig{
+			PolicyURL: policyURL,
+			Rules:     routeauth.JobScopeRules(),
+		}),
+		"leases": transportauth.RequireVerifiedScopes(leases.NewHandler(stores.leaseStore), transportauth.ScopeConfig{
+			PolicyURL: policyURL,
+			Rules:     routeauth.LeaseScopeRules(),
+		}),
+		"artifacts": transportauth.RequireVerifiedScopes(artifacts.NewHandler(stores.artifactStore), transportauth.ScopeConfig{
+			PolicyURL: policyURL,
+			Rules:     routeauth.ArtifactScopeRules(),
+		}),
+		"policy": policy.NewHandler(stores.policyStore),
+	}
 }
 
 func newDevStores(cfg devConfig, manifest contracts.ProviderManifest) (devStores, error) {

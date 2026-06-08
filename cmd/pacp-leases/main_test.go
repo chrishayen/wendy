@@ -4,11 +4,12 @@ import (
 	"net/http"
 	"testing"
 
+	"pacp/internal/routeauth"
 	"pacp/internal/transportauth"
 )
 
 func TestLeaseScopeRulesSeparateComponentAndWorkerRoutes(t *testing.T) {
-	rules := leaseScopeRules()
+	rules := routeauth.LeaseScopeRules()
 	assertRuleScopes(t, rules, http.MethodGet, "/v1/resources", []string{"component", "worker"})
 	assertRuleScopes(t, rules, http.MethodPost, "/v1/resources", []string{"component"})
 	assertRuleScopes(t, rules, http.MethodPost, "/v1/lease-requests", []string{"worker"})

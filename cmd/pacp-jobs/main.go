@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"pacp/internal/components/jobs"
+	"pacp/internal/routeauth"
 	"pacp/internal/transportauth"
 )
 
@@ -33,7 +34,7 @@ func main() {
 		handler = transportauth.RequireVerifiedScopes(handler, transportauth.ScopeConfig{
 			PolicyURL:        *policyURL,
 			PolicyCredential: authorizationHeader(*policyCredential),
-			Rules:            jobScopeRules(),
+			Rules:            routeauth.JobScopeRules(),
 		})
 		authMode = "policy"
 	} else if *componentToken != "" {
@@ -42,26 +43,6 @@ func main() {
 	}
 	log.Printf("serving jobs addr=%s state_file=%s auth_mode=%s", *addr, *stateFile, authMode)
 	log.Fatal(http.ListenAndServe(*addr, handler))
-}
-
-func jobScopeRules() []transportauth.ScopeRule {
-	componentMessage := "job component operation requires a valid component credential"
-	workerMessage := "job worker operation requires a valid runner credential"
-	forbiddenMessage := "caller is not authorized for this job operation"
-	return []transportauth.ScopeRule{
-		{Method: http.MethodGet, Path: "/v1/jobs", Scopes: []string{"component", "worker"}, UnauthorizedMessage: componentMessage, ForbiddenMessage: forbiddenMessage},
-		{Method: http.MethodPost, Path: "/v1/jobs", Scopes: []string{"component"}, UnauthorizedMessage: componentMessage, ForbiddenMessage: forbiddenMessage},
-		{Method: http.MethodGet, Path: "/v1/jobs/{job_id}", Scopes: []string{"component", "worker"}, UnauthorizedMessage: componentMessage, ForbiddenMessage: forbiddenMessage},
-		{Method: http.MethodGet, Path: "/v1/jobs/{job_id}/policy-context", Scopes: []string{"component"}, UnauthorizedMessage: componentMessage, ForbiddenMessage: forbiddenMessage},
-		{Method: http.MethodGet, Path: "/v1/jobs/{job_id}/agent-projection", Scopes: []string{"component"}, UnauthorizedMessage: componentMessage, ForbiddenMessage: forbiddenMessage},
-		{Method: http.MethodPost, Path: "/v1/jobs/{job_id}/claim", Scopes: []string{"worker"}, UnauthorizedMessage: workerMessage, ForbiddenMessage: forbiddenMessage},
-		{Method: http.MethodPost, Path: "/v1/jobs/{job_id}/heartbeat", Scopes: []string{"worker"}, UnauthorizedMessage: workerMessage, ForbiddenMessage: forbiddenMessage},
-		{Method: http.MethodPost, Path: "/v1/jobs/{job_id}/complete", Scopes: []string{"worker"}, UnauthorizedMessage: workerMessage, ForbiddenMessage: forbiddenMessage},
-		{Method: http.MethodPost, Path: "/v1/jobs/{job_id}/fail", Scopes: []string{"worker"}, UnauthorizedMessage: workerMessage, ForbiddenMessage: forbiddenMessage},
-		{Method: http.MethodPost, Path: "/v1/jobs/{job_id}/cancel", Scopes: []string{"component"}, UnauthorizedMessage: componentMessage, ForbiddenMessage: forbiddenMessage},
-		{Method: http.MethodGet, Path: "/v1/jobs/{job_id}/logs", Scopes: []string{"component", "worker"}, UnauthorizedMessage: componentMessage, ForbiddenMessage: forbiddenMessage},
-		{Method: http.MethodPost, Path: "/v1/jobs/{job_id}/logs", Scopes: []string{"worker"}, UnauthorizedMessage: workerMessage, ForbiddenMessage: forbiddenMessage},
-	}
 }
 
 func componentCredentialDefault(primaryEnv string) string {

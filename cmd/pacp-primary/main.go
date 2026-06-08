@@ -22,6 +22,7 @@ import (
 	"pacp/internal/components/leases"
 	"pacp/internal/components/policy"
 	"pacp/internal/observability"
+	"pacp/internal/routeauth"
 	"pacp/internal/runner"
 	"pacp/internal/transportauth"
 )
@@ -50,6 +51,7 @@ type primaryConfig struct {
 	NodeStartPoll     time.Duration
 	PollInterval      time.Duration
 	DisableRunner     bool
+	RouteAwareAuth    bool
 	ready             chan primaryEndpoints
 }
 
@@ -101,6 +103,7 @@ func main() {
 	flag.DurationVar(&cfg.NodeStartPoll, "node-start-poll", 500*time.Millisecond, "poll interval while waiting for node-managed service startup")
 	flag.DurationVar(&cfg.PollInterval, "poll", time.Second, "runner poll interval")
 	flag.BoolVar(&cfg.DisableRunner, "disable-runner", false, "start primary services without the local runner")
+	flag.BoolVar(&cfg.RouteAwareAuth, "route-aware-component-auth", false, "use co-hosted policy service for route-aware component API auth")
 	flag.Parse()
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -135,16 +138,8 @@ func runPrimaryStack(ctx context.Context, cfg primaryConfig) error {
 		return err
 	}
 
-	componentToken := cfg.ComponentToken
 	servers := []*http.Server{}
-	handlers := map[string]http.Handler{
-		"catalog":   transportauth.RequireBearer(catalog.NewHandler(stores.catalogStore), componentToken),
-		"jobs":      transportauth.RequireBearer(jobs.NewHandler(stores.jobStore), componentToken),
-		"leases":    transportauth.RequireBearer(leases.NewHandler(stores.leaseStore), componentToken),
-		"artifacts": transportauth.RequireBearer(artifacts.NewHandler(stores.artifactStore), componentToken),
-		"policy":    transportauth.RequireBearer(policy.NewHandler(stores.policyStore), componentToken),
-		"gateway":   gatewayHandler,
-	}
+	handlers := primaryComponentHandlers(cfg, endpoints, stores, gatewayHandler)
 	for _, service := range bound {
 		server := serveBound(ctx, service, handlers[service.name])
 		servers = append(servers, server)
@@ -182,6 +177,33 @@ func runPrimaryStack(ctx context.Context, cfg primaryConfig) error {
 	defer cancel()
 	shutdownServers(shutdownCtx, servers)
 	return nil
+}
+
+func primaryComponentHandlers(cfg primaryConfig, endpoints primaryEndpoints, stores primaryStores, gatewayHandler http.Handler) map[string]http.Handler {
+	catalogHandler := catalog.NewHandler(stores.catalogStore)
+	jobsHandler := jobs.NewHandler(stores.jobStore)
+	leasesHandler := leases.NewHandler(stores.leaseStore)
+	artifactsHandler := artifacts.NewHandler(stores.artifactStore)
+	if cfg.RouteAwareAuth {
+		policyCredential := authorizationHeader(cfg.ComponentToken)
+		catalogHandler = transportauth.RequireVerifiedScopes(catalogHandler, transportauth.ScopeConfig{PolicyURL: endpoints.PolicyURL, PolicyCredential: policyCredential, Rules: routeauth.CatalogScopeRules()})
+		jobsHandler = transportauth.RequireVerifiedScopes(jobsHandler, transportauth.ScopeConfig{PolicyURL: endpoints.PolicyURL, PolicyCredential: policyCredential, Rules: routeauth.JobScopeRules()})
+		leasesHandler = transportauth.RequireVerifiedScopes(leasesHandler, transportauth.ScopeConfig{PolicyURL: endpoints.PolicyURL, PolicyCredential: policyCredential, Rules: routeauth.LeaseScopeRules()})
+		artifactsHandler = transportauth.RequireVerifiedScopes(artifactsHandler, transportauth.ScopeConfig{PolicyURL: endpoints.PolicyURL, PolicyCredential: policyCredential, Rules: routeauth.ArtifactScopeRules()})
+	} else {
+		catalogHandler = transportauth.RequireBearer(catalogHandler, cfg.ComponentToken)
+		jobsHandler = transportauth.RequireBearer(jobsHandler, cfg.ComponentToken)
+		leasesHandler = transportauth.RequireBearer(leasesHandler, cfg.ComponentToken)
+		artifactsHandler = transportauth.RequireBearer(artifactsHandler, cfg.ComponentToken)
+	}
+	return map[string]http.Handler{
+		"catalog":   catalogHandler,
+		"jobs":      jobsHandler,
+		"leases":    leasesHandler,
+		"artifacts": artifactsHandler,
+		"policy":    transportauth.RequireBearer(policy.NewHandler(stores.policyStore), cfg.ComponentToken),
+		"gateway":   gatewayHandler,
+	}
 }
 
 func bindPrimaryServices(cfg primaryConfig) ([]boundService, primaryEndpoints, error) {

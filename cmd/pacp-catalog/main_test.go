@@ -4,11 +4,12 @@ import (
 	"net/http"
 	"testing"
 
+	"pacp/internal/routeauth"
 	"pacp/internal/transportauth"
 )
 
 func TestCatalogScopeRulesRequireComponentRoutes(t *testing.T) {
-	rules := catalogScopeRules()
+	rules := routeauth.CatalogScopeRules()
 	assertRuleScopes(t, rules, http.MethodPost, "/v1/catalog/manifests", []string{"component"})
 	assertRuleScopes(t, rules, http.MethodGet, "/v1/catalog/capabilities", []string{"component"})
 	assertRuleScopes(t, rules, http.MethodGet, "/v1/catalog/capabilities/{capability_id}", []string{"component"})

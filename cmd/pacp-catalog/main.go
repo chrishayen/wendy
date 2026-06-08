@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"pacp/internal/components/catalog"
+	"pacp/internal/routeauth"
 	"pacp/internal/transportauth"
 )
 
@@ -53,7 +54,7 @@ func main() {
 		handler = transportauth.RequireVerifiedScopes(handler, transportauth.ScopeConfig{
 			PolicyURL:        *policyURL,
 			PolicyCredential: authorizationHeader(*policyCredential),
-			Rules:            catalogScopeRules(),
+			Rules:            routeauth.CatalogScopeRules(),
 		})
 		authMode = "policy"
 	} else if *componentToken != "" {
@@ -62,20 +63,6 @@ func main() {
 	}
 	log.Printf("serving catalog addr=%s manifests_loaded=%d state_file=%s auth_mode=%s", *addr, loaded, *stateFile, authMode)
 	log.Fatal(http.ListenAndServe(*addr, handler))
-}
-
-func catalogScopeRules() []transportauth.ScopeRule {
-	componentMessage := "catalog operation requires a valid component credential"
-	forbiddenMessage := "caller is not authorized for this catalog operation"
-	return []transportauth.ScopeRule{
-		{Method: http.MethodPost, Path: "/v1/catalog/manifests", Scopes: []string{"component"}, UnauthorizedMessage: componentMessage, ForbiddenMessage: forbiddenMessage},
-		{Method: http.MethodGet, Path: "/v1/catalog/services", Scopes: []string{"component"}, UnauthorizedMessage: componentMessage, ForbiddenMessage: forbiddenMessage},
-		{Method: http.MethodGet, Path: "/v1/catalog/services/{service_id}", Scopes: []string{"component"}, UnauthorizedMessage: componentMessage, ForbiddenMessage: forbiddenMessage},
-		{Method: http.MethodGet, Path: "/v1/catalog/capabilities", Scopes: []string{"component"}, UnauthorizedMessage: componentMessage, ForbiddenMessage: forbiddenMessage},
-		{Method: http.MethodGet, Path: "/v1/catalog/capabilities/{capability_id}", Scopes: []string{"component"}, UnauthorizedMessage: componentMessage, ForbiddenMessage: forbiddenMessage},
-		{Method: http.MethodGet, Path: "/v1/catalog/capabilities/{capability_id}/route", Scopes: []string{"component"}, UnauthorizedMessage: componentMessage, ForbiddenMessage: forbiddenMessage},
-		{Method: http.MethodGet, Path: "/v1/catalog/tags", Scopes: []string{"component"}, UnauthorizedMessage: componentMessage, ForbiddenMessage: forbiddenMessage},
-	}
 }
 
 func componentCredentialDefault(primaryEnv string) string {
