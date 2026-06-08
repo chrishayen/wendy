@@ -65,6 +65,14 @@ func TestHandlerCredentialPolicyAndSecretFlow(t *testing.T) {
 	if key["token"] != "token_agent" {
 		t.Fatalf("key = %#v", key)
 	}
+	componentKey := doJSON(t, handler, http.MethodPost, "/v1/api-keys", map[string]any{
+		"subject_id": "sub_component",
+		"scopes":     []string{"component"},
+		"token":      "token_component",
+	}, http.StatusCreated)
+	if componentKey["token"] != "token_component" {
+		t.Fatalf("component key = %#v", componentKey)
+	}
 
 	verify := doJSON(t, handler, http.MethodPost, "/v1/auth/verify", map[string]any{
 		"credential": "Bearer token_agent",
@@ -108,6 +116,20 @@ func TestHandlerCredentialPolicyAndSecretFlow(t *testing.T) {
 	if secret["secret_ref"] == "" {
 		t.Fatalf("secret = %#v", secret)
 	}
+	resolved := doJSON(t, handler, http.MethodPost, "/v1/secrets/resolve", map[string]any{
+		"secret_ref": secret["secret_ref"],
+		"subject_id": "sub_component",
+	}, http.StatusOK)
+	if resolved["value"] != "super-secret" {
+		t.Fatalf("resolved = %#v", resolved)
+	}
+	deniedSecret := doJSONEnvelope(t, handler, http.MethodPost, "/v1/secrets/resolve", map[string]any{
+		"secret_ref": secret["secret_ref"],
+		"subject_id": "sub_agent",
+	}, http.StatusForbidden)
+	if deniedSecret["error"].(map[string]any)["code"] != "forbidden" {
+		t.Fatalf("denied secret = %#v", deniedSecret)
+	}
 
 	redacted := doJSON(t, handler, http.MethodPost, "/v1/redact", map[string]any{
 		"text": "token is super-secret",
@@ -119,7 +141,7 @@ func TestHandlerCredentialPolicyAndSecretFlow(t *testing.T) {
 	if metrics["component"] != "policy" {
 		t.Fatalf("metrics = %#v", metrics)
 	}
-	assertMetric(t, metrics, "policy_api_keys_total", nil, 1)
+	assertMetric(t, metrics, "policy_api_keys_total", nil, 2)
 	assertMetric(t, metrics, "policy_decisions_total", map[string]string{"action": "tool.invoke", "decision": "allow"}, 1)
 	assertMetric(t, metrics, "http_requests_total", map[string]string{"method": "POST", "route_group": "/v1/policy/check", "status_class": "2xx"}, 1)
 }

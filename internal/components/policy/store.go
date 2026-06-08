@@ -403,11 +403,14 @@ func (s *Store) ResolveSecret(req contracts.ResolveSecretRequest) (contracts.Res
 	scopes := s.scopesForSubjectLocked(req.SubjectID)
 	s.mu.RUnlock()
 	if !ok {
+		s.recordSecretAccess(req, false, "not_found")
 		return contracts.ResolvedSecret{}, ErrNotFound
 	}
 	if !hasAnyScope(scopes, "admin", "component") {
+		s.recordSecretAccess(req, false, "forbidden")
 		return contracts.ResolvedSecret{}, ErrForbidden
 	}
+	s.recordSecretAccess(req, true, "allowed_by_scope")
 	return contracts.ResolvedSecret{SecretRef: req.SecretRef, Value: secret.value}, nil
 }
 
@@ -461,6 +464,21 @@ func (s *Store) recordDecision(req contracts.PolicyCheckRequest, decision contra
 		Resource:   req.Resource,
 		Allowed:    decision.Allowed,
 		Reason:     decision.Reason,
+		OccurredAt: s.formatNow(),
+	})
+	_ = s.saveLocked()
+}
+
+func (s *Store) recordSecretAccess(req contracts.ResolveSecretRequest, allowed bool, reason string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.audit = append(s.audit, contracts.PolicyAuditEvent{
+		EventType:  "secret.resolve",
+		SubjectID:  req.SubjectID,
+		Action:     "secret.resolve",
+		Resource:   req.SecretRef,
+		Allowed:    allowed,
+		Reason:     reason,
 		OccurredAt: s.formatNow(),
 	})
 	_ = s.saveLocked()

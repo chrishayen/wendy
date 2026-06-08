@@ -283,6 +283,28 @@ func TestStoreSecretsAndRedaction(t *testing.T) {
 	if !errors.Is(err, ErrForbidden) {
 		t.Fatalf("expected forbidden secret resolution, got %v", err)
 	}
+	events := store.AuditEvents()
+	if len(events) != 2 {
+		t.Fatalf("secret audit events = %#v", events)
+	}
+	if events[0].EventType != "secret.resolve" ||
+		events[0].SubjectID != "sub_component" ||
+		events[0].Action != "secret.resolve" ||
+		events[0].Resource != secret.SecretRef ||
+		!events[0].Allowed ||
+		events[0].Reason != "allowed_by_scope" {
+		t.Fatalf("allowed secret audit = %#v", events[0])
+	}
+	if events[1].EventType != "secret.resolve" ||
+		events[1].SubjectID != "sub_agent" ||
+		events[1].Resource != secret.SecretRef ||
+		events[1].Allowed ||
+		events[1].Reason != "forbidden" {
+		t.Fatalf("denied secret audit = %#v", events[1])
+	}
+	if events[0].Resource == "super-secret" || events[1].Resource == "super-secret" {
+		t.Fatalf("secret value leaked into audit events = %#v", events)
+	}
 	redacted := store.Redact(contracts.RedactRequest{Text: "token is super-secret"})
 	if redacted.Text != "token is [REDACTED]" {
 		t.Fatalf("redacted = %#v", redacted)
@@ -360,7 +382,7 @@ func TestPersistentStoreReloadsKeysRulesSecretsAndAudit(t *testing.T) {
 	if redacted.Text != "token is [REDACTED]" {
 		t.Fatalf("redacted = %#v", redacted)
 	}
-	if events := reloaded.AuditEvents(); len(events) != 2 {
+	if events := reloaded.AuditEvents(); len(events) != 3 || events[2].EventType != "secret.resolve" {
 		t.Fatalf("audit events = %#v", events)
 	}
 }
