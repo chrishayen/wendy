@@ -8,7 +8,7 @@ import (
 )
 
 // AsyncCapabilityHandler adapts provider-local async acceptance into ordinary
-// C01 provider output. It does not create PACP jobs or expose provider-run APIs.
+// provider output. It does not create PACP jobs or expose provider-run APIs.
 type AsyncCapabilityHandler func(context.Context, contracts.ProviderInvokeRequest) (AcceptedHandle, error)
 
 type AcceptedHandle struct {

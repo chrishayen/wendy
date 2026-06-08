@@ -78,7 +78,7 @@ Contract simulation data is kept as test input, not as product behavior.
   update, validated Z-Image-Turbo LoRA training, and LoRA output index provider
   with a provider-owned workspace and dry-run mode.
 - `cmd/pacp-catalog`: runnable catalog server that loads provider manifests.
-- `cmd/pacp-gateway`: runnable agent tool gateway backed by either C03 catalog
+- `cmd/pacp-gateway`: runnable agent tool gateway backed by either the catalog
   or static provider manifests.
 - `cmd/pacp-jobs`: runnable async job service.
 - `cmd/pacp-leases`: runnable resource lease service.
@@ -87,14 +87,14 @@ Contract simulation data is kept as test input, not as product behavior.
 - `cmd/pacp-node`: runnable runtime node agent for one configured service node.
 - `cmd/pacp-runner`: runnable composition runner with optional health and
   metrics monitor endpoints.
-- `cmd/pacp-primary`: primary-host process for C03, C04, C05, C06, C07, C08,
-  and an optional runner using arbitrary manifests, resources, and policy
-  seed files.
+- `cmd/pacp-primary`: primary-host process for the catalog, gateway, jobs,
+  leases, artifacts, policy, and an optional runner using arbitrary manifests,
+  resources, and policy seed files.
 - `cmd/pacp-bundle`: renders one deployment bundle into catalog manifests,
   node config, lease resource seed, and optional policy seed files.
 - `cmd/pacp-admin`: JSON-first operator CLI for component, gateway, node,
-  runner, and provider health, inspection, job cancellation through C04, and
-  node lifecycle actions.
+  runner, and provider health, inspection, job cancellation through the gateway,
+  and node lifecycle actions.
 - `cmd/pacp-control`: JSON-first CLI for gateway health and agent-facing
   gateway operations.
 - `cmd/pacp-dev`: one-command local development stack using the real service
@@ -208,10 +208,10 @@ go run ./cmd/pacp-primary -manifest /tmp/pacp-bundle/catalog -resources /tmp/pac
 ```
 
 Add `-route-aware-component-auth` to `pacp-primary` when the embedded catalog,
-jobs, leases, and artifact services should enforce the same C08-backed route
+jobs, leases, and artifact services should enforce the same policy-backed route
 auth as their standalone binaries. In that mode `-component-token` still
 protects the embedded policy service and is used by co-hosted components when
-calling C08 `/v1/auth/verify`.
+calling the policy `/v1/auth/verify` endpoint.
 
 Node resource declarations can be converted into lease resource seed files:
 
@@ -219,9 +219,9 @@ Node resource declarations can be converted into lease resource seed files:
 go run ./cmd/pacp-node -config testdata/node/linux-gpu-fake.json -export-lease-resources
 ```
 
-Direct C05 job creation/cancellation, node service start/touch/stop, and lease release
-are side-effecting operations and require an `Idempotency-Key`. C04 sets the C05
-job creation and cancellation headers for public invocations, `pacp-admin jobs
+Direct job creation/cancellation, node service start/touch/stop, and lease release
+are side-effecting operations and require an `Idempotency-Key`. The gateway sets
+the job creation and cancellation headers for public invocations, `pacp-admin jobs
 cancel`, `pacp-admin node start`, and `pacp-admin node stop` expose an
 `-idempotency-key` flag, and runner start operations set the node lifecycle
 header for you. Node service touch records active use for idle shutdown and does
@@ -235,7 +235,7 @@ on catalog, jobs, leases, artifacts, and policy services. `pacp-gateway` uses
 `PACP_RUNNER_CREDENTIAL` or `-credential` for worker routes such as job claims,
 leases, node starts, and artifact uploads. When the policy service is
 transport-protected by a component token, set `PACP_RUNNER_POLICY_CREDENTIAL`
-or `-policy-credential` so runner C08 calls use the component credential while
+or `-policy-credential` so runner policy calls use the component credential while
 worker routes still use the worker credential. In `pacp-primary`,
 `-component-token` also becomes the default embedded gateway credential,
 embedded runner credential, and embedded runner policy credential unless the
@@ -261,7 +261,7 @@ Set `-addr` to expose `/v1/runner/health` and `/v1/runner/metrics`; set
 `-monitor-token` or `PACP_RUNNER_MONITOR_TOKEN` when those endpoints should
 require a bearer token.
 Set `-catalog-url` or `PACP_CATALOG_URL` when queued jobs contain lean execution
-plans that identify the capability and input but rely on C03 for the current
+plans that identify the capability and input but rely on the catalog for the current
 provider route and resource hints. `pacp-primary` and `pacp-dev` pass their
 co-hosted catalog URL to the embedded runner automatically.
 
@@ -271,7 +271,7 @@ format is comma-separated `node_id=URL` entries, for example
 
 HTTP provider bridge route files can set literal `headers` for non-secret
 values, `headers_from_env` for node-local backend credentials, and
-`headers_from_secret` for C08 secret refs that should be resolved through the
+`headers_from_secret` for policy secret refs that should be resolved through the
 policy service at startup. Use `-policy-url`, `-policy-credential`, and
 `-secret-subject-id` when a bridge route uses secret refs. The bridge forwards
 the provider invocation request id to backend HTTP services as `X-Request-ID`
@@ -279,19 +279,19 @@ when the runner supplies one.
 
 ComfyUI image generation returns provider-local `content_refs` to the runner.
 The runner dereferences `/v1/provider/artifacts/{content_ref}/content`, verifies
-the size/checksum/digest, uploads the bytes to C07, and completes the job with
-durable C07 artifact ids. Provider-local content refs are runner-facing only and
+the size/checksum/digest, uploads the bytes to the artifact store, and completes the job with
+durable artifact ids. Provider-local content refs are runner-facing only and
 must not be returned to agents.
 
-`pacp-jobs` can use C08-backed route-aware auth instead of the coarse component
+`pacp-jobs` can use policy-backed route-aware auth instead of the coarse component
 transport token by setting `-policy-url`. In that mode callers present their
-own policy bearer credentials to C05, and the jobs process verifies them through
-C08 `/v1/auth/verify`: gateway/component credentials can create, cancel, and
+own policy bearer credentials to the jobs service, and the jobs process verifies them through
+the policy `/v1/auth/verify` endpoint: gateway/component credentials can create, cancel, and
 read component projections; worker credentials can claim, heartbeat, log,
 complete, fail, and read worker job state. Use `-policy-credential` when the
 policy service itself is protected by a component transport token.
 
-`pacp-artifacts` supports the same C08-backed route-aware auth mode. Worker
+`pacp-artifacts` supports the same policy-backed route-aware auth mode. Worker
 credentials can create upload sessions, upload content, complete uploads, and
 register local artifacts; gateway/component credentials can list, read metadata,
 read policy context, and retrieve artifact content. Use
@@ -302,11 +302,11 @@ expire by retention policy. Expired artifacts return `artifact_expired` for
 metadata and content reads, are omitted from artifact lists, and report
 `policy_state: expired` from the policy-context endpoint.
 
-`pacp-leases` also supports C08-backed route-aware auth. Worker credentials can
+`pacp-leases` also supports policy-backed route-aware auth. Worker credentials can
 request leases, heartbeat active leases, and release leases; component
 credentials can register resources and inspect resource or lease state.
 
-`pacp-catalog` supports C08-backed route-aware auth for component credentials
+`pacp-catalog` supports policy-backed route-aware auth for component credentials
 that register manifests, list catalog records, and read provider routes.
 `pacp-dev` uses these route-aware component boundaries by default with its
 seeded local component and worker credentials.
@@ -315,7 +315,7 @@ Command provider bridge route files map each capability id to a command array.
 The command receives `ProviderInvokeRequest` JSON on stdin and must write
 `ProviderInvokeResponse` JSON on stdout. Route files can set literal
 `environment` values, `environment_from_env` for node-local secrets, and
-`environment_from_secret` for C08 secret refs resolved through the policy
+`environment_from_secret` for policy secret refs resolved through the policy
 service at startup. Use `-policy-url`, `-policy-credential`, and
 `-secret-subject-id` when a bridge route uses secret refs. The bridge also adds
 non-empty invocation context values as `PACP_REQUEST_ID`,
@@ -333,13 +333,13 @@ routes.
 Provider authors can use `provider.NewManifestBuilder` to declare a service,
 provider endpoint, capabilities, and handlers together. The builder defaults
 the provider health path to `/v1/provider/health`, validates the manifest with
-C01 rules, verifies that every capability has a handler, and can return either
+provider-contract rules, verifies that every capability has a handler, and can return either
 the manifest plus handler map or a ready `provider.Server`.
 
 Use `provider.ArtifactHandler` when a capability returns ordinary output plus
-provider-local artifacts or content refs. The handler still emits a normal C01
-provider response; durable artifact upload remains the runner and C07 artifact
-store responsibility.
+provider-local artifacts or content refs. The handler still emits a normal
+provider response; durable artifact upload remains the runner and artifact store
+responsibility.
 
 The fixture server can also serve individual contract-simulation fixture
 owners when a test needs a fixed fake dependency. It matches method, path,

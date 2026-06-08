@@ -38,7 +38,7 @@ func run(args []string, stdout, stderr io.Writer, httpClient *http.Client) int {
 	inputRaw := flags.String("input", "{}", "JSON object input for provider invocation")
 	openAPIPaths := flags.String("openapi", "", "optional comma-separated OpenAPI files to validate")
 	distributed := flags.Bool("distributed", false, "run the primary-plus-node distributed smoke suite")
-	fakePublicAPIs := flags.Bool("fake-public-apis", false, "run contract checks against reusable C15 fake public APIs")
+	fakePublicAPIs := flags.Bool("fake-public-apis", false, "run contract checks against reusable fake public APIs")
 	timeout := flags.Duration("timeout", 5*time.Second, "smoke check timeout")
 	if err := flags.Parse(args); err != nil {
 		return 2
