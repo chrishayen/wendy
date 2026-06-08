@@ -97,8 +97,8 @@ func TestStorePolicyOwnerContextAndJobState(t *testing.T) {
 	if err != nil {
 		t.Fatalf("check claimed cancel: %v", err)
 	}
-	if !claimed.Allowed {
-		t.Fatalf("claimed cancel denied: %#v", claimed)
+	if claimed.Allowed || claimed.Reason != "policy_denied" {
+		t.Fatalf("claimed cancel decision = %#v", claimed)
 	}
 
 	running, err := store.CheckPolicy(contracts.PolicyCheckRequest{
@@ -114,7 +114,7 @@ func TestStorePolicyOwnerContextAndJobState(t *testing.T) {
 	if err != nil {
 		t.Fatalf("check running cancel: %v", err)
 	}
-	if !running.Allowed {
+	if running.Allowed || running.Reason != "policy_denied" {
 		t.Fatalf("running cancel decision = %#v", running)
 	}
 

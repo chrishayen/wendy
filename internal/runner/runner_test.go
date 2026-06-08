@@ -295,7 +295,7 @@ func TestRunnerFailsJobWhenProviderInvokePolicyDenied(t *testing.T) {
 	}
 }
 
-func TestRunnerDoesNotCompleteOrUploadArtifactsAfterRunningCancel(t *testing.T) {
+func TestRunnerDoesNotCompleteOrUploadArtifactsAfterJobBecomesTerminal(t *testing.T) {
 	jobStore := jobs.NewStore()
 	jobsServer := httptest.NewServer(jobs.NewHandler(jobStore))
 	defer jobsServer.Close()
@@ -334,8 +334,15 @@ func TestRunnerDoesNotCompleteOrUploadArtifactsAfterRunningCancel(t *testing.T) 
 		}},
 	}, map[string]provider.CapabilityHandler{
 		"cap_cancel_image": func(ctx context.Context, req contracts.ProviderInvokeRequest) (contracts.ProviderInvokeResponse, error) {
-			if _, err := jobStore.Cancel(created.JobID, contracts.CancelRequest{Reason: "canceled while running"}, "runner-test-cancel-running"); err != nil {
-				t.Fatalf("cancel running job: %v", err)
+			if _, err := jobStore.Fail(created.JobID, contracts.JobFailRequest{
+				WorkerID: "runner_test",
+				Error: contracts.ErrorObject{
+					Code:      "external_terminal",
+					Message:   "job became terminal",
+					Retryable: false,
+				},
+			}); err != nil {
+				t.Fatalf("fail running job: %v", err)
 			}
 			body := []byte("late artifact bytes")
 			sum := sha256.Sum256(body)
@@ -393,12 +400,12 @@ func TestRunnerDoesNotCompleteOrUploadArtifactsAfterRunningCancel(t *testing.T) 
 	if !ok || jobID != created.JobID {
 		t.Fatalf("run result jobID=%q ok=%v", jobID, ok)
 	}
-	canceled, err := jobStore.Get(created.JobID)
+	terminal, err := jobStore.Get(created.JobID)
 	if err != nil {
-		t.Fatalf("get canceled job: %v", err)
+		t.Fatalf("get terminal job: %v", err)
 	}
-	if canceled.State != contracts.JobCanceled || canceled.StatusMessage != "canceled while running" || len(canceled.ArtifactRefs) != 0 {
-		t.Fatalf("canceled job = %#v", canceled)
+	if terminal.State != contracts.JobFailed || terminal.TerminalError == nil || terminal.TerminalError.Code != "external_terminal" || len(terminal.ArtifactRefs) != 0 {
+		t.Fatalf("terminal job = %#v", terminal)
 	}
 	if artifacts := artifactStore.ListArtifacts(artifacts.ListFilter{ProducerRef: created.JobID}); len(artifacts) != 0 {
 		t.Fatalf("late artifacts were uploaded: %#v", artifacts)

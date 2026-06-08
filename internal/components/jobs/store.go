@@ -22,6 +22,7 @@ var (
 	ErrClaimConflict       = errors.New("job is claimed by another worker")
 	ErrClaimExpired        = errors.New("job claim expired")
 	ErrInvalidTransition   = errors.New("invalid job state transition")
+	ErrCancellationClosed  = errors.New("running cancellation is not defined for S003")
 	ErrTerminalState       = errors.New("job is terminal")
 	ErrInvalidCursor       = errors.New("invalid cursor")
 )
@@ -487,6 +488,9 @@ func (s *Store) Cancel(jobID string, req contracts.CancelRequest, idempotencyKey
 			return contracts.Job{}, err
 		}
 		return cloneJob(rec.job), nil
+	}
+	if rec.job.State != contracts.JobQueued {
+		return contracts.Job{}, ErrCancellationClosed
 	}
 	rec.job.State = contracts.JobCanceled
 	rec.job.UpdatedAt = s.formatNow()

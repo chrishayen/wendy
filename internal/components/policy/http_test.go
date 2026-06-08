@@ -5,8 +5,54 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"testing"
+
+	"pacp/internal/contracts"
+	"pacp/internal/testkit"
 )
+
+func TestHandlerReplaysS003AuthAndPolicyFixtures(t *testing.T) {
+	scenario, err := testkit.LoadScenario(filepath.Join("..", "..", "..", "testdata", "contract-sim"), filepath.Join("fixtures", "S003", "manifest.json"))
+	if err != nil {
+		t.Fatalf("load scenario: %v", err)
+	}
+	pkg, ok := testkit.FindPackage(scenario, "c08-access-policy-and-secrets")
+	if !ok {
+		t.Fatalf("c08 fixture package not found")
+	}
+	handler := NewHandler(s003PolicyFixtureStore(t))
+
+	for _, fixtureID := range []string{
+		"auth_agent_valid",
+		"auth_gateway_valid",
+		"auth_runner_valid",
+		"auth_malformed_credential",
+		"policy_job_cancel_running_deny",
+		"policy_job_cancel_missing_state_deny",
+		"policy_denied",
+	} {
+		if _, err := testkit.ReplayHTTPFixture(handler, pkg, fixtureID); err != nil {
+			t.Fatalf("replay %s: %v", fixtureID, err)
+		}
+	}
+}
+
+func s003PolicyFixtureStore(t *testing.T) *Store {
+	t.Helper()
+	store := NewStore()
+	for _, req := range []contracts.CreateAPIKeyRequest{
+		{SubjectID: "sub_agent_s003", Scopes: []string{"agent"}, Token: "token_s003_agent"},
+		{SubjectID: "sub_gateway_s003", Scopes: []string{"component"}, Token: "token_s003_gateway"},
+		{SubjectID: "sub_runner_s003", Scopes: []string{"worker"}, Token: "token_s003_runner"},
+		{SubjectID: "sub_other_s003", Scopes: []string{"agent"}, Token: "token_s003_other"},
+	} {
+		if _, err := store.CreateAPIKey(req); err != nil {
+			t.Fatalf("create fixture key %s: %v", req.SubjectID, err)
+		}
+	}
+	return store
+}
 
 func TestHandlerCredentialPolicyAndSecretFlow(t *testing.T) {
 	handler := NewHandler(NewStore())

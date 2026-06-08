@@ -516,7 +516,7 @@ func builtinDecision(req contracts.PolicyCheckRequest, scopes []string) contract
 			return deny("missing_context")
 		}
 		state, _ := contextString(req.Context, "job_state")
-		if state != "queued" && state != "claimed" && state != "running" {
+		if state != "queued" {
 			return deny("policy_denied")
 		}
 		return ownerScoped(req.SubjectID, req.Context, false)

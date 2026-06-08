@@ -758,7 +758,7 @@ func agentJobLinks(jobID string, state contracts.JobState) map[string]any {
 }
 
 func isCancelableJobState(state contracts.JobState) bool {
-	return state == contracts.JobQueued || state == contracts.JobClaimed || state == contracts.JobRunning
+	return state == contracts.JobQueued
 }
 
 func jobContextMap(context contracts.JobPolicyContext) map[string]any {

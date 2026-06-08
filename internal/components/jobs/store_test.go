@@ -103,7 +103,43 @@ func TestClaimConflictAndExpiry(t *testing.T) {
 	}
 }
 
-func TestCancelRunningJobMakesItTerminal(t *testing.T) {
+func TestCancelQueuedJobIsIdempotent(t *testing.T) {
+	store := NewStore()
+	job, _, err := store.Create(createRequest(), "idem_cancel_queued")
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	cancelReq := contracts.CancelRequest{Reason: "stop requested"}
+	if _, err := store.Cancel(job.JobID, cancelReq, ""); !errors.Is(err, ErrMissingIdempotency) {
+		t.Fatalf("expected missing idempotency, got %v", err)
+	}
+	canceled, err := store.Cancel(job.JobID, cancelReq, "idem_cancel_queued_1")
+	if err != nil {
+		t.Fatalf("cancel queued: %v", err)
+	}
+	if canceled.State != contracts.JobCanceled || canceled.StatusMessage != "stop requested" || canceled.Claim != nil {
+		t.Fatalf("canceled = %#v", canceled)
+	}
+	replay, err := store.Cancel(job.JobID, cancelReq, "idem_cancel_queued_1")
+	if err != nil {
+		t.Fatalf("replay cancel: %v", err)
+	}
+	if replay.StatusMessage != "stop requested" {
+		t.Fatalf("replay changed terminal message: %#v", replay)
+	}
+	if _, err := store.Cancel(job.JobID, contracts.CancelRequest{Reason: "different reason"}, "idem_cancel_queued_1"); !errors.Is(err, ErrIdempotencyConflict) {
+		t.Fatalf("expected cancel idempotency conflict, got %v", err)
+	}
+	terminalReplay, err := store.Cancel(job.JobID, contracts.CancelRequest{Reason: "new terminal key"}, "idem_cancel_queued_2")
+	if err != nil {
+		t.Fatalf("terminal cancel replay: %v", err)
+	}
+	if terminalReplay.StatusMessage != "stop requested" {
+		t.Fatalf("terminal replay changed message: %#v", terminalReplay)
+	}
+}
+
+func TestCancelRunningJobIsRejected(t *testing.T) {
 	store := NewStore()
 	job, _, err := store.Create(createRequest(), "idem_cancel_running")
 	if err != nil {
@@ -115,36 +151,15 @@ func TestCancelRunningJobMakesItTerminal(t *testing.T) {
 	if _, err := store.Heartbeat(job.JobID, contracts.JobHeartbeatRequest{WorkerID: "runner_1", TransitionTo: "running"}); err != nil {
 		t.Fatalf("running heartbeat: %v", err)
 	}
-	cancelReq := contracts.CancelRequest{Reason: "stop requested"}
-	if _, err := store.Cancel(job.JobID, cancelReq, ""); !errors.Is(err, ErrMissingIdempotency) {
-		t.Fatalf("expected missing idempotency, got %v", err)
+	if _, err := store.Cancel(job.JobID, contracts.CancelRequest{Reason: "stop requested"}, "idem_cancel_running_1"); !errors.Is(err, ErrCancellationClosed) {
+		t.Fatalf("expected cancellation closed, got %v", err)
 	}
-	canceled, err := store.Cancel(job.JobID, cancelReq, "idem_cancel_running_1")
+	got, err := store.Get(job.JobID)
 	if err != nil {
-		t.Fatalf("cancel running: %v", err)
+		t.Fatalf("get job: %v", err)
 	}
-	if canceled.State != contracts.JobCanceled || canceled.StatusMessage != "stop requested" || canceled.Claim != nil {
-		t.Fatalf("canceled = %#v", canceled)
-	}
-	if _, err := store.Complete(job.JobID, contracts.JobCompleteRequest{WorkerID: "runner_1"}); !errors.Is(err, ErrTerminalState) {
-		t.Fatalf("complete after cancel err=%v", err)
-	}
-	replay, err := store.Cancel(job.JobID, cancelReq, "idem_cancel_running_1")
-	if err != nil {
-		t.Fatalf("replay cancel: %v", err)
-	}
-	if replay.StatusMessage != "stop requested" {
-		t.Fatalf("replay changed terminal message: %#v", replay)
-	}
-	if _, err := store.Cancel(job.JobID, contracts.CancelRequest{Reason: "different reason"}, "idem_cancel_running_1"); !errors.Is(err, ErrIdempotencyConflict) {
-		t.Fatalf("expected cancel idempotency conflict, got %v", err)
-	}
-	terminalReplay, err := store.Cancel(job.JobID, contracts.CancelRequest{Reason: "new terminal key"}, "idem_cancel_running_2")
-	if err != nil {
-		t.Fatalf("terminal cancel replay: %v", err)
-	}
-	if terminalReplay.StatusMessage != "stop requested" {
-		t.Fatalf("terminal replay changed message: %#v", terminalReplay)
+	if got.State != contracts.JobRunning {
+		t.Fatalf("state after rejected cancel = %s", got.State)
 	}
 }
 

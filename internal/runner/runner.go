@@ -149,9 +149,9 @@ func (r *Runner) runJob(ctx context.Context, job contracts.Job) error {
 	if err := r.appendLog(ctx, job.JobID, "info", "running provider invocation"); err != nil {
 		return err
 	}
-	if canceled, err := r.jobCanceled(ctx, job.JobID); err != nil {
+	if terminal, err := r.jobTerminal(ctx, job.JobID); err != nil {
 		return err
-	} else if canceled {
+	} else if terminal {
 		return nil
 	}
 	response, err := r.invokeProvider(ctx, job.JobID, plan, lease)
@@ -159,9 +159,9 @@ func (r *Runner) runJob(ctx context.Context, job contracts.Job) error {
 		_ = r.failJob(ctx, job.JobID, "provider_unavailable", err.Error())
 		return err
 	}
-	if canceled, err := r.jobCanceled(ctx, job.JobID); err != nil {
+	if terminal, err := r.jobTerminal(ctx, job.JobID); err != nil {
 		return err
-	} else if canceled {
+	} else if terminal {
 		return nil
 	}
 	artifactIDs, err := r.uploadArtifacts(ctx, job.JobID, plan.SubjectID, response.Artifacts)
@@ -226,12 +226,16 @@ func (r *Runner) appendLog(ctx context.Context, jobID, level, message string) er
 	}, "", &data)
 }
 
-func (r *Runner) jobCanceled(ctx context.Context, jobID string) (bool, error) {
+func (r *Runner) jobTerminal(ctx context.Context, jobID string) (bool, error) {
 	var job contracts.Job
 	if err := r.getJSON(ctx, r.cfg.JobsURL+"/v1/jobs/"+url.PathEscape(jobID), &job); err != nil {
 		return false, err
 	}
-	return job.State == contracts.JobCanceled, nil
+	return isTerminalJobState(job.State), nil
+}
+
+func isTerminalJobState(state contracts.JobState) bool {
+	return state == contracts.JobSucceeded || state == contracts.JobFailed || state == contracts.JobCanceled || state == contracts.JobExpired
 }
 
 func (r *Runner) acquireLease(ctx context.Context, jobID, selector string) (*contracts.Lease, error) {

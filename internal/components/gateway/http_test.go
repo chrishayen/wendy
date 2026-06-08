@@ -251,7 +251,7 @@ func TestGatewayCancelArtifactsAndContent(t *testing.T) {
 	}
 }
 
-func TestGatewayCancelsRunningJob(t *testing.T) {
+func TestGatewayRejectsRunningJobCancellation(t *testing.T) {
 	env := newGatewayTestEnv(t)
 	invoke := env.doJSON(http.MethodPost, "/v1/tools/cap_image_generate_gpu/invoke", map[string]any{
 		"input": map[string]any{"prompt": "red mug"},
@@ -266,15 +266,16 @@ func TestGatewayCancelsRunningJob(t *testing.T) {
 
 	status := env.doJSON(http.MethodGet, "/v1/agent/jobs/"+jobID, nil, map[string]string{"Authorization": "Bearer token_agent"}, http.StatusOK)
 	links := status["links"].(map[string]any)
-	if _, ok := links["cancel"]; !ok {
-		t.Fatalf("running job did not advertise cancel link: %#v", links)
+	if _, ok := links["cancel"]; ok {
+		t.Fatalf("running job advertised cancel link: %#v", links)
 	}
-	canceled := env.doJSON(http.MethodPost, "/v1/agent/jobs/"+jobID+"/cancel", map[string]any{"reason": "stop running"}, map[string]string{
+	envelope := env.doJSONEnvelope(http.MethodPost, "/v1/agent/jobs/"+jobID+"/cancel", map[string]any{"reason": "stop running"}, map[string]string{
 		"Authorization":   "Bearer token_agent",
 		"Idempotency-Key": "cancel-running-1",
-	}, http.StatusOK)
-	if canceled["state"] != "canceled" || canceled["status_message"] != "stop running" {
-		t.Fatalf("running cancel = %#v", canceled)
+	}, http.StatusForbidden)
+	errObj := envelope["error"].(map[string]any)
+	if errObj["code"] != "forbidden" {
+		t.Fatalf("running cancel error = %#v", errObj)
 	}
 }
 

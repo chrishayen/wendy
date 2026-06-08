@@ -276,6 +276,8 @@ func writeStoreError(w http.ResponseWriter, r *http.Request, err error) {
 		writeError(w, r, http.StatusConflict, "claim_expired", "job claim expired", true)
 	case errors.Is(err, ErrInvalidTransition):
 		writeError(w, r, http.StatusBadRequest, "invalid_transition", "job cannot transition from its current state", false)
+	case errors.Is(err, ErrCancellationClosed):
+		writeError(w, r, http.StatusBadRequest, "validation_failed", ErrCancellationClosed.Error(), false)
 	case errors.Is(err, ErrTerminalState):
 		writeError(w, r, http.StatusConflict, "terminal_state", "job is already terminal", false)
 	case errors.Is(err, ErrInvalidCursor):
