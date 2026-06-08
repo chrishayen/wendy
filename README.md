@@ -36,6 +36,8 @@ Contract simulation data is kept as test input, not as product behavior.
 - `cmd/pacp-contract-smoke`: CLI smoke check for a contract simulation package.
 - `cmd/pacp-fixture-server`: serves one fixture owner as an HTTP fake.
 - `cmd/pacp-fake-provider`: runnable sample provider using the provider SDK.
+- `cmd/pacp-http-provider`: generic provider bridge for HTTP backends that
+  accept the PACP provider invocation shape.
 - `cmd/pacp-catalog`: runnable catalog server that loads provider manifests.
 - `cmd/pacp-gateway`: runnable agent tool gateway.
 - `cmd/pacp-jobs`: runnable async job service.
@@ -59,6 +61,7 @@ go test ./...
 go run ./cmd/pacp-contract-smoke
 go run ./cmd/pacp-dev
 go run ./cmd/pacp-dev -state-dir /tmp/pacp-dev-state
+go run ./cmd/pacp-http-provider -addr localhost:18088 -manifest testdata/http-provider/echo-manifest.json -routes testdata/http-provider/echo-routes.json -endpoint http://localhost:18088
 go run ./cmd/pacp-control -gateway-url http://localhost:18086 -token token_agent tools
 go run ./cmd/pacp-control -gateway-url http://localhost:18086 -token token_agent invoke cap_dev_echo -idempotency-key echo-1 -input '{"message":"hello"}'
 go run ./cmd/pacp-control -gateway-url http://localhost:18086 -token token_agent invoke cap_dev_artifact -idempotency-key artifact-1 -input '{"prompt":"red mug"}'
@@ -99,5 +102,6 @@ go run ./cmd/pacp-control -gateway-url http://localhost:18086 -token token_agent
 
 This is not the full production control plane yet. It is a usable service stack
 with public HTTP boundaries, file-backed local durability, a provider SDK, a
-composition runner, runtime node adapters, and a gateway control CLI. Production
-databases, provider-specific wrappers, and hardening remain.
+generic HTTP provider bridge, a composition runner, runtime node adapters, and a
+gateway control CLI. Production databases, richer provider-specific wrappers,
+and hardening remain.

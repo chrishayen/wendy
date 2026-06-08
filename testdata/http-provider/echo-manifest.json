@@ -1,0 +1,43 @@
+{
+  "schema_version": "v1",
+  "service": {
+    "id": "svc_http_echo",
+    "name": "HTTP Echo",
+    "description": "Example HTTP-backed provider bridge.",
+    "version": "0.1.0",
+    "provider_kind": "http_bridge",
+    "tags": ["example", "http"]
+  },
+  "provider": {
+    "endpoint": "http://localhost:18088",
+    "health_path": "/v1/provider/health"
+  },
+  "capabilities": [
+    {
+      "id": "cap_http_echo",
+      "name": "HTTP echo",
+      "description": "Forward a standard provider invocation to an HTTP backend.",
+      "tags": ["example", "sync"],
+      "execution_mode": "sync",
+      "input_schema": {
+        "type": "object",
+        "required": ["message"],
+        "properties": {
+          "message": {"type": "string"}
+        }
+      },
+      "output_schema": {
+        "type": "object",
+        "required": ["message"],
+        "properties": {
+          "message": {"type": "string"}
+        }
+      },
+      "examples": [{"message": "hello"}],
+      "side_effects": "none",
+      "resource_hints": [],
+      "artifact_hints": [],
+      "timeout_hint": "30s"
+    }
+  ]
+}

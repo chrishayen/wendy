@@ -1,0 +1,9 @@
+{
+  "routes": {
+    "cap_http_echo": {
+      "url": "http://localhost:19090/invoke",
+      "method": "POST",
+      "timeout_seconds": 30
+    }
+  }
+}

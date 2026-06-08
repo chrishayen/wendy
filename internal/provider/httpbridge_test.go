@@ -1,0 +1,164 @@
+package provider
+
+import (
+	"bytes"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"testing"
+
+	"pacp/internal/contracts"
+)
+
+func TestHTTPBridgeForwardsProviderInvokeRequest(t *testing.T) {
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/invoke" {
+			t.Fatalf("backend request = %s %s", r.Method, r.URL.Path)
+		}
+		if r.Header.Get("X-Backend-Token") != "secret" {
+			t.Fatalf("missing backend header: %#v", r.Header)
+		}
+		var req contracts.ProviderInvokeRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Fatalf("decode backend request: %v", err)
+		}
+		if req.Input["message"] != "hello" || req.Context.SubjectID != "sub_agent" {
+			t.Fatalf("backend request body = %#v", req)
+		}
+		writeSuccess(w, r, http.StatusOK, contracts.ProviderInvokeResponse{
+			Output: map[string]any{"message": req.Input["message"]},
+		})
+	}))
+	defer backend.Close()
+
+	server, err := NewHTTPBridgeServer(bridgeManifest(), HTTPBridgeConfig{
+		Routes: map[string]HTTPBridgeRoute{
+			"cap_bridge_echo": {
+				URL:     backend.URL + "/invoke",
+				Headers: map[string]string{"X-Backend-Token": "secret"},
+			},
+		},
+		Client: backend.Client(),
+	})
+	if err != nil {
+		t.Fatalf("new bridge: %v", err)
+	}
+
+	reqBody := contracts.ProviderInvokeRequest{
+		Input:   map[string]any{"message": "hello"},
+		Context: contracts.ProviderInvokeContext{SubjectID: "sub_agent"},
+	}
+	rec := invokeBridge(t, server, reqBody)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var envelope contracts.SuccessEnvelope
+	if err := json.NewDecoder(rec.Body).Decode(&envelope); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	data := envelope.Data.(map[string]any)
+	output := data["output"].(map[string]any)
+	if output["message"] != "hello" {
+		t.Fatalf("output = %#v", output)
+	}
+}
+
+func TestHTTPBridgeDecodesDirectProviderResponse(t *testing.T) {
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(contracts.ProviderInvokeResponse{
+			Output: map[string]any{"message": "direct"},
+		})
+	}))
+	defer backend.Close()
+
+	server, err := NewHTTPBridgeServer(bridgeManifest(), HTTPBridgeConfig{
+		Routes: map[string]HTTPBridgeRoute{
+			"cap_bridge_echo": {URL: backend.URL},
+		},
+		Client: backend.Client(),
+	})
+	if err != nil {
+		t.Fatalf("new bridge: %v", err)
+	}
+
+	rec := invokeBridge(t, server, contracts.ProviderInvokeRequest{Input: map[string]any{"message": "hello"}})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestHTTPBridgeRequiresRouteForEachCapability(t *testing.T) {
+	_, err := NewHTTPBridgeServer(bridgeManifest(), HTTPBridgeConfig{Routes: map[string]HTTPBridgeRoute{}})
+	if err == nil {
+		t.Fatal("expected missing route error")
+	}
+}
+
+func TestHTTPBridgeRejectsUnsupportedRouteMethod(t *testing.T) {
+	_, err := NewHTTPBridgeServer(bridgeManifest(), HTTPBridgeConfig{
+		Routes: map[string]HTTPBridgeRoute{
+			"cap_bridge_echo": {URL: "http://backend.invalid/invoke", Method: http.MethodGet},
+		},
+	})
+	if err == nil {
+		t.Fatal("expected unsupported method error")
+	}
+}
+
+func invokeBridge(t *testing.T, server http.Handler, body contracts.ProviderInvokeRequest) *httptest.ResponseRecorder {
+	t.Helper()
+	raw, err := json.Marshal(body)
+	if err != nil {
+		t.Fatalf("marshal invoke request: %v", err)
+	}
+	req := httptest.NewRequest(http.MethodPost, "/v1/provider/capabilities/cap_bridge_echo/invoke", bytesReader(raw))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	server.ServeHTTP(rec, req)
+	return rec
+}
+
+func bytesReader(raw []byte) *bytes.Reader {
+	return bytes.NewReader(raw)
+}
+
+func bridgeManifest() contracts.ProviderManifest {
+	return contracts.ProviderManifest{
+		SchemaVersion: "v1",
+		Service: contracts.Service{
+			ID:           "svc_bridge",
+			Name:         "Bridge",
+			Description:  "HTTP bridge test provider",
+			Version:      "0.1.0",
+			ProviderKind: "http_bridge",
+			Tags:         []string{"bridge"},
+		},
+		Provider: contracts.Provider{Endpoint: "http://provider.invalid", HealthPath: "/v1/provider/health"},
+		Capabilities: []contracts.Capability{{
+			ID:            "cap_bridge_echo",
+			Name:          "Bridge echo",
+			Description:   "Bridge echo test capability.",
+			Tags:          []string{"bridge"},
+			ExecutionMode: "sync",
+			InputSchema: map[string]any{
+				"type":     "object",
+				"required": []any{"message"},
+				"properties": map[string]any{
+					"message": map[string]any{"type": "string"},
+				},
+			},
+			OutputSchema: map[string]any{
+				"type":     "object",
+				"required": []any{"message"},
+				"properties": map[string]any{
+					"message": map[string]any{"type": "string"},
+				},
+			},
+			Examples:      []map[string]any{{"message": "hello"}},
+			SideEffects:   "none",
+			ResourceHints: []contracts.ResourceHint{},
+			ArtifactHints: []contracts.ArtifactHint{},
+			TimeoutHint:   "30s",
+		}},
+	}
+}
