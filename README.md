@@ -40,6 +40,9 @@ Contract simulation data is kept as test input, not as product behavior.
 - `cmd/pacp-fake-provider`: runnable sample provider using the provider SDK.
 - `cmd/pacp-http-provider`: generic provider bridge for HTTP backends that
   accept the PACP provider invocation shape.
+- `cmd/pacp-command-provider`: generic provider bridge for local commands that
+  read a provider invocation JSON object on stdin and write a provider response
+  JSON object on stdout.
 - `cmd/pacp-catalog`: runnable catalog server that loads provider manifests.
 - `cmd/pacp-gateway`: runnable agent tool gateway.
 - `cmd/pacp-jobs`: runnable async job service.
@@ -74,6 +77,7 @@ go run ./cmd/pacp-contract-smoke
 go run ./cmd/pacp-dev
 go run ./cmd/pacp-dev -state-dir /tmp/pacp-dev-state
 PACP_HTTP_ECHO_TOKEN='Bearer dev-token' go run ./cmd/pacp-http-provider -addr localhost:18088 -manifest testdata/http-provider/echo-manifest.json -routes testdata/http-provider/echo-routes.json -endpoint http://localhost:18088
+go run ./cmd/pacp-command-provider -addr localhost:18088 -manifest provider-manifest.json -routes command-routes.json -endpoint http://localhost:18088
 go run ./cmd/pacp-admin health
 go run ./cmd/pacp-admin catalog capabilities
 go run ./cmd/pacp-admin catalog import /tmp/pacp-bundle/catalog
@@ -155,6 +159,11 @@ format is comma-separated `node_id=URL` entries, for example
 HTTP provider bridge route files can set literal `headers` for non-secret
 values and `headers_from_env` for backend credentials that must not be stored in
 JSON config.
+
+Command provider bridge route files map each capability id to a command array.
+The command receives `ProviderInvokeRequest` JSON on stdin and must write
+`ProviderInvokeResponse` JSON on stdout. Route files can set literal
+`environment` values and `environment_from_env` for secrets.
 
 The fixture server can also serve individual contract-simulation fixture
 owners when a test needs a fixed fake dependency.
