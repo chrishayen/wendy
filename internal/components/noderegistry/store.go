@@ -106,6 +106,9 @@ func (s *Store) Register(req contracts.RegisterNodeRequest) (contracts.NodeRecor
 		trustState = contracts.NodeTrustUntrusted
 	}
 	status := normalizeStatus(req.Status)
+	if status == contracts.NodeStatusStale {
+		return contracts.NodeRecord{}, fmt.Errorf("%w: status must be registered, reachable, or unreachable", ErrValidation)
+	}
 	if status == "" {
 		status = contracts.NodeStatusRegistered
 	}

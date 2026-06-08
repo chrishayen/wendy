@@ -157,6 +157,16 @@ func TestProviderRoutingSchemaMatchesManifestValidation(t *testing.T) {
 	assertSchemaPropertyValue(t, componentDoc, "Provider", "health_path", "pattern", "^/[^?#]*$")
 }
 
+func TestNodeRegistryStatusSchemasSeparateInputAndDerivedStatuses(t *testing.T) {
+	componentDoc := loadOpenAPIDoc(t, filepath.Join("..", "..", "openapi", "component-services.v1.yaml"))
+
+	inputStatuses := []string{"registered", "reachable", "unreachable"}
+	recordStatuses := []string{"registered", "reachable", "unreachable", "stale"}
+	assertSchemaPropertyEnum(t, componentDoc, "RegisterNodeRequest", "status", inputStatuses)
+	assertSchemaPropertyEnum(t, componentDoc, "NodeHeartbeatRequest", "status", inputStatuses)
+	assertSchemaPropertyEnum(t, componentDoc, "NodeRecord", "status", recordStatuses)
+}
+
 func TestValidateFileDetectsDuplicateOperationID(t *testing.T) {
 	path := writeContract(t, `
 openapi: 3.1.0

@@ -1126,7 +1126,7 @@ func nodeRegistryRegisterCommand(cfg adminConfig, httpClient *http.Client, args 
 	nodeURL := flags.String("url", "", "node service base URL")
 	displayName := flags.String("display-name", "", "optional node display name")
 	trustState := flags.String("trust-state", "", "optional trust state: trusted, untrusted, or disabled")
-	status := flags.String("status", "", "optional node status: registered, reachable, unreachable, or stale")
+	status := flags.String("status", "", "optional node status: registered, reachable, or unreachable")
 	tags := flags.String("tags", "", "comma-separated node tags")
 	metadataRaw := flags.String("metadata", "", "optional JSON object metadata")
 	remaining, err := parseSubcommandFlags(flags, args)

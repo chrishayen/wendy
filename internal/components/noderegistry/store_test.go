@@ -49,6 +49,18 @@ func TestStoreDefaultsPublicRegistrationToUntrusted(t *testing.T) {
 	}
 }
 
+func TestStoreRejectsExplicitStaleRegistrationStatus(t *testing.T) {
+	store := NewStore()
+	_, err := store.Register(contracts.RegisterNodeRequest{
+		NodeID: "node_linux_gpu",
+		URL:    "http://linux-box:18087",
+		Status: contracts.NodeStatusStale,
+	})
+	if !errors.Is(err, ErrValidation) {
+		t.Fatalf("expected validation error, got %v", err)
+	}
+}
+
 func TestStoreBlocksDisabledUnreachableAndStaleNodes(t *testing.T) {
 	store := NewStore()
 	now := time.Date(2026, 6, 8, 12, 0, 0, 0, time.UTC)
