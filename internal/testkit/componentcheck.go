@@ -32,6 +32,12 @@ type componentContract struct {
 	Kind        string
 	HealthPath  string
 	MetricsPath string
+	ListChecks  []componentListCheck
+}
+
+type componentListCheck struct {
+	Name string
+	Path string
 }
 
 func (r ComponentCheckReport) Passed() bool {
@@ -55,23 +61,51 @@ func CheckComponent(ctx context.Context, httpClient *http.Client, opts Component
 	}
 	checkComponentHealth(ctx, httpClient, baseURL, opts.Credential, contract, &report)
 	checkComponentMetrics(ctx, httpClient, baseURL, opts.Credential, contract, &report)
+	for _, check := range contract.ListChecks {
+		checkComponentListEndpoint(ctx, httpClient, baseURL, opts.Credential, check, &report)
+	}
 	return report
 }
 
 func componentContractFor(kind string) (componentContract, bool) {
 	switch strings.TrimSpace(kind) {
 	case "artifacts":
-		return componentContract{Kind: "artifacts", HealthPath: "/v1/artifacts/health", MetricsPath: "/v1/artifacts/metrics"}, true
+		return componentContract{
+			Kind:        "artifacts",
+			HealthPath:  "/v1/artifacts/health",
+			MetricsPath: "/v1/artifacts/metrics",
+			ListChecks:  []componentListCheck{{Name: "component.surface.artifacts.list", Path: "/v1/artifacts"}},
+		}, true
 	case "catalog":
-		return componentContract{Kind: "catalog", HealthPath: "/v1/catalog/health", MetricsPath: "/v1/catalog/metrics"}, true
+		return componentContract{
+			Kind:        "catalog",
+			HealthPath:  "/v1/catalog/health",
+			MetricsPath: "/v1/catalog/metrics",
+			ListChecks:  []componentListCheck{{Name: "component.surface.catalog.capabilities", Path: "/v1/catalog/capabilities?limit=1"}},
+		}, true
 	case "gateway":
 		return componentContract{Kind: "gateway", HealthPath: "/v1/gateway/health", MetricsPath: "/v1/gateway/metrics"}, true
 	case "jobs":
-		return componentContract{Kind: "jobs", HealthPath: "/v1/jobs/health", MetricsPath: "/v1/jobs/metrics"}, true
+		return componentContract{
+			Kind:        "jobs",
+			HealthPath:  "/v1/jobs/health",
+			MetricsPath: "/v1/jobs/metrics",
+			ListChecks:  []componentListCheck{{Name: "component.surface.jobs.list", Path: "/v1/jobs"}},
+		}, true
 	case "leases":
-		return componentContract{Kind: "leases", HealthPath: "/v1/leases/health", MetricsPath: "/v1/leases/metrics"}, true
+		return componentContract{
+			Kind:        "leases",
+			HealthPath:  "/v1/leases/health",
+			MetricsPath: "/v1/leases/metrics",
+			ListChecks:  []componentListCheck{{Name: "component.surface.leases.resources", Path: "/v1/resources"}},
+		}, true
 	case "node":
-		return componentContract{Kind: "node", HealthPath: "/v1/node/health", MetricsPath: "/v1/node/metrics"}, true
+		return componentContract{
+			Kind:        "node",
+			HealthPath:  "/v1/node/health",
+			MetricsPath: "/v1/node/metrics",
+			ListChecks:  []componentListCheck{{Name: "component.surface.node.resources", Path: "/v1/node/resources"}},
+		}, true
 	case "policy":
 		return componentContract{Kind: "policy", HealthPath: "/v1/policy/health", MetricsPath: "/v1/policy/metrics"}, true
 	case "runner":
@@ -172,6 +206,64 @@ func checkComponentMetrics(ctx context.Context, httpClient *http.Client, baseURL
 	}
 	if metrics.Samples == nil {
 		result.Error = "metrics samples must be an array"
+		report.add(result)
+		return
+	}
+	result.OK = true
+	report.add(result)
+}
+
+func checkComponentListEndpoint(ctx context.Context, httpClient *http.Client, baseURL, credential string, check componentListCheck, report *ComponentCheckReport) {
+	var envelope rawSuccessEnvelope
+	status, err := getEnvelopeWithCredential(ctx, httpClient, joinURLPath(baseURL, check.Path), credential, &envelope)
+	result := ComponentCheckResult{Name: check.Name, HTTPStatus: status}
+	if err != nil {
+		result.Error = err.Error()
+		report.add(result)
+		return
+	}
+	if status < 200 || status >= 300 {
+		result.Error = fmt.Sprintf("HTTP %d", status)
+		report.add(result)
+		return
+	}
+	if !envelope.OK {
+		result.Error = "list response was not ok"
+		report.add(result)
+		return
+	}
+	var payload map[string]json.RawMessage
+	if err := json.Unmarshal(envelope.Data, &payload); err != nil {
+		result.Error = "decode list payload: " + err.Error()
+		report.add(result)
+		return
+	}
+	itemsRaw, ok := payload["items"]
+	if !ok {
+		result.Error = "list payload is missing items"
+		report.add(result)
+		return
+	}
+	var items []json.RawMessage
+	if err := json.Unmarshal(itemsRaw, &items); err != nil {
+		result.Error = "list items must be an array: " + err.Error()
+		report.add(result)
+		return
+	}
+	if items == nil {
+		result.Error = "list items must be an array"
+		report.add(result)
+		return
+	}
+	cursorRaw, ok := payload["next_cursor"]
+	if !ok {
+		result.Error = "list payload is missing next_cursor"
+		report.add(result)
+		return
+	}
+	var cursor *string
+	if err := json.Unmarshal(cursorRaw, &cursor); err != nil {
+		result.Error = "next_cursor must be null or string: " + err.Error()
 		report.add(result)
 		return
 	}

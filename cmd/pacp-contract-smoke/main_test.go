@@ -101,6 +101,8 @@ func TestRunComponentSmokeChecksLiveComponent(t *testing.T) {
 			writeSmokeEnvelope(t, w, http.StatusOK, contracts.NewComponentHealth("jobs", nil))
 		case "/v1/jobs/metrics":
 			writeSmokeEnvelope(t, w, http.StatusOK, contracts.NewComponentMetrics("jobs", []contracts.MetricSample{}))
+		case "/v1/jobs":
+			writeSmokeEnvelope(t, w, http.StatusOK, map[string]any{"items": []any{}, "next_cursor": nil})
 		default:
 			t.Fatalf("unexpected request = %s %s", r.Method, r.URL.Path)
 		}
@@ -117,9 +119,10 @@ func TestRunComponentSmokeChecksLiveComponent(t *testing.T) {
 		t.Fatalf("code=%d stderr=%s stdout=%s", code, stderr.String(), stdout.String())
 	}
 	for _, expected := range []string{
-		"component=" + server.URL + " kind=jobs checks=2",
+		"component=" + server.URL + " kind=jobs checks=3",
 		"check=component.health status=pass",
 		"check=component.metrics status=pass",
+		"check=component.surface.jobs.list status=pass",
 		"contract-smoke=pass",
 	} {
 		if !strings.Contains(stdout.String(), expected) {
