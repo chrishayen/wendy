@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -31,6 +33,7 @@ type Store struct {
 	rules        map[string]contracts.PolicyRule
 	secrets      map[string]*secretRecord
 	audit        []contracts.PolicyAuditEvent
+	snapshotPath string
 }
 
 type apiKeyRecord struct {
@@ -42,6 +45,40 @@ type apiKeyRecord struct {
 type secretRecord struct {
 	record contracts.SecretRecord
 	value  string
+}
+
+type snapshotFile struct {
+	Version      int                             `json:"version"`
+	NextKeyID    int                             `json:"next_key_id"`
+	NextRuleID   int                             `json:"next_rule_id"`
+	NextSecretID int                             `json:"next_secret_id"`
+	APIKeys      map[string]apiKeySnapshot       `json:"api_keys"`
+	Rules        map[string]contracts.PolicyRule `json:"rules"`
+	Secrets      map[string]secretSnapshot       `json:"secrets"`
+	Audit        []contracts.PolicyAuditEvent    `json:"audit,omitempty"`
+}
+
+type apiKeySnapshot struct {
+	Record  contracts.APIKeyRecord `json:"record"`
+	Token   string                 `json:"token"`
+	Revoked bool                   `json:"revoked"`
+}
+
+type secretSnapshot struct {
+	Record contracts.SecretRecord `json:"record"`
+	Value  string                 `json:"value"`
+}
+
+func NewPersistentStore(path string) (*Store, error) {
+	store := NewStore()
+	store.snapshotPath = path
+	if path == "" {
+		return store, nil
+	}
+	if err := store.loadSnapshot(path); err != nil {
+		return nil, err
+	}
+	return store, nil
 }
 
 func NewStore() *Store {
@@ -95,6 +132,9 @@ func (s *Store) CreateAPIKey(req contracts.CreateAPIKeyRequest) (contracts.APIKe
 	stored := &apiKeyRecord{record: record, token: token}
 	s.keysByID[keyID] = stored
 	s.keysByToken[token] = stored
+	if err := s.saveLocked(); err != nil {
+		return contracts.APIKeyRecord{}, err
+	}
 	return cloneAPIKey(record), nil
 }
 
@@ -132,6 +172,9 @@ func (s *Store) RevokeAPIKey(keyID string) (contracts.APIKeyRecord, error) {
 	}
 	record.revoked = true
 	record.record.RevokedAt = s.formatNow()
+	if err := s.saveLocked(); err != nil {
+		return contracts.APIKeyRecord{}, err
+	}
 	out := cloneAPIKey(record.record)
 	out.Token = ""
 	return out, nil
@@ -170,6 +213,9 @@ func (s *Store) CreateRule(req contracts.CreatePolicyRuleRequest) (contracts.Pol
 		CreatedAt: s.formatNow(),
 	}
 	s.rules[ruleID] = rule
+	if err := s.saveLocked(); err != nil {
+		return contracts.PolicyRule{}, err
+	}
 	return cloneRule(rule), nil
 }
 
@@ -226,6 +272,9 @@ func (s *Store) CreateSecret(req contracts.CreateSecretRequest) (contracts.Secre
 		CreatedAt: s.formatNow(),
 	}
 	s.secrets[secretRef] = &secretRecord{record: record, value: req.Value}
+	if err := s.saveLocked(); err != nil {
+		return contracts.SecretRecord{}, err
+	}
 	return record, nil
 }
 
@@ -298,6 +347,7 @@ func (s *Store) recordDecision(req contracts.PolicyCheckRequest, decision contra
 		Reason:     decision.Reason,
 		OccurredAt: s.formatNow(),
 	})
+	_ = s.saveLocked()
 }
 
 func (s *Store) formatNow() string {
@@ -477,4 +527,100 @@ func cloneRule(rule contracts.PolicyRule) contracts.PolicyRule {
 	var cloned contracts.PolicyRule
 	_ = json.Unmarshal(raw, &cloned)
 	return cloned
+}
+
+func (s *Store) loadSnapshot(path string) error {
+	raw, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	var snapshot snapshotFile
+	if err := json.Unmarshal(raw, &snapshot); err != nil {
+		return fmt.Errorf("%w: invalid policy snapshot: %v", ErrValidation, err)
+	}
+	s.nextKeyID = positiveOrDefault(snapshot.NextKeyID, 1)
+	s.nextRuleID = positiveOrDefault(snapshot.NextRuleID, 1)
+	s.nextSecretID = positiveOrDefault(snapshot.NextSecretID, 1)
+	s.keysByID = map[string]*apiKeyRecord{}
+	s.keysByToken = map[string]*apiKeyRecord{}
+	for keyID, rec := range snapshot.APIKeys {
+		record := cloneAPIKey(rec.Record)
+		if record.KeyID == "" {
+			record.KeyID = keyID
+		}
+		token := rec.Token
+		if token == "" {
+			token = record.Token
+		}
+		stored := &apiKeyRecord{record: record, token: token, revoked: rec.Revoked}
+		s.keysByID[record.KeyID] = stored
+		if token != "" {
+			s.keysByToken[token] = stored
+		}
+	}
+	s.rules = map[string]contracts.PolicyRule{}
+	for ruleID, rule := range snapshot.Rules {
+		cloned := cloneRule(rule)
+		if cloned.RuleID == "" {
+			cloned.RuleID = ruleID
+		}
+		s.rules[cloned.RuleID] = cloned
+	}
+	s.secrets = map[string]*secretRecord{}
+	for secretRef, rec := range snapshot.Secrets {
+		record := rec.Record
+		if record.SecretRef == "" {
+			record.SecretRef = secretRef
+		}
+		s.secrets[record.SecretRef] = &secretRecord{record: record, value: rec.Value}
+	}
+	s.audit = append([]contracts.PolicyAuditEvent(nil), snapshot.Audit...)
+	return nil
+}
+
+func (s *Store) saveLocked() error {
+	if s.snapshotPath == "" {
+		return nil
+	}
+	snapshot := snapshotFile{
+		Version:      1,
+		NextKeyID:    s.nextKeyID,
+		NextRuleID:   s.nextRuleID,
+		NextSecretID: s.nextSecretID,
+		APIKeys:      map[string]apiKeySnapshot{},
+		Rules:        map[string]contracts.PolicyRule{},
+		Secrets:      map[string]secretSnapshot{},
+		Audit:        append([]contracts.PolicyAuditEvent(nil), s.audit...),
+	}
+	for keyID, rec := range s.keysByID {
+		snapshot.APIKeys[keyID] = apiKeySnapshot{Record: cloneAPIKey(rec.record), Token: rec.token, Revoked: rec.revoked}
+	}
+	for ruleID, rule := range s.rules {
+		snapshot.Rules[ruleID] = cloneRule(rule)
+	}
+	for secretRef, rec := range s.secrets {
+		snapshot.Secrets[secretRef] = secretSnapshot{Record: rec.record, Value: rec.value}
+	}
+	raw, err := json.MarshalIndent(snapshot, "", "  ")
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(s.snapshotPath), 0o755); err != nil {
+		return err
+	}
+	tmpPath := s.snapshotPath + ".tmp"
+	if err := os.WriteFile(tmpPath, raw, 0o600); err != nil {
+		return err
+	}
+	return os.Rename(tmpPath, s.snapshotPath)
+}
+
+func positiveOrDefault(value, fallback int) int {
+	if value <= 0 {
+		return fallback
+	}
+	return value
 }

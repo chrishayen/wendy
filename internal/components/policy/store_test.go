@@ -2,6 +2,7 @@ package policy
 
 import (
 	"errors"
+	"path/filepath"
 	"testing"
 
 	"pacp/internal/contracts"
@@ -184,5 +185,81 @@ func TestStoreSecretsAndRedaction(t *testing.T) {
 	redacted := store.Redact(contracts.RedactRequest{Text: "token is super-secret"})
 	if redacted.Text != "token is [REDACTED]" {
 		t.Fatalf("redacted = %#v", redacted)
+	}
+}
+
+func TestPersistentStoreReloadsKeysRulesSecretsAndAudit(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "policy.json")
+	store, err := NewPersistentStore(path)
+	if err != nil {
+		t.Fatalf("new persistent store: %v", err)
+	}
+	_, err = store.CreateAPIKey(contracts.CreateAPIKeyRequest{SubjectID: "sub_component", Scopes: []string{"component"}, Token: "token_component"})
+	if err != nil {
+		t.Fatalf("create component key: %v", err)
+	}
+	_, err = store.CreateRule(contracts.CreatePolicyRuleRequest{
+		SubjectID: "sub_component",
+		Action:    "artifact.read",
+		Resource:  "art_1",
+		Effect:    "deny",
+		Reason:    "artifact_locked",
+	})
+	if err != nil {
+		t.Fatalf("create rule: %v", err)
+	}
+	secret, err := store.CreateSecret(contracts.CreateSecretRequest{Name: "provider_token", Value: "super-secret"})
+	if err != nil {
+		t.Fatalf("create secret: %v", err)
+	}
+	decision, err := store.CheckPolicy(contracts.PolicyCheckRequest{
+		SubjectID: "sub_component",
+		Action:    "artifact.read",
+		Resource:  "art_1",
+		Context:   map[string]any{"owner_subject_id": "sub_agent"},
+	})
+	if err != nil {
+		t.Fatalf("check policy: %v", err)
+	}
+	if decision.Allowed || decision.Reason != "artifact_locked" {
+		t.Fatalf("decision = %#v", decision)
+	}
+
+	reloaded, err := NewPersistentStore(path)
+	if err != nil {
+		t.Fatalf("reload persistent store: %v", err)
+	}
+	verified, err := reloaded.VerifyCredential(contracts.VerifyCredentialRequest{Credential: "Bearer token_component"})
+	if err != nil {
+		t.Fatalf("verify after reload: %v", err)
+	}
+	if !verified.Valid || verified.SubjectID == nil || *verified.SubjectID != "sub_component" {
+		t.Fatalf("verified = %#v", verified)
+	}
+	reloadedDecision, err := reloaded.CheckPolicy(contracts.PolicyCheckRequest{
+		SubjectID: "sub_component",
+		Action:    "artifact.read",
+		Resource:  "art_1",
+		Context:   map[string]any{"owner_subject_id": "sub_agent"},
+	})
+	if err != nil {
+		t.Fatalf("check policy after reload: %v", err)
+	}
+	if reloadedDecision.Allowed || reloadedDecision.Reason != "artifact_locked" {
+		t.Fatalf("reloaded decision = %#v", reloadedDecision)
+	}
+	resolved, err := reloaded.ResolveSecret(contracts.ResolveSecretRequest{SecretRef: secret.SecretRef, SubjectID: "sub_component"})
+	if err != nil {
+		t.Fatalf("resolve after reload: %v", err)
+	}
+	if resolved.Value != "super-secret" {
+		t.Fatalf("resolved = %#v", resolved)
+	}
+	redacted := reloaded.Redact(contracts.RedactRequest{Text: "token is super-secret"})
+	if redacted.Text != "token is [REDACTED]" {
+		t.Fatalf("redacted = %#v", redacted)
+	}
+	if events := reloaded.AuditEvents(); len(events) != 2 {
+		t.Fatalf("audit events = %#v", events)
 	}
 }
