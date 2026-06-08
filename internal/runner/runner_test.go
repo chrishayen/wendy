@@ -281,6 +281,77 @@ func TestRunnerWaitsForPendingResourceLease(t *testing.T) {
 	}
 }
 
+func TestRunnerCancelsPendingLeaseRequestWhenWaitStops(t *testing.T) {
+	jobStore := jobs.NewStore()
+	jobsServer := httptest.NewServer(jobs.NewHandler(jobStore))
+	defer jobsServer.Close()
+
+	route := contracts.CapabilityRoute{
+		CapabilityID:       "cap_fake_image",
+		ServiceID:          "svc_fake_provider",
+		ProviderEndpoint:   "http://provider.invalid",
+		ProviderHealthPath: "/v1/provider/health",
+		ProviderInvokePath: "/v1/provider/capabilities/cap_fake_image/invoke",
+		ServiceStartMode:   "manual",
+		ResourceHints:      []contracts.ResourceHint{{Selector: "gpu", Required: true}},
+	}
+	created, _, err := jobStore.Create(contracts.CreateJobRequest{
+		RequesterID:  "sub_agent",
+		CapabilityID: "cap_fake_image",
+		InputSummary: map[string]any{"prompt_present": true},
+		Metadata: map[string]any{"execution_plan": map[string]any{
+			"capability_id":     "cap_fake_image",
+			"subject_id":        "sub_agent",
+			"input":             map[string]any{"prompt": "red mug"},
+			"route":             route,
+			"resource_selector": "gpu",
+			"timeout_seconds":   30,
+		}},
+	}, "create-lease-cleanup-job")
+	if err != nil {
+		t.Fatalf("create job: %v", err)
+	}
+
+	leaseStore := leases.NewStore()
+	if _, err := leaseStore.RegisterResource(contracts.RegisterResourceRequest{Selector: "gpu", Status: contracts.ResourceAvailable}); err != nil {
+		t.Fatalf("register resource: %v", err)
+	}
+	if _, err := leaseStore.CreateLeaseRequest(contracts.CreateLeaseRequest{RequesterID: "job_holder", ResourceSelector: "gpu"}); err != nil {
+		t.Fatalf("create holder lease: %v", err)
+	}
+	leasesServer := httptest.NewServer(leases.NewHandler(leaseStore))
+	defer leasesServer.Close()
+
+	runner := New(Config{
+		WorkerID:          "runner_test",
+		JobsURL:           jobsServer.URL,
+		LeasesURL:         leasesServer.URL,
+		ArtifactsURL:      "http://artifacts.invalid",
+		LeasePollInterval: 50 * time.Millisecond,
+		Client:            jobsServer.Client(),
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	defer cancel()
+	jobID, ok, err := runner.RunOnce(ctx)
+	if err == nil {
+		t.Fatal("expected lease wait timeout")
+	}
+	if !ok || jobID != created.JobID {
+		t.Fatalf("run result jobID=%q ok=%v", jobID, ok)
+	}
+
+	requests, err := leaseStore.ListLeaseRequestsByRequester(created.JobID)
+	if err != nil {
+		t.Fatalf("list lease requests: %v", err)
+	}
+	if len(requests) != 1 {
+		t.Fatalf("lease requests = %#v", requests)
+	}
+	if requests[0].State != contracts.LeaseRequestCanceled || requests[0].QueuePosition != nil {
+		t.Fatalf("lease request was not canceled after wait stop: %#v", requests[0])
+	}
+}
+
 func TestRunnerFetchesProviderContentRefsAndUploadsArtifact(t *testing.T) {
 	jobStore := jobs.NewStore()
 	jobsServer := httptest.NewServer(jobs.NewHandler(jobStore))

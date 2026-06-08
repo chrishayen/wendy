@@ -419,9 +419,19 @@ func (r *Runner) acquireLease(ctx context.Context, jobID, selector string) (*con
 }
 
 func (r *Runner) waitForLeaseGrant(ctx context.Context, jobID string, request contracts.LeaseRequest) (*contracts.Lease, error) {
+	cleanupPending := true
+	defer func() {
+		if cleanupPending && request.State == contracts.LeaseRequestPending {
+			cleanupCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			_, _ = r.cancelLeaseRequest(cleanupCtx, request.RequestID, jobID, "lease wait stopped before grant")
+		}
+	}()
+
 	for {
 		switch request.State {
 		case contracts.LeaseRequestGranted:
+			cleanupPending = false
 			if request.Lease == nil {
 				return nil, fmt.Errorf("lease request %s is granted without a lease", request.RequestID)
 			}
@@ -439,6 +449,7 @@ func (r *Runner) waitForLeaseGrant(ctx context.Context, jobID string, request co
 			}
 			request = next
 		default:
+			cleanupPending = false
 			return nil, fmt.Errorf("lease request %s is %s", request.RequestID, request.State)
 		}
 	}
@@ -470,6 +481,12 @@ func (r *Runner) releaseLease(ctx context.Context, leaseID, holderID, reason str
 	}
 	err := r.postJSONWithHeaders(ctx, r.cfg.LeasesURL+"/v1/leases/"+url.PathEscape(leaseID)+"/release", contracts.LeaseReleaseRequest{HolderID: holderID, Reason: reason}, "runner-release-"+leaseID, headers, &lease)
 	return lease, err
+}
+
+func (r *Runner) cancelLeaseRequest(ctx context.Context, requestID, requesterID, reason string) (contracts.LeaseRequest, error) {
+	var request contracts.LeaseRequest
+	err := r.postJSON(ctx, r.cfg.LeasesURL+"/v1/lease-requests/"+url.PathEscape(requestID)+"/cancel", contracts.CancelRequest{RequesterID: requesterID, Reason: reason}, "", &request)
+	return request, err
 }
 
 func (r *Runner) heartbeatLease(ctx context.Context, leaseID, holderID string) error {
