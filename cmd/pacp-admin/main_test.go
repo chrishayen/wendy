@@ -494,6 +494,72 @@ func TestAlertsReportsHealthAndMetricFindings(t *testing.T) {
 	}
 }
 
+func TestAlertsCanIncludeProviderHealthFindings(t *testing.T) {
+	providerHealthHits := 0
+	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/v1/provider/health" {
+			t.Fatalf("provider request = %s %s", r.Method, r.URL.Path)
+		}
+		providerHealthHits++
+		writeHealth(t, w, http.StatusServiceUnavailable, "unhealthy")
+	}))
+	defer provider.Close()
+
+	catalog := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/v1/catalog/capabilities":
+			if r.Header.Get("Authorization") != "Bearer component-token" {
+				t.Fatalf("catalog capabilities Authorization = %q", r.Header.Get("Authorization"))
+			}
+			writeEnvelope(t, w, http.StatusOK, map[string]any{
+				"items": []map[string]any{{
+					"route": map[string]any{
+						"capability_id":        "cap_search",
+						"service_id":           "svc_search",
+						"provider_endpoint":    provider.URL,
+						"provider_health_path": "/v1/provider/health",
+					},
+					"service": map[string]any{"id": "svc_search"},
+				}},
+			})
+		case strings.HasSuffix(r.URL.Path, "/health"):
+			writeHealth(t, w, http.StatusOK, "healthy")
+		case strings.HasSuffix(r.URL.Path, "/metrics"):
+			writeMetrics(t, w, http.StatusOK, "component", []map[string]any{})
+		default:
+			t.Fatalf("request = %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer catalog.Close()
+
+	var stdout, stderr bytes.Buffer
+	code := run(append(coreURLArgs(catalog.URL), "-component-token", "component-token", "alerts", "-providers"), &stdout, &stderr, catalog.Client())
+	if code != 1 {
+		t.Fatalf("code=%d stderr=%s stdout=%s", code, stderr.String(), stdout.String())
+	}
+	if providerHealthHits != 1 {
+		t.Fatalf("provider health hits = %d", providerHealthHits)
+	}
+	output := stdout.String()
+	for _, expected := range []string{
+		`"code": "target_unhealthy"`,
+		`"name": "provider:svc_search"`,
+		`"kind": "provider"`,
+		`"service_id": "svc_search"`,
+	} {
+		if !strings.Contains(output, expected) {
+			t.Fatalf("stdout missing %q:\n%s", expected, output)
+		}
+	}
+	var report alertsReport
+	if err := json.Unmarshal(stdout.Bytes(), &report); err != nil {
+		t.Fatalf("decode alerts: %v\n%s", err, output)
+	}
+	if report.OK || report.Data.Summary.Errors == 0 {
+		t.Fatalf("report = %#v", report)
+	}
+}
+
 func TestAlertsReportsStaleRunnerHeartbeat(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasSuffix(r.URL.Path, "/health") {

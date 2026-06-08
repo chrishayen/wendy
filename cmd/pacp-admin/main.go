@@ -275,12 +275,13 @@ func alertsCommand(cfg adminConfig, httpClient *http.Client, args []string, stdo
 	flags.SetOutput(stderr)
 	queueDepthThreshold := flags.Int("queue-depth-threshold", 0, "lease queue depth above this value produces a warning")
 	runnerHeartbeatStaleAfter := flags.Duration("runner-heartbeat-stale-after", 0, "active runner heartbeat age above this duration produces a warning")
+	providers := flags.Bool("providers", false, "check registered provider health through catalog routes")
 	remaining, err := parseSubcommandFlags(flags, args)
 	if err != nil {
 		return 2
 	}
 	if len(remaining) != 0 {
-		return usage(stderr, "usage: pacp-admin [flags] alerts [-queue-depth-threshold n] [-runner-heartbeat-stale-after duration]")
+		return usage(stderr, "usage: pacp-admin [flags] alerts [-providers] [-queue-depth-threshold n] [-runner-heartbeat-stale-after duration]")
 	}
 	if *queueDepthThreshold < 0 {
 		return usage(stderr, "queue-depth-threshold must be zero or greater")
@@ -288,7 +289,7 @@ func alertsCommand(cfg adminConfig, httpClient *http.Client, args []string, stdo
 	if *runnerHeartbeatStaleAfter < 0 {
 		return usage(stderr, "runner-heartbeat-stale-after must be zero or greater")
 	}
-	health := checkHealth(cfg, httpClient, healthOptions{})
+	health := checkHealth(cfg, httpClient, healthOptions{Providers: *providers})
 	metrics := collectMetrics(cfg, httpClient)
 	report := buildAlertsReport(health, metrics, alertOptions{
 		QueueDepthThreshold:       *queueDepthThreshold,
