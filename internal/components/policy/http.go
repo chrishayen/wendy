@@ -20,6 +20,8 @@ func NewHandler(store *Store) http.Handler {
 func (h Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	path := strings.TrimSuffix(r.URL.Path, "/")
 	switch {
+	case path == "/v1/policy/health" && r.Method == http.MethodGet:
+		writeSuccess(w, r, http.StatusOK, contracts.NewComponentHealth("policy", nil))
 	case path == "/v1/api-keys" && r.Method == http.MethodPost:
 		h.createAPIKey(w, r)
 	case strings.HasPrefix(path, "/v1/api-keys/"):

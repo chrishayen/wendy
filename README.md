@@ -15,19 +15,19 @@ Contract simulation data is kept as test input, not as product behavior.
   invokes providers, uploads artifacts, and completes or fails jobs through
   public APIs.
 - `internal/components/catalog`: service catalog with in-memory or file-backed
-  provider registration storage and HTTP handlers.
+  provider registration storage, health, and HTTP handlers.
 - `internal/components/gateway`: agent-facing tool discovery, invocation, job,
   log, artifact, and content gateway that composes public component APIs.
 - `internal/components/jobs`: async job lifecycle service with in-memory or
-  file-backed durable storage and HTTP handlers.
+  file-backed durable storage, health, and HTTP handlers.
 - `internal/components/leases`: resource registry, FIFO lease queue, heartbeat,
   release, expiration, and inspection service with in-memory or file-backed
-  durable storage and HTTP handlers.
+  durable storage, health, and HTTP handlers.
 - `internal/components/artifacts`: upload-session, blob storage, durable
   metadata snapshots, policy context, guarded local registration, and retrieval
-  service with a local filesystem root.
+  service with health and a local filesystem root.
 - `internal/components/policy`: API key verification, policy decision, secret
-  reference, redaction, and durable sensitive state snapshots.
+  reference, redaction, health, and durable sensitive state snapshots.
 - `internal/components/node`: runtime node agent with local auth, resource
   advertisement, fake, process, and Docker service lifecycle adapters, health,
   and service status APIs.
@@ -106,6 +106,11 @@ The catalog and gateway can then be queried:
 ```sh
 curl http://localhost:18081/v1/catalog/capabilities
 curl http://localhost:18081/v1/catalog/capabilities/cap_image_generate_gpu/route
+curl http://localhost:18081/v1/catalog/health
+curl http://localhost:18082/v1/jobs/health
+curl http://localhost:18083/v1/leases/health
+curl http://localhost:18084/v1/artifacts/health
+curl http://localhost:18085/v1/policy/health
 curl -X POST http://localhost:18085/v1/auth/api-keys -H 'Content-Type: application/json' -d '{"subject_id":"sub_agent_local","scopes":["agent"],"token":"token_agent"}'
 go run ./cmd/pacp-control -gateway-url http://localhost:18086 -token token_agent tools
 ```

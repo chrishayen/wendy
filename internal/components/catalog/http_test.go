@@ -65,6 +65,21 @@ func TestRegisterManifestHTTP(t *testing.T) {
 	}
 }
 
+func TestHealthHTTP(t *testing.T) {
+	handler := NewHandler(NewStore())
+	req := httptest.NewRequest(http.MethodGet, "/v1/catalog/health", nil)
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+	data := decodeData(t, rec.Body)
+	if data["status"] != "healthy" || data["details"].(map[string]any)["component"] != "catalog" {
+		t.Fatalf("health = %#v", data)
+	}
+}
+
 func TestLoadManifestsFromDirectory(t *testing.T) {
 	manifests, err := LoadManifests(filepath.Join("..", "..", "..", "testdata", "manifests"))
 	if err != nil {
@@ -76,6 +91,19 @@ func TestLoadManifestsFromDirectory(t *testing.T) {
 	if manifests[0].Service.ID != "svc_comfyui_gpu" {
 		t.Fatalf("service id = %q", manifests[0].Service.ID)
 	}
+}
+
+func decodeData(t *testing.T, body io.Reader) map[string]any {
+	t.Helper()
+	var envelope map[string]any
+	if err := json.NewDecoder(body).Decode(&envelope); err != nil {
+		t.Fatalf("decode envelope: %v", err)
+	}
+	data, ok := envelope["data"].(map[string]any)
+	if !ok {
+		t.Fatalf("data missing from envelope: %#v", envelope)
+	}
+	return data
 }
 
 func loadCatalogFixturePackage(t *testing.T) testkit.FixturePackage {

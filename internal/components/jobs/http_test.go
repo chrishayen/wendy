@@ -64,6 +64,18 @@ func TestHTTPErrors(t *testing.T) {
 	}
 }
 
+func TestHTTPHealth(t *testing.T) {
+	handler := NewHandler(NewStore())
+	resp := requestJSON(t, handler, http.MethodGet, "/v1/jobs/health", nil)
+	if resp.Code != http.StatusOK {
+		t.Fatalf("health status=%d body=%s", resp.Code, resp.Body.String())
+	}
+	data := responseData(t, resp)
+	if data["status"] != "healthy" || data["details"].(map[string]any)["component"] != "jobs" {
+		t.Fatalf("health = %#v", data)
+	}
+}
+
 func requestJSON(t *testing.T, handler http.Handler, method, path string, body any) *httptest.ResponseRecorder {
 	t.Helper()
 	var reader *bytes.Reader

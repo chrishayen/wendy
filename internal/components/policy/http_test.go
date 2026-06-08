@@ -63,6 +63,14 @@ func TestHandlerMalformedCredentialError(t *testing.T) {
 	}
 }
 
+func TestHandlerHealth(t *testing.T) {
+	handler := NewHandler(NewStore())
+	data := doJSON(t, handler, http.MethodGet, "/v1/policy/health", nil, http.StatusOK)
+	if data["status"] != "healthy" || data["details"].(map[string]any)["component"] != "policy" {
+		t.Fatalf("health = %#v", data)
+	}
+}
+
 func doJSON(t *testing.T, handler http.Handler, method, path string, body any, wantStatus int) map[string]any {
 	t.Helper()
 	envelope := doJSONEnvelope(t, handler, method, path, body, wantStatus)

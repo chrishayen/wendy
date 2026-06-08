@@ -84,6 +84,14 @@ func TestHandlerMissingIdempotencyEnvelope(t *testing.T) {
 	}
 }
 
+func TestHandlerHealth(t *testing.T) {
+	handler := NewHandler(newTestStore(t))
+	data := doJSON(t, handler, http.MethodGet, "/v1/artifacts/health", nil, nil, http.StatusOK)
+	if data["status"] != "healthy" || data["details"].(map[string]any)["component"] != "artifacts" {
+		t.Fatalf("health = %#v", data)
+	}
+}
+
 func doJSON(t *testing.T, handler http.Handler, method, path string, body any, headers map[string]string, wantStatus int) map[string]any {
 	t.Helper()
 	envelope := doJSONEnvelope(t, handler, method, path, body, headers, wantStatus)
