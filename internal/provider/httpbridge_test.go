@@ -18,11 +18,14 @@ func TestHTTPBridgeForwardsProviderInvokeRequest(t *testing.T) {
 		if r.Header.Get("X-Backend-Token") != "secret" {
 			t.Fatalf("missing backend header: %#v", r.Header)
 		}
+		if r.Header.Get("X-Request-ID") != "req_bridge" {
+			t.Fatalf("X-Request-ID = %q", r.Header.Get("X-Request-ID"))
+		}
 		var req contracts.ProviderInvokeRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			t.Fatalf("decode backend request: %v", err)
 		}
-		if req.Input["message"] != "hello" || req.Context.SubjectID != "sub_agent" {
+		if req.Input["message"] != "hello" || req.Context.SubjectID != "sub_agent" || req.Context.RequestID != "req_bridge" {
 			t.Fatalf("backend request body = %#v", req)
 		}
 		writeSuccess(w, r, http.StatusOK, contracts.ProviderInvokeResponse{
@@ -46,7 +49,7 @@ func TestHTTPBridgeForwardsProviderInvokeRequest(t *testing.T) {
 
 	reqBody := contracts.ProviderInvokeRequest{
 		Input:   map[string]any{"message": "hello"},
-		Context: contracts.ProviderInvokeContext{SubjectID: "sub_agent"},
+		Context: contracts.ProviderInvokeContext{SubjectID: "sub_agent", RequestID: "req_bridge"},
 	}
 	rec := invokeBridge(t, server, reqBody)
 	if rec.Code != http.StatusOK {

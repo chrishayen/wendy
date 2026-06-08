@@ -112,6 +112,9 @@ func httpBridgeHandler(client *http.Client, route HTTPBridgeRoute) CapabilityHan
 		for key, value := range route.Headers {
 			httpReq.Header.Set(key, value)
 		}
+		if req.Context.RequestID != "" {
+			httpReq.Header.Set("X-Request-ID", req.Context.RequestID)
+		}
 		resp, err := client.Do(httpReq)
 		if err != nil {
 			return contracts.ProviderInvokeResponse{}, fmt.Errorf("%w: %s", ErrBackend, err)
