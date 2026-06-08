@@ -191,6 +191,201 @@ components:
 	}
 }
 
+func TestValidateFileDetectsGenericSuccessResponse(t *testing.T) {
+	path := writeContract(t, `
+openapi: 3.1.0
+info:
+  title: Generic success
+  version: v1
+paths:
+  /v1/one:
+    get:
+      operationId: one
+      x-operation-audience: component
+      x-policy-action: test.read
+      responses:
+        "200":
+          $ref: "#/components/responses/Success"
+        default:
+          $ref: "#/components/responses/Error"
+components:
+  responses:
+    Success:
+      description: Generic success.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/SuccessEnvelope"
+    Error:
+      description: Error.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorEnvelope"
+  schemas:
+    Meta:
+      type: object
+      required: [request_id, schema_version]
+      properties:
+        request_id:
+          type: string
+        schema_version:
+          type: string
+    SuccessEnvelope:
+      type: object
+      required: [ok, data, links, meta]
+      properties:
+        meta:
+          $ref: "#/components/schemas/Meta"
+    ErrorEnvelope:
+      type: object
+      required: [ok, error, links, meta]
+      properties:
+        meta:
+          $ref: "#/components/schemas/Meta"
+`)
+	report := ValidateFile(path)
+	for _, code := range []string{
+		"generic_success_response_component",
+		"generic_success_response_schema",
+		"generic_success_response_ref",
+	} {
+		if !hasFinding(report, code) {
+			t.Fatalf("expected %s finding, got %#v", code, report.Findings)
+		}
+	}
+}
+
+func TestValidateFileDetectsAnonymousSuccessEnvelopeResponse(t *testing.T) {
+	path := writeContract(t, `
+openapi: 3.1.0
+info:
+  title: Anonymous success
+  version: v1
+paths:
+  /v1/one:
+    get:
+      operationId: one
+      x-operation-audience: component
+      x-policy-action: test.read
+      responses:
+        "200":
+          description: Anonymous typed success.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/Thing"
+        default:
+          $ref: "#/components/responses/Error"
+components:
+  responses:
+    Error:
+      description: Error.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorEnvelope"
+  schemas:
+    Meta:
+      type: object
+      required: [request_id, schema_version]
+      properties:
+        request_id:
+          type: string
+        schema_version:
+          type: string
+    SuccessEnvelope:
+      type: object
+      required: [ok, data, links, meta]
+      properties:
+        meta:
+          $ref: "#/components/schemas/Meta"
+    ErrorEnvelope:
+      type: object
+      required: [ok, error, links, meta]
+      properties:
+        meta:
+          $ref: "#/components/schemas/Meta"
+    Thing:
+      type: object
+`)
+	report := ValidateFile(path)
+	if !hasFinding(report, "anonymous_success_response_schema") {
+		t.Fatalf("expected anonymous success response finding, got %#v", report.Findings)
+	}
+}
+
+func TestValidateFileAllowsNamedTypedSuccessResponse(t *testing.T) {
+	path := writeContract(t, `
+openapi: 3.1.0
+info:
+  title: Named success
+  version: v1
+paths:
+  /v1/one:
+    get:
+      operationId: one
+      x-operation-audience: component
+      x-policy-action: test.read
+      responses:
+        "200":
+          $ref: "#/components/responses/ThingResponse"
+        default:
+          $ref: "#/components/responses/Error"
+components:
+  responses:
+    ThingResponse:
+      description: Thing envelope.
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: "#/components/schemas/SuccessEnvelope"
+              - type: object
+                properties:
+                  data:
+                    $ref: "#/components/schemas/Thing"
+    Error:
+      description: Error.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorEnvelope"
+  schemas:
+    Meta:
+      type: object
+      required: [request_id, schema_version]
+      properties:
+        request_id:
+          type: string
+        schema_version:
+          type: string
+    SuccessEnvelope:
+      type: object
+      required: [ok, data, links, meta]
+      properties:
+        meta:
+          $ref: "#/components/schemas/Meta"
+    ErrorEnvelope:
+      type: object
+      required: [ok, error, links, meta]
+      properties:
+        meta:
+          $ref: "#/components/schemas/Meta"
+    Thing:
+      type: object
+`)
+	report := ValidateFile(path)
+	if !report.Passed() {
+		t.Fatalf("findings = %#v", report.Findings)
+	}
+}
+
 func TestValidateFileDetectsRawDefaultErrorResponse(t *testing.T) {
 	path := writeContract(t, `
 openapi: 3.1.0

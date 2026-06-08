@@ -90,6 +90,7 @@ func ValidateFile(path string) FileReport {
 	report.References = validateReferences(&report, doc)
 	validateSecurityRequirements(&report, doc, paths, components)
 	validateOperations(&report, doc, paths)
+	validateSuccessResponseTyping(&report, paths, components)
 	validateCompatibilityPolicy(&report, doc, paths, components)
 	return report
 }
@@ -214,6 +215,52 @@ func validateOperations(report *FileReport, doc map[string]any, paths map[string
 				}
 				if !responseUsesEnvelopeOrBinary(doc, response) {
 					report.add("success_response_not_enveloped", location+"/responses/"+escapePointer(status), "2xx JSON responses must use a success envelope; binary responses must declare string/binary content")
+				}
+			}
+		}
+	}
+}
+
+func validateSuccessResponseTyping(report *FileReport, paths, components map[string]any) {
+	responses, _ := asMap(components["responses"])
+	for responseName, responseValue := range responses {
+		location := "/components/responses/" + escapePointer(responseName)
+		if responseName == "Success" {
+			report.add("generic_success_response_component", location, "generic Success response components are not allowed; declare a typed, operation-specific response")
+		}
+		if responseUsesDirectGenericSuccessEnvelope(responseValue) {
+			report.add("generic_success_response_schema", location, "success response components must specialize the data schema instead of returning the base SuccessEnvelope directly")
+		}
+	}
+
+	for pathName, pathValue := range paths {
+		pathItem, ok := asMap(pathValue)
+		if !ok {
+			continue
+		}
+		for method, operationValue := range pathItem {
+			if !isHTTPMethod(method) {
+				continue
+			}
+			operation, ok := asMap(operationValue)
+			if !ok {
+				continue
+			}
+			responses, ok := asMap(operation["responses"])
+			if !ok {
+				continue
+			}
+			for status, responseValue := range responses {
+				if !isSuccessStatus(status) {
+					continue
+				}
+				location := "/paths/" + escapePointer(pathName) + "/" + method + "/responses/" + escapePointer(status)
+				if ref, _ := responseRef(responseValue); ref == "#/components/responses/Success" {
+					report.add("generic_success_response_ref", location+"/$ref", "2xx responses must reference a typed response component, not the generic Success response")
+					continue
+				}
+				if responseUsesInlineBaseSuccessEnvelope(responseValue) {
+					report.add("anonymous_success_response_schema", location, "2xx JSON success responses must use named typed envelopes or named typed response components")
 				}
 			}
 		}
@@ -374,6 +421,84 @@ func responseUsesEnvelopeOrBinaryDepth(doc map[string]any, response any, depth i
 		schema, ok := asMap(media["schema"])
 		if ok && schemaIsBinary(schema) {
 			return true
+		}
+	}
+	return false
+}
+
+func responseRef(response any) (string, bool) {
+	responseMap, ok := asMap(response)
+	if !ok {
+		return "", false
+	}
+	ref, ok := responseMap["$ref"].(string)
+	return ref, ok && ref != ""
+}
+
+func responseUsesDirectGenericSuccessEnvelope(response any) bool {
+	responseMap, ok := asMap(response)
+	if !ok {
+		return false
+	}
+	content, ok := asMap(responseMap["content"])
+	if !ok {
+		return false
+	}
+	media, ok := asMap(content["application/json"])
+	if !ok {
+		return false
+	}
+	schema, ok := asMap(media["schema"])
+	if !ok {
+		return false
+	}
+	ref, _ := schema["$ref"].(string)
+	return ref == "#/components/schemas/SuccessEnvelope"
+}
+
+func responseUsesInlineBaseSuccessEnvelope(response any) bool {
+	if ref, ok := responseRef(response); ok {
+		return ref == "#/components/responses/Success"
+	}
+	responseMap, ok := asMap(response)
+	if !ok {
+		return false
+	}
+	content, ok := asMap(responseMap["content"])
+	if !ok {
+		return false
+	}
+	media, ok := asMap(content["application/json"])
+	if !ok {
+		return false
+	}
+	schema, ok := asMap(media["schema"])
+	if !ok {
+		return false
+	}
+	return schemaContainsDirectSuccessEnvelopeRef(schema, 0)
+}
+
+func schemaContainsDirectSuccessEnvelopeRef(schema any, depth int) bool {
+	if depth > 12 {
+		return false
+	}
+	schemaMap, ok := asMap(schema)
+	if !ok {
+		return false
+	}
+	if ref, _ := schemaMap["$ref"].(string); ref == "#/components/schemas/SuccessEnvelope" {
+		return true
+	}
+	for _, key := range []string{"allOf", "anyOf", "oneOf"} {
+		values, ok := schemaMap[key].([]any)
+		if !ok {
+			continue
+		}
+		for _, value := range values {
+			if schemaContainsDirectSuccessEnvelopeRef(value, depth+1) {
+				return true
+			}
 		}
 	}
 	return false
