@@ -514,7 +514,7 @@ components:
             additionalProperties: true
     AgentJob:
       type: object
-      required: [job_id, state, created_at, updated_at, input_summary, artifact_refs, terminal_error, links]
+      required: [job_id, state, created_at, updated_at, status_message, input_summary, artifact_refs, terminal_error, links]
       properties:
         job_id:
           type: string
@@ -528,7 +528,7 @@ components:
           type: string
           format: date-time
         status_message:
-          type: string
+          type: [string, "null"]
         input_summary:
           type: object
           additionalProperties: true

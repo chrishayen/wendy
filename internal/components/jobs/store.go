@@ -670,13 +670,20 @@ func agentProjection(job contracts.Job) contracts.AgentJob {
 		State:         job.State,
 		CreatedAt:     job.CreatedAt,
 		UpdatedAt:     job.UpdatedAt,
-		StatusMessage: job.StatusMessage,
+		StatusMessage: statusMessagePtr(job.StatusMessage),
 		InputSummary:  job.InputSummary,
 		ArtifactRefs:  job.ArtifactRefs,
 		LogCursor:     job.LogCursor,
 		TerminalError: job.TerminalError,
 		Links:         job.Links,
 	}
+}
+
+func statusMessagePtr(value string) *string {
+	if value == "" {
+		return nil
+	}
+	return &value
 }
 
 func cloneJob(job contracts.Job) contracts.Job {

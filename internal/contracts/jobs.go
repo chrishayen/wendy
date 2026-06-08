@@ -33,7 +33,7 @@ type AgentJob struct {
 	State         JobState       `json:"state"`
 	CreatedAt     string         `json:"created_at"`
 	UpdatedAt     string         `json:"updated_at"`
-	StatusMessage string         `json:"status_message,omitempty"`
+	StatusMessage *string        `json:"status_message"`
 	InputSummary  map[string]any `json:"input_summary,omitempty"`
 	ArtifactRefs  []string       `json:"artifact_refs"`
 	LogCursor     *string        `json:"log_cursor"`

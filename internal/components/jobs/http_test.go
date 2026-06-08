@@ -5,10 +5,12 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"testing"
 	"time"
 
 	"pacp/internal/contracts"
+	"pacp/internal/testkit"
 )
 
 func TestHTTPJobLifecycle(t *testing.T) {
@@ -179,6 +181,45 @@ func TestHTTPMetricsReportsExpiredClaims(t *testing.T) {
 	assertMetric(t, data, "jobs_expired_claims", nil, 1)
 }
 
+func TestHandlerReplaysS003JobReadFixtures(t *testing.T) {
+	scenario, err := testkit.LoadScenario(filepath.Join("..", "..", "..", "testdata", "contract-sim"), filepath.Join("fixtures", "S003", "manifest.json"))
+	if err != nil {
+		t.Fatalf("load scenario: %v", err)
+	}
+	pkg, ok := testkit.FindPackage(scenario, "c05-async-job-service")
+	if !ok {
+		t.Fatalf("c05 fixture package not found")
+	}
+
+	tests := []struct {
+		fixtureID string
+		seed      func(*Store)
+	}{
+		{"job_policy_context_queued", seedS003JobQueued},
+		{"job_policy_context_running", seedS003JobRunning},
+		{"job_policy_context_succeeded", seedS003JobSucceeded},
+		{"agent_projection_queued", seedS003JobQueued},
+		{"agent_projection_running", seedS003JobRunning},
+		{"agent_projection_canceled", seedS003JobCanceled},
+		{"agent_projection_succeeded", seedS003JobSucceeded},
+		{"agent_projection_provider_timeout", seedS003JobProviderTimeout},
+		{"agent_projection_provider_failure", seedS003JobProviderFailure},
+		{"agent_projection_lease_expired", seedS003JobLeaseExpired},
+		{"job_not_found", nil},
+	}
+	for _, test := range tests {
+		t.Run(test.fixtureID, func(t *testing.T) {
+			store := NewStore()
+			if test.seed != nil {
+				test.seed(store)
+			}
+			if _, err := testkit.ReplayHTTPFixture(NewHandler(store), pkg, test.fixtureID); err != nil {
+				t.Fatalf("replay %s: %v", test.fixtureID, err)
+			}
+		})
+	}
+}
+
 func requestJSON(t *testing.T, handler http.Handler, method, path string, body any, headers ...map[string]string) *httptest.ResponseRecorder {
 	t.Helper()
 	var reader *bytes.Reader
@@ -264,4 +305,134 @@ func labelsMatch(raw any, want map[string]string) bool {
 		}
 	}
 	return true
+}
+
+const s003JobID = "job_s003_0001"
+
+func seedS003JobQueued(store *Store) {
+	seedS003Job(store, contracts.Job{
+		JobID:         s003JobID,
+		State:         contracts.JobQueued,
+		CreatedAt:     "2026-06-05T20:00:00Z",
+		UpdatedAt:     "2026-06-05T20:00:00Z",
+		InputSummary:  s003InputSummary(),
+		ArtifactRefs:  []string{},
+		LogCursor:     nil,
+		TerminalError: nil,
+		Links:         map[string]any{},
+	})
+}
+
+func seedS003JobRunning(store *Store) {
+	cursor := "cursor_s003_logs_0001"
+	seedS003Job(store, contracts.Job{
+		JobID:         s003JobID,
+		State:         contracts.JobRunning,
+		CreatedAt:     "2026-06-05T20:00:00Z",
+		UpdatedAt:     "2026-06-05T20:00:03Z",
+		StatusMessage: "running",
+		InputSummary:  s003InputSummary(),
+		ArtifactRefs:  []string{},
+		LogCursor:     &cursor,
+		TerminalError: nil,
+		Links:         map[string]any{},
+	})
+}
+
+func seedS003JobCanceled(store *Store) {
+	seedS003Job(store, contracts.Job{
+		JobID:         s003JobID,
+		State:         contracts.JobCanceled,
+		CreatedAt:     "2026-06-05T20:00:00Z",
+		UpdatedAt:     "2026-06-05T20:00:01Z",
+		StatusMessage: "canceled by requester",
+		InputSummary:  s003InputSummary(),
+		ArtifactRefs:  []string{},
+		LogCursor:     nil,
+		TerminalError: &contracts.ErrorObject{Code: "canceled", Message: "canceled by requester", Retryable: false},
+		Links:         map[string]any{},
+	})
+}
+
+func seedS003JobSucceeded(store *Store) {
+	cursor := "cursor_s003_logs_0002"
+	seedS003Job(store, contracts.Job{
+		JobID:         s003JobID,
+		State:         contracts.JobSucceeded,
+		CreatedAt:     "2026-06-05T20:00:00Z",
+		UpdatedAt:     "2026-06-05T20:00:46Z",
+		StatusMessage: "completed",
+		InputSummary:  s003InputSummary(),
+		ArtifactRefs:  []string{"art_s003_0001"},
+		LogCursor:     &cursor,
+		TerminalError: nil,
+		Links:         map[string]any{},
+	})
+}
+
+func seedS003JobProviderTimeout(store *Store) {
+	cursor := "cursor_s003_logs_provider_timeout"
+	seedS003Job(store, contracts.Job{
+		JobID:         s003JobID,
+		State:         contracts.JobFailed,
+		CreatedAt:     "2026-06-05T20:00:00Z",
+		UpdatedAt:     "2026-06-05T20:15:08Z",
+		StatusMessage: "provider invocation timed out",
+		InputSummary:  s003InputSummary(),
+		ArtifactRefs:  []string{},
+		LogCursor:     &cursor,
+		TerminalError: &contracts.ErrorObject{Code: "provider_timeout", Message: "provider invocation timed out", Retryable: true},
+		Links:         map[string]any{},
+	})
+}
+
+func seedS003JobProviderFailure(store *Store) {
+	cursor := "cursor_s003_logs_provider_failure"
+	seedS003Job(store, contracts.Job{
+		JobID:         s003JobID,
+		State:         contracts.JobFailed,
+		CreatedAt:     "2026-06-05T20:00:00Z",
+		UpdatedAt:     "2026-06-05T20:00:08Z",
+		StatusMessage: "ComfyUI backend is unavailable",
+		InputSummary:  s003InputSummary(),
+		ArtifactRefs:  []string{},
+		LogCursor:     &cursor,
+		TerminalError: &contracts.ErrorObject{Code: "provider_unavailable", Message: "ComfyUI backend is unavailable", Retryable: true},
+		Links:         map[string]any{},
+	})
+}
+
+func seedS003JobLeaseExpired(store *Store) {
+	cursor := "cursor_s003_logs_lease_expired"
+	seedS003Job(store, contracts.Job{
+		JobID:         s003JobID,
+		State:         contracts.JobFailed,
+		CreatedAt:     "2026-06-05T20:00:00Z",
+		UpdatedAt:     "2026-06-05T20:01:04Z",
+		StatusMessage: "resource lease expired before completion",
+		InputSummary:  s003InputSummary(),
+		ArtifactRefs:  []string{},
+		LogCursor:     &cursor,
+		TerminalError: &contracts.ErrorObject{Code: "lease_expired", Message: "resource lease expired before completion", Retryable: true},
+		Links:         map[string]any{},
+	})
+}
+
+func seedS003Job(store *Store, job contracts.Job) {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	store.jobs[s003JobID] = &record{
+		job:            job,
+		requesterID:    "sub_agent_s003",
+		ownerSubjectID: "sub_agent_s003",
+		claimLease:     time.Minute,
+	}
+}
+
+func s003InputSummary() map[string]any {
+	return map[string]any{
+		"prompt_present": true,
+		"width":          1024,
+		"height":         1024,
+	}
 }

@@ -716,13 +716,20 @@ func projectAgentJob(job contracts.Job) contracts.AgentJob {
 		State:         job.State,
 		CreatedAt:     job.CreatedAt,
 		UpdatedAt:     job.UpdatedAt,
-		StatusMessage: job.StatusMessage,
+		StatusMessage: agentStatusMessagePtr(job.StatusMessage),
 		InputSummary:  job.InputSummary,
 		ArtifactRefs:  job.ArtifactRefs,
 		LogCursor:     job.LogCursor,
 		TerminalError: job.TerminalError,
 		Links:         agentJobLinks(job.JobID, job.State),
 	}
+}
+
+func agentStatusMessagePtr(value string) *string {
+	if value == "" {
+		return nil
+	}
+	return &value
 }
 
 func projectArtifact(artifact contracts.Artifact) contracts.AgentArtifact {
