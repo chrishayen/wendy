@@ -146,6 +146,7 @@ func runDevStack(ctx context.Context, cfg devConfig) error {
 	if !cfg.DisableRunner {
 		r := runner.New(runner.Config{
 			WorkerID:            cfg.WorkerID,
+			CatalogURL:          catalogURL,
 			JobsURL:             jobsURL,
 			LeasesURL:           leasesURL,
 			ArtifactsURL:        artifactsURL,

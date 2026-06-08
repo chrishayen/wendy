@@ -262,7 +262,8 @@ Set `-addr` to expose `/v1/runner/health` and `/v1/runner/metrics`; set
 require a bearer token.
 Set `-catalog-url` or `PACP_CATALOG_URL` when queued jobs contain lean execution
 plans that identify the capability and input but rely on C03 for the current
-provider route and resource hints.
+provider route and resource hints. `pacp-primary` and `pacp-dev` pass their
+co-hosted catalog URL to the embedded runner automatically.
 
 Use `pacp-runner -node-urls` or `PACP_NODE_URLS` for distributed nodes. The
 format is comma-separated `node_id=URL` entries, for example

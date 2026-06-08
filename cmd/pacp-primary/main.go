@@ -162,6 +162,7 @@ func runPrimaryStack(ctx context.Context, cfg primaryConfig) error {
 		}
 		r := runner.New(runner.Config{
 			WorkerID:            cfg.WorkerID,
+			CatalogURL:          endpoints.CatalogURL,
 			JobsURL:             endpoints.JobsURL,
 			LeasesURL:           endpoints.LeasesURL,
 			ArtifactsURL:        endpoints.ArtifactsURL,
