@@ -569,6 +569,8 @@ paths:
     post:
       tags: [artifacts]
       operationId: createArtifactUpload
+      x-operation-audience: worker
+      x-policy-action: artifact.register
       parameters:
         - $ref: "#/components/parameters/IdempotencyKeyRequired"
       requestBody:
@@ -588,6 +590,8 @@ paths:
     get:
       tags: [artifacts]
       operationId: getArtifactUpload
+      x-operation-audience: worker
+      x-policy-action: artifact.register
       parameters:
         - $ref: "#/components/parameters/UploadID"
       responses:
@@ -599,6 +603,8 @@ paths:
     put:
       tags: [artifacts]
       operationId: putArtifactUploadContent
+      x-operation-audience: worker
+      x-policy-action: artifact.register
       parameters:
         - $ref: "#/components/parameters/UploadID"
         - $ref: "#/components/parameters/IdempotencyKeyRequired"
@@ -634,6 +640,8 @@ paths:
     post:
       tags: [artifacts]
       operationId: completeArtifactUpload
+      x-operation-audience: worker
+      x-policy-action: artifact.register
       parameters:
         - $ref: "#/components/parameters/UploadID"
         - $ref: "#/components/parameters/IdempotencyKeyRequired"
@@ -654,6 +662,8 @@ paths:
     get:
       tags: [artifacts]
       operationId: listArtifacts
+      x-operation-audience: component
+      x-policy-action: artifact.read
       parameters:
         - name: producer_ref
           in: query
@@ -672,6 +682,8 @@ paths:
     post:
       tags: [artifacts]
       operationId: registerLocalArtifact
+      x-operation-audience: worker
+      x-policy-action: artifact.register
       requestBody:
         required: true
         content:
@@ -687,6 +699,8 @@ paths:
     get:
       tags: [artifacts]
       operationId: getArtifact
+      x-operation-audience: component
+      x-policy-action: artifact.read
       parameters:
         - $ref: "#/components/parameters/ArtifactID"
       responses:
@@ -698,6 +712,8 @@ paths:
     get:
       tags: [artifacts]
       operationId: getArtifactPolicyContext
+      x-operation-audience: component
+      x-policy-action: artifact.read
       parameters:
         - $ref: "#/components/parameters/ArtifactID"
       responses:
@@ -709,6 +725,8 @@ paths:
     get:
       tags: [artifacts]
       operationId: readArtifactContent
+      x-operation-audience: component
+      x-policy-action: artifact.read
       parameters:
         - $ref: "#/components/parameters/ArtifactID"
       responses:
