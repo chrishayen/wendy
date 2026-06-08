@@ -44,6 +44,12 @@ func TestRunDistributedSmokePassesPrimaryPlusNodeFlow(t *testing.T) {
 		"node.touch_metric",
 		"leases.release_audit",
 		"provider.invoked",
+		"gateway.failure.invoke",
+		"runner.failure_run_once",
+		"jobs.failed_provider_unavailable",
+		"gateway.failed_projection",
+		"leases.failure_release_audit",
+		"provider.failure_invoked",
 	} {
 		if !hasDistributedCheck(report, name) {
 			t.Fatalf("missing check %s in %#v", name, report.Checks)

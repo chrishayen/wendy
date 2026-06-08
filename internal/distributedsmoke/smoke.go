@@ -60,19 +60,22 @@ func Run(ctx context.Context) DistributedSmokeReport {
 	report := DistributedSmokeReport{OK: true}
 	client := &http.Client{Timeout: 5 * time.Second}
 	const (
-		agentToken     = "token_distributed_agent"
-		componentToken = "token_distributed_component"
-		runnerToken    = "token_distributed_runner"
-		agentID        = "sub_distributed_agent"
-		componentID    = "sub_distributed_component"
-		runnerID       = "sub_distributed_runner"
-		nodeID         = "node_linux_gpu"
-		serviceID      = "svc_distributed_gpu"
-		capability     = "cap_distributed_artifact"
-		routeURL       = "http://node_linux_gpu:8188"
+		agentToken        = "token_distributed_agent"
+		componentToken    = "token_distributed_component"
+		runnerToken       = "token_distributed_runner"
+		agentID           = "sub_distributed_agent"
+		componentID       = "sub_distributed_component"
+		runnerID          = "sub_distributed_runner"
+		nodeID            = "node_linux_gpu"
+		serviceID         = "svc_distributed_gpu"
+		capability        = "cap_distributed_artifact"
+		failureServiceID  = "svc_distributed_failure"
+		failureCapability = "cap_distributed_failure"
+		routeURL          = "http://node_linux_gpu:8188"
 	)
 
 	var providerInvocations atomic.Int32
+	var providerFailureInvocations atomic.Int32
 	providerManifest := distributedProviderManifest(serviceID, capability, "http://provider.local")
 	providerServer, err := provider.NewServer(providerManifest, map[string]provider.CapabilityHandler{
 		capability: func(ctx context.Context, req contracts.ProviderInvokeRequest) (contracts.ProviderInvokeResponse, error) {
@@ -97,12 +100,39 @@ func Run(ctx context.Context) DistributedSmokeReport {
 	providerHTTP := httptest.NewServer(providerServer)
 	defer providerHTTP.Close()
 
+	failureProviderManifest := distributedProviderManifest(failureServiceID, failureCapability, "http://provider.local")
+	failureProviderServer, err := provider.NewServer(failureProviderManifest, map[string]provider.CapabilityHandler{
+		failureCapability: func(ctx context.Context, req contracts.ProviderInvokeRequest) (contracts.ProviderInvokeResponse, error) {
+			providerFailureInvocations.Add(1)
+			return contracts.ProviderInvokeResponse{}, provider.InvokeError{
+				ErrorObject: contracts.ErrorObject{
+					Code:      "provider_unavailable",
+					Message:   "distributed provider unavailable",
+					Retryable: true,
+				},
+				StatusCode: http.StatusServiceUnavailable,
+			}
+		},
+	})
+	if err != nil {
+		report.add(DistributedSmokeCheck{Name: "provider.failure.create", Error: err.Error()})
+		return report
+	}
+	failureProviderHTTP := httptest.NewServer(failureProviderServer)
+	defer failureProviderHTTP.Close()
+
 	manifest := distributedProviderManifest(serviceID, capability, routeURL)
 	manifest.Provider.NodeID = nodeID
+	failureManifest := distributedProviderManifest(failureServiceID, failureCapability, routeURL)
+	failureManifest.Provider.NodeID = nodeID
 
 	catalogStore := catalog.NewStore()
 	if _, err := catalogStore.RegisterManifest(manifest); err != nil {
 		report.add(DistributedSmokeCheck{Name: "catalog.seed", Error: err.Error()})
+		return report
+	}
+	if _, err := catalogStore.RegisterManifest(failureManifest); err != nil {
+		report.add(DistributedSmokeCheck{Name: "catalog.seed.failure", Error: err.Error()})
 		return report
 	}
 
@@ -203,6 +233,13 @@ func Run(ctx context.Context) DistributedSmokeReport {
 			ProviderEndpoint: providerHTTP.URL,
 			InitialStatus:    "stopped",
 			Manifest:         &manifest,
+		}, {
+			ServiceID:        failureServiceID,
+			DisplayName:      "Distributed Failure Provider",
+			RuntimeAdapter:   "fake",
+			ProviderEndpoint: failureProviderHTTP.URL,
+			InitialStatus:    "stopped",
+			Manifest:         &failureManifest,
 		}},
 	})
 	if err != nil {
@@ -299,6 +336,12 @@ func Run(ctx context.Context) DistributedSmokeReport {
 	} else {
 		report.add(DistributedSmokeCheck{Name: "provider.invoked", OK: true})
 	}
+
+	failureJobID := invokeDistributedTool(ctx, client, gatewayHTTP.URL, agentToken, failureCapability, "distributed-smoke-failure-invoke", "gateway.failure.invoke", &report)
+	if failureJobID == "" {
+		return report
+	}
+	checkDistributedProviderFailure(ctx, client, gatewayHTTP.URL, jobsHTTP.URL, agentToken, componentToken, failureJobID, r, leaseStore, runnerID, &providerFailureInvocations, &report)
 	return report
 }
 
@@ -457,6 +500,16 @@ func checkLeaseReleaseAudit(store *leases.Store, runnerID, jobID string, report 
 		return
 	}
 	report.add(DistributedSmokeCheck{Name: "leases.release_audit", OK: true})
+}
+
+func checkLeaseReleaseAuditContains(store *leases.Store, runnerID, jobID, reason, checkName string, report *DistributedSmokeReport) {
+	for _, event := range store.AuditEvents() {
+		if event.ActorSubjectID == runnerID && event.HolderID == jobID && event.EventType == "lease.released" && event.ReleaseReason == reason {
+			report.add(DistributedSmokeCheck{Name: checkName, OK: true})
+			return
+		}
+	}
+	report.add(DistributedSmokeCheck{Name: checkName, Error: fmt.Sprintf("release audit for job_id=%q reason=%q not found", jobID, reason)})
 }
 
 func checkRouteAuthScopeSeparation(ctx context.Context, client *http.Client, catalogURL, leasesURL, runnerToken, componentToken, capabilityID string, report *DistributedSmokeReport) {
@@ -643,6 +696,46 @@ func checkGatewayQueuedCancellation(ctx context.Context, client *http.Client, ga
 	stateCheck.OK = true
 	report.add(stateCheck)
 	checkGatewayJobProjectionState(ctx, client, gatewayURL, agentToken, jobID, contracts.JobCanceled, "gateway.canceled_projection", report)
+}
+
+func checkDistributedProviderFailure(ctx context.Context, client *http.Client, gatewayURL, jobsURL, agentToken, componentToken, jobID string, r *runner.Runner, leaseStore *leases.Store, runnerID string, invocations *atomic.Int32, report *DistributedSmokeReport) {
+	runJobID, ok, err := r.RunOnce(ctx)
+	check := DistributedSmokeCheck{Name: "runner.failure_run_once"}
+	if err == nil {
+		check.Error = "expected provider failure"
+		report.add(check)
+		return
+	}
+	if !ok || runJobID != jobID {
+		check.Error = fmt.Sprintf("run result job_id=%q ok=%t err=%v", runJobID, ok, err)
+		report.add(check)
+		return
+	}
+	check.OK = true
+	report.add(check)
+
+	job := readDistributedJob(ctx, client, jobsURL, componentToken, jobID, report)
+	stateCheck := DistributedSmokeCheck{Name: "jobs.failed_provider_unavailable"}
+	if job.JobID == "" {
+		stateCheck.Error = "job read failed"
+		report.add(stateCheck)
+		return
+	}
+	if job.State != contracts.JobFailed || job.TerminalError == nil || job.TerminalError.Code != "provider_unavailable" || !job.TerminalError.Retryable {
+		stateCheck.Error = fmt.Sprintf("state=%q terminal_error=%#v", job.State, job.TerminalError)
+		report.add(stateCheck)
+		return
+	}
+	stateCheck.OK = true
+	report.add(stateCheck)
+
+	checkGatewayJobProjectionState(ctx, client, gatewayURL, agentToken, jobID, contracts.JobFailed, "gateway.failed_projection", report)
+	checkLeaseReleaseAuditContains(leaseStore, runnerID, jobID, "provider failed", "leases.failure_release_audit", report)
+	if invocations.Load() != 1 {
+		report.add(DistributedSmokeCheck{Name: "provider.failure_invoked", Error: fmt.Sprintf("invocations=%d", invocations.Load())})
+	} else {
+		report.add(DistributedSmokeCheck{Name: "provider.failure_invoked", OK: true})
+	}
 }
 
 func readDistributedJob(ctx context.Context, client *http.Client, jobsURL, componentToken, jobID string, report *DistributedSmokeReport) contracts.Job {
