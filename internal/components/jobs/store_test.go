@@ -190,6 +190,45 @@ func TestListJobsSupportsCursors(t *testing.T) {
 	}
 }
 
+func TestJobsPersistAndFilterCapabilityIDFromCreateRequest(t *testing.T) {
+	store := NewStore()
+	job, _, err := store.Create(contracts.CreateJobRequest{
+		RequesterID:  "sub_agent_2",
+		CapabilityID: "cap_text_summarize",
+		InputSummary: map[string]any{"text_present": true},
+		Metadata:     map[string]any{},
+	}, "idem_capability_field")
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if job.CapabilityID != "cap_text_summarize" {
+		t.Fatalf("created capability_id = %q", job.CapabilityID)
+	}
+
+	got, err := store.Get(job.JobID)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if got.CapabilityID != "cap_text_summarize" {
+		t.Fatalf("stored capability_id = %q", got.CapabilityID)
+	}
+
+	matched, _, err := store.List(ListFilter{CapabilityID: "cap_text_summarize"})
+	if err != nil {
+		t.Fatalf("list matched: %v", err)
+	}
+	if len(matched) != 1 || matched[0].JobID != job.JobID {
+		t.Fatalf("matched jobs = %#v", matched)
+	}
+	missing, _, err := store.List(ListFilter{CapabilityID: "cap_other"})
+	if err != nil {
+		t.Fatalf("list missing: %v", err)
+	}
+	if len(missing) != 0 {
+		t.Fatalf("missing filter returned %#v", missing)
+	}
+}
+
 func TestPolicyAndAgentProjectionHideMetadata(t *testing.T) {
 	store := NewStore()
 	job, _, err := store.Create(createRequest(), "idem_policy_projection")

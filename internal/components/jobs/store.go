@@ -175,7 +175,7 @@ func (s *Store) Metrics() contracts.ComponentMetrics {
 		}
 		logEntries += len(rec.logs)
 		if isTerminal(rec.job.State) {
-			capability := capabilityID(rec.job.Metadata)
+			capability := jobCapabilityID(rec.job)
 			if capability == "" {
 				capability = "unknown"
 			}
@@ -236,6 +236,7 @@ func (s *Store) Create(req contracts.CreateJobRequest, idempotencyKey string) (c
 	s.nextID++
 	job := contracts.Job{
 		JobID:         jobID,
+		CapabilityID:  createCapabilityID(req),
 		State:         contracts.JobQueued,
 		CreatedAt:     now,
 		UpdatedAt:     now,
@@ -285,7 +286,7 @@ func (s *Store) List(filter ListFilter) ([]contracts.Job, *string, error) {
 		if filter.State != "" && rec.job.State != filter.State {
 			continue
 		}
-		if filter.CapabilityID != "" && capabilityID(rec.job.Metadata) != filter.CapabilityID {
+		if filter.CapabilityID != "" && jobCapabilityID(rec.job) != filter.CapabilityID {
 			continue
 		}
 		jobs = append(jobs, cloneJob(rec.job))
@@ -642,6 +643,20 @@ func ownerSubjectID(req contracts.CreateJobRequest) string {
 		return req.RequesterID
 	}
 	return "sub_unknown"
+}
+
+func createCapabilityID(req contracts.CreateJobRequest) string {
+	if req.CapabilityID != "" {
+		return req.CapabilityID
+	}
+	return capabilityID(req.Metadata)
+}
+
+func jobCapabilityID(job contracts.Job) string {
+	if job.CapabilityID != "" {
+		return job.CapabilityID
+	}
+	return capabilityID(job.Metadata)
 }
 
 func capabilityID(metadata map[string]any) string {

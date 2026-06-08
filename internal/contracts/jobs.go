@@ -14,6 +14,7 @@ const (
 
 type Job struct {
 	JobID         string         `json:"job_id"`
+	CapabilityID  string         `json:"capability_id,omitempty"`
 	State         JobState       `json:"state"`
 	CreatedAt     string         `json:"created_at"`
 	UpdatedAt     string         `json:"updated_at"`

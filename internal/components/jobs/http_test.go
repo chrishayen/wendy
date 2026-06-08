@@ -164,6 +164,41 @@ func TestHTTPListJobsCursor(t *testing.T) {
 	}
 }
 
+func TestHTTPCreateAndListExposeCapabilityID(t *testing.T) {
+	handler := NewHandler(NewStore())
+	req := contracts.CreateJobRequest{
+		RequesterID:  "sub_agent_2",
+		CapabilityID: "cap_text_summarize",
+		InputSummary: map[string]any{"text_present": true},
+		Metadata:     map[string]any{},
+	}
+	createResp := requestJSON(t, handler, http.MethodPost, "/v1/jobs", req, map[string]string{"Idempotency-Key": "create-http-capability"})
+	if createResp.Code != http.StatusCreated {
+		t.Fatalf("create status=%d body=%s", createResp.Code, createResp.Body.String())
+	}
+	created := responseData(t, createResp)
+	if created["capability_id"] != "cap_text_summarize" {
+		t.Fatalf("created capability_id = %#v", created)
+	}
+
+	listResp := requestJSON(t, handler, http.MethodGet, "/v1/jobs?capability_id=cap_text_summarize", nil)
+	if listResp.Code != http.StatusOK {
+		t.Fatalf("list status=%d body=%s", listResp.Code, listResp.Body.String())
+	}
+	items := responseData(t, listResp)["items"].([]any)
+	if len(items) != 1 || items[0].(map[string]any)["capability_id"] != "cap_text_summarize" {
+		t.Fatalf("list items = %#v", items)
+	}
+
+	missResp := requestJSON(t, handler, http.MethodGet, "/v1/jobs?capability_id=cap_other", nil)
+	if missResp.Code != http.StatusOK {
+		t.Fatalf("miss status=%d body=%s", missResp.Code, missResp.Body.String())
+	}
+	if items := responseData(t, missResp)["items"].([]any); len(items) != 0 {
+		t.Fatalf("miss items = %#v", items)
+	}
+}
+
 func TestHTTPMetrics(t *testing.T) {
 	handler := NewHandler(NewStore())
 	createResp := requestJSON(t, handler, http.MethodPost, "/v1/jobs", createRequest(), map[string]string{"Idempotency-Key": "create-http-metrics"})
