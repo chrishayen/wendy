@@ -912,6 +912,76 @@ func TestGatewayPersistentIdempotencyReplaysSyncAfterRestart(t *testing.T) {
 	}
 }
 
+func TestGatewayStaticManifestListsAndInvokesWithoutCatalog(t *testing.T) {
+	calls := 0
+	providerServer, err := provider.NewServer(syncTestManifest("http://provider.invalid"), map[string]provider.CapabilityHandler{
+		"cap_sync_echo": func(ctx context.Context, req contracts.ProviderInvokeRequest) (contracts.ProviderInvokeResponse, error) {
+			calls++
+			return contracts.ProviderInvokeResponse{Output: map[string]any{"message": req.Input["message"], "calls": calls}}, nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("new provider: %v", err)
+	}
+	providerHTTP := httptest.NewServer(providerServer)
+	defer providerHTTP.Close()
+
+	policyStore := policy.NewStore()
+	if _, err := policyStore.CreateAPIKey(contracts.CreateAPIKeyRequest{SubjectID: "sub_agent", Scopes: []string{"agent"}, Token: "token_agent"}); err != nil {
+		t.Fatalf("create agent key: %v", err)
+	}
+	if _, err := policyStore.CreateAPIKey(contracts.CreateAPIKeyRequest{SubjectID: "sub_gateway", Scopes: []string{"component"}, Token: "token_gateway"}); err != nil {
+		t.Fatalf("create gateway key: %v", err)
+	}
+	policyServer := httptest.NewServer(policy.NewHandler(policyStore))
+	defer policyServer.Close()
+
+	gateway := NewHandler(Config{
+		PolicyURL:         policyServer.URL,
+		GatewayCredential: "Bearer token_gateway",
+		Client:            policyServer.Client(),
+		StaticManifests:   []contracts.ProviderManifest{syncTestManifest(providerHTTP.URL)},
+	})
+	env := &gatewayTestEnv{gateway: gateway, t: t}
+
+	tools := env.doJSON(http.MethodGet, "/v1/tools", nil, map[string]string{"Authorization": "Bearer token_agent"}, http.StatusOK)
+	items := tools["items"].([]any)
+	if len(items) != 1 || items[0].(map[string]any)["id"] != "cap_sync_echo" {
+		t.Fatalf("tools = %#v", tools)
+	}
+
+	invoked := env.doJSON(http.MethodPost, "/v1/tools/cap_sync_echo/invoke", map[string]any{
+		"input": map[string]any{"message": "hello"},
+	}, map[string]string{"Authorization": "Bearer token_agent", "Idempotency-Key": "static-sync-1"}, http.StatusOK)
+	if invoked["mode"] != "sync" || invoked["output"].(map[string]any)["message"] != "hello" {
+		t.Fatalf("invoke = %#v", invoked)
+	}
+}
+
+func TestGatewayHealthReportsStaticCatalog(t *testing.T) {
+	gateway := NewHandler(Config{StaticManifests: []contracts.ProviderManifest{testManifest()}})
+	req := httptest.NewRequest(http.MethodGet, "/v1/gateway/health", nil)
+	rec := httptest.NewRecorder()
+	gateway.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var envelope map[string]any
+	if err := json.NewDecoder(rec.Body).Decode(&envelope); err != nil {
+		t.Fatalf("decode health response: %v", err)
+	}
+	data := envelope["data"].(map[string]any)
+	details := data["details"].(map[string]any)
+	configured := details["downstreams_configured"].(map[string]any)
+	if configured["catalog"] != true {
+		t.Fatalf("downstreams = %#v", configured)
+	}
+	catalogDependency := dependencyStatusByName(t, details["dependencies"], "catalog")
+	if catalogDependency["configured"] != true || catalogDependency["reachable"] != true || catalogDependency["status"] != "static" {
+		t.Fatalf("catalog dependency = %#v", catalogDependency)
+	}
+}
+
 type gatewayTestEnv struct {
 	gateway       http.Handler
 	jobStore      *jobs.Store

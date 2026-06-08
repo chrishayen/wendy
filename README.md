@@ -74,7 +74,8 @@ Contract simulation data is kept as test input, not as product behavior.
   update, and LoRA training provider with a provider-owned workspace and
   dry-run mode.
 - `cmd/pacp-catalog`: runnable catalog server that loads provider manifests.
-- `cmd/pacp-gateway`: runnable agent tool gateway.
+- `cmd/pacp-gateway`: runnable agent tool gateway backed by either C03 catalog
+  or static provider manifests.
 - `cmd/pacp-jobs`: runnable async job service.
 - `cmd/pacp-leases`: runnable resource lease service.
 - `cmd/pacp-artifacts`: runnable artifact store.

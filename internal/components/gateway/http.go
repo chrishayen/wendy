@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -36,13 +37,15 @@ type Config struct {
 	GatewayCredential string
 	Client            *http.Client
 	DependencyTimeout time.Duration
+	StaticManifests   []contracts.ProviderManifest
 }
 
 type Handler struct {
-	cfg         Config
-	client      *http.Client
-	idempotency *idempotencyStore
-	httpMetrics *observability.HTTPMetrics
+	cfg           Config
+	client        *http.Client
+	idempotency   *idempotencyStore
+	httpMetrics   *observability.HTTPMetrics
+	staticRecords []contracts.CatalogCapabilityRecord
 }
 
 type invokeRecord struct {
@@ -105,11 +108,15 @@ func NewPersistentHandler(cfg Config, idempotencyStatePath string) (http.Handler
 	if cfg.DependencyTimeout <= 0 {
 		cfg.DependencyTimeout = 2 * time.Second
 	}
+	staticRecords, err := buildStaticCatalogRecords(cfg.StaticManifests)
+	if err != nil {
+		return nil, err
+	}
 	idempotency, err := newPersistentIdempotencyStore(idempotencyStatePath)
 	if err != nil {
 		return nil, err
 	}
-	return &Handler{cfg: cfg, client: client, idempotency: idempotency, httpMetrics: observability.NewHTTPMetrics()}, nil
+	return &Handler{cfg: cfg, client: client, idempotency: idempotency, httpMetrics: observability.NewHTTPMetrics(), staticRecords: staticRecords}, nil
 }
 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -160,7 +167,7 @@ func (h *Handler) health(ctx context.Context) contracts.ComponentHealth {
 	health := contracts.NewComponentHealth("gateway", map[string]any{
 		"schema_version": "v1",
 		"downstreams_configured": map[string]bool{
-			"catalog":   h.cfg.CatalogURL != "",
+			"catalog":   h.cfg.CatalogURL != "" || h.hasStaticCatalog(),
 			"policy":    h.cfg.PolicyURL != "",
 			"jobs":      h.cfg.JobsURL != "",
 			"leases":    h.cfg.LeasesURL != "",
@@ -197,6 +204,12 @@ func (h *Handler) checkDependency(ctx context.Context, target gatewayDependencyT
 	status := gatewayDependencyStatus{Name: target.name, Required: target.required}
 	baseURL := strings.TrimRight(strings.TrimSpace(target.baseURL), "/")
 	if baseURL == "" {
+		if target.name == "catalog" && h.hasStaticCatalog() {
+			status.Configured = true
+			status.Reachable = true
+			status.Status = "static"
+			return status
+		}
 		status.Status = "missing"
 		status.Error = "base URL is not configured"
 		return status
@@ -309,16 +322,13 @@ func (h *Handler) listTools(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var data struct {
-		Items      []contracts.CatalogCapabilityRecord `json:"items"`
-		NextCursor *string                             `json:"next_cursor"`
-	}
-	if err := h.getJSON(r.Context(), h.cfg.CatalogURL+"/v1/catalog/capabilities?limit=50", &data); err != nil {
+	records, nextCursor, err := h.listCapabilities(r.Context(), 50)
+	if err != nil {
 		h.writeGatewayError(w, r, err)
 		return
 	}
-	tools := make([]contracts.Tool, 0, len(data.Items))
-	for _, item := range data.Items {
+	tools := make([]contracts.Tool, 0, len(records))
+	for _, item := range records {
 		decision, err := h.checkPolicy(r.Context(), sub.ID, "tool.discover", item.Capability.ID, map[string]any{"capability_id": item.Capability.ID})
 		if err != nil {
 			h.writeGatewayError(w, r, err)
@@ -328,7 +338,7 @@ func (h *Handler) listTools(w http.ResponseWriter, r *http.Request) {
 			tools = append(tools, projectTool(item.Capability))
 		}
 	}
-	writeSuccess(w, r, http.StatusOK, map[string]any{"items": tools, "next_cursor": data.NextCursor})
+	writeSuccess(w, r, http.StatusOK, map[string]any{"items": tools, "next_cursor": nextCursor})
 }
 
 func (h *Handler) getTool(w http.ResponseWriter, r *http.Request, capabilityID string) {
@@ -654,6 +664,14 @@ func (h *Handler) jobPolicyContext(w http.ResponseWriter, r *http.Request, jobID
 }
 
 func (h *Handler) getCapability(ctx context.Context, capabilityID string) (contracts.CatalogCapabilityRecord, error) {
+	if h.useStaticCatalog() {
+		for _, record := range h.staticRecords {
+			if record.Capability.ID == capabilityID {
+				return cloneCatalogRecord(record), nil
+			}
+		}
+		return contracts.CatalogCapabilityRecord{}, downstreamError{status: http.StatusNotFound, code: "not_found", message: "capability not found"}
+	}
 	var data struct {
 		Items []contracts.CatalogCapabilityRecord `json:"items"`
 	}
@@ -668,9 +686,116 @@ func (h *Handler) getCapability(ctx context.Context, capabilityID string) (contr
 }
 
 func (h *Handler) getCapabilityRoute(ctx context.Context, capabilityID string) (contracts.CapabilityRoute, error) {
+	if h.useStaticCatalog() {
+		record, err := h.getCapability(ctx, capabilityID)
+		if err != nil {
+			return contracts.CapabilityRoute{}, err
+		}
+		return record.Route, nil
+	}
 	var route contracts.CapabilityRoute
 	err := h.getJSON(ctx, h.cfg.CatalogURL+"/v1/catalog/capabilities/"+url.PathEscape(capabilityID)+"/route", &route)
 	return route, err
+}
+
+func (h *Handler) listCapabilities(ctx context.Context, limit int) ([]contracts.CatalogCapabilityRecord, *string, error) {
+	if h.useStaticCatalog() {
+		records := make([]contracts.CatalogCapabilityRecord, 0, len(h.staticRecords))
+		for _, record := range h.staticRecords {
+			records = append(records, cloneCatalogRecord(record))
+			if limit > 0 && len(records) >= limit {
+				break
+			}
+		}
+		return records, nil, nil
+	}
+	var data struct {
+		Items      []contracts.CatalogCapabilityRecord `json:"items"`
+		NextCursor *string                             `json:"next_cursor"`
+	}
+	target := h.cfg.CatalogURL + "/v1/catalog/capabilities?limit=" + strconv.Itoa(limit)
+	if err := h.getJSON(ctx, target, &data); err != nil {
+		return nil, nil, err
+	}
+	return data.Items, data.NextCursor, nil
+}
+
+func (h *Handler) hasStaticCatalog() bool {
+	return len(h.staticRecords) > 0
+}
+
+func (h *Handler) useStaticCatalog() bool {
+	return h.cfg.CatalogURL == "" && h.hasStaticCatalog()
+}
+
+func buildStaticCatalogRecords(manifests []contracts.ProviderManifest) ([]contracts.CatalogCapabilityRecord, error) {
+	if len(manifests) == 0 {
+		return nil, nil
+	}
+	seenServices := map[string]bool{}
+	seenCapabilities := map[string]bool{}
+	records := []contracts.CatalogCapabilityRecord{}
+	for _, manifest := range manifests {
+		if errs := contracts.ValidateProviderManifest(manifest); len(errs) > 0 {
+			return nil, downstreamError{status: http.StatusBadRequest, code: "validation_failed", message: "invalid static manifest: " + strings.Join(errs, "; ")}
+		}
+		if seenServices[manifest.Service.ID] {
+			return nil, downstreamError{status: http.StatusConflict, code: "duplicate_id", message: "duplicate static service id: " + manifest.Service.ID}
+		}
+		seenServices[manifest.Service.ID] = true
+		provider := manifest.Provider
+		if provider.HealthPath == "" {
+			provider.HealthPath = "/v1/provider/health"
+		}
+		for _, capability := range manifest.Capabilities {
+			if seenCapabilities[capability.ID] {
+				return nil, downstreamError{status: http.StatusConflict, code: "duplicate_id", message: "duplicate static capability id: " + capability.ID}
+			}
+			seenCapabilities[capability.ID] = true
+			capability.ServiceID = manifest.Service.ID
+			records = append(records, contracts.CatalogCapabilityRecord{
+				Capability: capability,
+				Route:      staticCapabilityRoute(manifest.Service.ID, capability, provider),
+				Service:    manifest.Service,
+			})
+		}
+	}
+	sort.Slice(records, func(i, j int) bool {
+		return records[i].Capability.ID < records[j].Capability.ID
+	})
+	return records, nil
+}
+
+func staticCapabilityRoute(serviceID string, capability contracts.Capability, provider contracts.Provider) contracts.CapabilityRoute {
+	route := contracts.CapabilityRoute{
+		CapabilityID:       capability.ID,
+		ServiceID:          serviceID,
+		ProviderEndpoint:   provider.Endpoint,
+		ProviderHealthPath: provider.HealthPath,
+		ProviderInvokePath: "/v1/provider/capabilities/" + capability.ID + "/invoke",
+		NodeManaged:        provider.NodeID != "",
+		ServiceStartMode:   "manual",
+		ResourceHints:      capability.ResourceHints,
+		ArtifactHints:      capability.ArtifactHints,
+	}
+	if provider.NodeID != "" {
+		nodeID := provider.NodeID
+		route.NodeID = &nodeID
+		route.ServiceStartMode = "on_demand"
+	}
+	return route
+}
+
+func cloneCatalogRecord(record contracts.CatalogCapabilityRecord) contracts.CatalogCapabilityRecord {
+	raw, err := json.Marshal(record)
+	if err != nil {
+		return record
+	}
+	var cloned contracts.CatalogCapabilityRecord
+	if err := json.Unmarshal(raw, &cloned); err != nil {
+		return record
+	}
+	return cloned
 }
 
 func (h *Handler) createJob(ctx context.Context, subjectID string, record contracts.CatalogCapabilityRecord, req contracts.InvokeToolRequest, publicKey string) (contracts.Job, error) {

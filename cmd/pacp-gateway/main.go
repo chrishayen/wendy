@@ -7,7 +7,9 @@ import (
 	"os"
 	"strings"
 
+	"pacp/internal/components/catalog"
 	"pacp/internal/components/gateway"
+	"pacp/internal/contracts"
 )
 
 func main() {
@@ -17,10 +19,15 @@ func main() {
 	jobsURL := flag.String("jobs-url", os.Getenv("PACP_JOBS_URL"), "jobs service base URL")
 	leasesURL := flag.String("leases-url", os.Getenv("PACP_LEASES_URL"), "optional lease service base URL for agent-visible resource queue status")
 	artifactsURL := flag.String("artifacts-url", os.Getenv("PACP_ARTIFACTS_URL"), "artifact service base URL")
+	manifestPath := flag.String("manifest", os.Getenv("PACP_MANIFEST"), "optional provider manifest file or directory used as a static catalog when catalog-url is empty")
 	gatewayCredential := flag.String("gateway-credential", componentCredentialDefault("PACP_GATEWAY_CREDENTIAL"), "component credential for downstream calls; defaults to PACP_GATEWAY_CREDENTIAL or PACP_COMPONENT_TOKEN")
 	idempotencyStateFile := flag.String("idempotency-state-file", "", "optional JSON state file for public invocation idempotency")
 	flag.Parse()
-	requireURL("catalog-url", *catalogURL)
+
+	manifests := loadStaticManifests(*manifestPath)
+	if *catalogURL == "" && len(manifests) == 0 {
+		requireURL("catalog-url", *catalogURL)
+	}
 	requireURL("policy-url", *policyURL)
 	requireURL("jobs-url", *jobsURL)
 	requireURL("artifacts-url", *artifactsURL)
@@ -32,6 +39,7 @@ func main() {
 		LeasesURL:         *leasesURL,
 		ArtifactsURL:      *artifactsURL,
 		GatewayCredential: authorizationHeader(*gatewayCredential),
+		StaticManifests:   manifests,
 	}, *idempotencyStateFile)
 	if err != nil {
 		log.Fatal(err)
@@ -40,6 +48,17 @@ func main() {
 	if err := http.ListenAndServe(*addr, handler); err != nil {
 		log.Fatal(err)
 	}
+}
+
+func loadStaticManifests(path string) []contracts.ProviderManifest {
+	if strings.TrimSpace(path) == "" {
+		return nil
+	}
+	manifests, err := catalog.LoadManifests(path)
+	if err != nil {
+		log.Fatalf("load gateway manifests: %v", err)
+	}
+	return manifests
 }
 
 func componentCredentialDefault(primaryEnv string) string {
