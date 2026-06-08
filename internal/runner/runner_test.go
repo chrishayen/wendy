@@ -5,8 +5,11 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
+	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"pacp/internal/components/artifacts"
 	"pacp/internal/components/jobs"
@@ -94,6 +97,69 @@ func TestRunnerCompletesJobAndUploadsArtifact(t *testing.T) {
 	}
 }
 
+func TestRunnerWaitsForNodeManagedServiceStartup(t *testing.T) {
+	gets := 0
+	starts := 0
+	nodeServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/v1/node/services/svc_remote_provider":
+			gets++
+			status := "stopped"
+			if starts > 0 {
+				status = "starting"
+			}
+			if gets >= 3 {
+				status = "running"
+			}
+			writeRunnerTestSuccess(w, http.StatusOK, contracts.NodeService{ServiceID: "svc_remote_provider", Status: status})
+		case r.Method == http.MethodPost && r.URL.Path == "/v1/node/services/svc_remote_provider/start":
+			starts++
+			if got := r.Header.Get("Idempotency-Key"); got != "runner-start-svc_remote_provider" {
+				t.Fatalf("start idempotency key = %q", got)
+			}
+			writeRunnerTestSuccess(w, http.StatusAccepted, contracts.NodeService{ServiceID: "svc_remote_provider", Status: "starting"})
+		default:
+			t.Fatalf("unexpected node request %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer nodeServer.Close()
+
+	r := New(Config{
+		NodeURL:          nodeServer.URL,
+		NodeStartTimeout: 250 * time.Millisecond,
+		NodePollInterval: time.Millisecond,
+		Client:           nodeServer.Client(),
+	})
+	if err := r.ensureNodeService(context.Background(), "svc_remote_provider"); err != nil {
+		t.Fatalf("ensureNodeService: %v", err)
+	}
+	if starts != 1 || gets < 3 {
+		t.Fatalf("starts=%d gets=%d", starts, gets)
+	}
+}
+
+func TestRunnerTimesOutWaitingForNodeManagedServiceStartup(t *testing.T) {
+	nodeServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/v1/node/services/svc_slow_provider":
+			writeRunnerTestSuccess(w, http.StatusOK, contracts.NodeService{ServiceID: "svc_slow_provider", Status: "starting"})
+		default:
+			t.Fatalf("unexpected node request %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer nodeServer.Close()
+
+	r := New(Config{
+		NodeURL:          nodeServer.URL,
+		NodeStartTimeout: 5 * time.Millisecond,
+		NodePollInterval: time.Millisecond,
+		Client:           nodeServer.Client(),
+	})
+	if err := r.ensureNodeService(context.Background(), "svc_slow_provider"); err == nil {
+		t.Fatal("expected node start timeout")
+	}
+}
+
 func newFakeProvider(t *testing.T) *provider.Server {
 	t.Helper()
 	server, err := provider.NewServer(contracts.ProviderManifest{
@@ -151,4 +217,10 @@ func newFakeProvider(t *testing.T) *provider.Server {
 		t.Fatalf("new provider: %v", err)
 	}
 	return server
+}
+
+func writeRunnerTestSuccess(w http.ResponseWriter, status int, data any) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(contracts.SuccessEnvelope{OK: true, Data: data, Links: map[string]any{}, Meta: map[string]string{"request_id": "req_test", "schema_version": "v1"}})
 }

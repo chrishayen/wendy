@@ -17,6 +17,8 @@ func main() {
 	artifactsURL := flag.String("artifacts-url", os.Getenv("PACP_ARTIFACTS_URL"), "artifact service base URL")
 	nodeURL := flag.String("node-url", os.Getenv("PACP_NODE_URL"), "optional node service base URL")
 	credential := flag.String("credential", "", "component credential for downstream calls")
+	nodeStartTimeout := flag.Duration("node-start-timeout", 30*time.Second, "maximum time to wait for node-managed service startup")
+	nodeStartPoll := flag.Duration("node-start-poll", 500*time.Millisecond, "poll interval while waiting for node-managed service startup")
 	once := flag.Bool("once", false, "process at most one queued job and exit")
 	poll := flag.Duration("poll", time.Second, "poll interval")
 	flag.Parse()
@@ -30,6 +32,8 @@ func main() {
 		LeasesURL:           *leasesURL,
 		ArtifactsURL:        *artifactsURL,
 		NodeURL:             *nodeURL,
+		NodeStartTimeout:    *nodeStartTimeout,
+		NodePollInterval:    *nodeStartPoll,
 		ComponentCredential: *credential,
 	})
 	for {

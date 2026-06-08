@@ -25,6 +25,8 @@ type Config struct {
 	LeasesURL           string
 	ArtifactsURL        string
 	NodeURL             string
+	NodeStartTimeout    time.Duration
+	NodePollInterval    time.Duration
 	ComponentCredential string
 	Client              *http.Client
 }
@@ -47,6 +49,12 @@ func New(cfg Config) *Runner {
 	client := cfg.Client
 	if client == nil {
 		client = &http.Client{Timeout: 30 * time.Second}
+	}
+	if cfg.NodeStartTimeout <= 0 {
+		cfg.NodeStartTimeout = 30 * time.Second
+	}
+	if cfg.NodePollInterval <= 0 {
+		cfg.NodePollInterval = 500 * time.Millisecond
 	}
 	cfg.JobsURL = strings.TrimRight(cfg.JobsURL, "/")
 	cfg.LeasesURL = strings.TrimRight(cfg.LeasesURL, "/")
@@ -190,26 +198,49 @@ func (r *Runner) releaseLease(ctx context.Context, leaseID, holderID, reason str
 }
 
 func (r *Runner) ensureNodeService(ctx context.Context, serviceID string) error {
+	waitCtx, cancel := context.WithTimeout(ctx, r.cfg.NodeStartTimeout)
+	defer cancel()
+
+	startIssued := false
+	for {
+		service, err := r.getNodeService(waitCtx, serviceID)
+		if err != nil {
+			return err
+		}
+		if service.Status == "running" {
+			return nil
+		}
+		if !startIssued && service.Status != "starting" {
+			service, err = r.startNodeService(waitCtx, serviceID)
+			if err != nil {
+				return err
+			}
+			startIssued = true
+			if service.Status == "running" {
+				return nil
+			}
+		}
+		if startIssued && service.Status == "stopped" {
+			return fmt.Errorf("node service %s stopped during startup", serviceID)
+		}
+		select {
+		case <-waitCtx.Done():
+			return fmt.Errorf("node service %s did not become running before timeout: %w", serviceID, waitCtx.Err())
+		case <-time.After(r.cfg.NodePollInterval):
+		}
+	}
+}
+
+func (r *Runner) getNodeService(ctx context.Context, serviceID string) (contracts.NodeService, error) {
 	var service contracts.NodeService
-	if err := r.getJSON(ctx, r.cfg.NodeURL+"/v1/node/services/"+url.PathEscape(serviceID), &service); err != nil {
-		return err
-	}
-	if service.Status == "running" {
-		return nil
-	}
-	if err := r.postJSON(ctx, r.cfg.NodeURL+"/v1/node/services/"+url.PathEscape(serviceID)+"/start", nil, "runner-start-"+serviceID, &service); err != nil {
-		return err
-	}
-	if service.Status == "running" {
-		return nil
-	}
-	if err := r.getJSON(ctx, r.cfg.NodeURL+"/v1/node/services/"+url.PathEscape(serviceID), &service); err != nil {
-		return err
-	}
-	if service.Status != "running" {
-		return fmt.Errorf("node service %s is %s", serviceID, service.Status)
-	}
-	return nil
+	err := r.getJSON(ctx, r.cfg.NodeURL+"/v1/node/services/"+url.PathEscape(serviceID), &service)
+	return service, err
+}
+
+func (r *Runner) startNodeService(ctx context.Context, serviceID string) (contracts.NodeService, error) {
+	var service contracts.NodeService
+	err := r.postJSON(ctx, r.cfg.NodeURL+"/v1/node/services/"+url.PathEscape(serviceID)+"/start", nil, "runner-start-"+serviceID, &service)
+	return service, err
 }
 
 func (r *Runner) invokeProvider(ctx context.Context, jobID string, plan executionPlan, lease *contracts.Lease) (contracts.ProviderInvokeResponse, error) {
