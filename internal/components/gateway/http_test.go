@@ -192,6 +192,37 @@ func TestGatewayReplaysS003PublicJobAndArtifactFixtures(t *testing.T) {
 	}
 }
 
+func TestGatewayReplaysS003AgentUserFixtures(t *testing.T) {
+	actorPkg := loadS003FixturePackage(t, "agent-user")
+	dependencyPkg := loadS003GatewayFixturePackage(t)
+	deps := newS003GatewayFixtureDependencies(t, dependencyPkg)
+	defer deps.server.Close()
+
+	handler := NewHandler(Config{
+		CatalogURL:        deps.server.URL,
+		PolicyURL:         deps.server.URL,
+		JobsURL:           deps.server.URL,
+		ArtifactsURL:      deps.server.URL,
+		GatewayCredential: "Bearer token_s003_gateway",
+		Client:            deps.server.Client(),
+	})
+
+	for _, fixtureID := range []string{
+		"public_tools_list_ok",
+		"public_tool_detail_ok",
+		"public_invoke_async_ok",
+		"public_cancel_queued_ok",
+		"public_job_running",
+		"public_job_succeeded",
+		"public_artifact_list_ok",
+		"public_artifact_content_ok",
+	} {
+		if _, err := deps.replayPackage(handler, actorPkg, fixtureID); err != nil {
+			t.Fatalf("replay %s: %v", fixtureID, err)
+		}
+	}
+}
+
 func TestGatewayPropagatesRequestIDToDownstreams(t *testing.T) {
 	seen := map[string]string{}
 	downstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -280,9 +311,13 @@ func newS003GatewayFixtureDependencies(t *testing.T, pkg testkit.FixturePackage)
 }
 
 func (d *s003GatewayFixtureDependencies) replay(handler http.Handler, fixtureID string) (testkit.ReplayResult, error) {
+	return d.replayPackage(handler, d.pkg, fixtureID)
+}
+
+func (d *s003GatewayFixtureDependencies) replayPackage(handler http.Handler, pkg testkit.FixturePackage, fixtureID string) (testkit.ReplayResult, error) {
 	d.activePublicFixture = fixtureID
 	defer func() { d.activePublicFixture = "" }()
-	return testkit.ReplayHTTPFixture(handler, d.pkg, fixtureID)
+	return testkit.ReplayHTTPFixture(handler, pkg, fixtureID)
 }
 
 func (d *s003GatewayFixtureDependencies) serveHTTP(w http.ResponseWriter, r *http.Request) {
@@ -440,14 +475,18 @@ func (d *s003GatewayFixtureDependencies) fail(w http.ResponseWriter, format stri
 }
 
 func loadS003GatewayFixturePackage(t *testing.T) testkit.FixturePackage {
+	return loadS003FixturePackage(t, "c04-agent-tool-gateway")
+}
+
+func loadS003FixturePackage(t *testing.T, owner string) testkit.FixturePackage {
 	t.Helper()
 	scenario, err := testkit.LoadScenario(filepath.Join("..", "..", "..", "testdata", "contract-sim"), filepath.Join("fixtures", "S003", "manifest.json"))
 	if err != nil {
 		t.Fatalf("load S003 fixtures: %v", err)
 	}
-	pkg, ok := testkit.FindPackage(scenario, "c04-agent-tool-gateway")
+	pkg, ok := testkit.FindPackage(scenario, owner)
 	if !ok {
-		t.Fatal("c04-agent-tool-gateway fixture package not found")
+		t.Fatalf("%s fixture package not found", owner)
 	}
 	return pkg
 }
