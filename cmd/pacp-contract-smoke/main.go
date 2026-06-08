@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"strings"
 	"time"
@@ -34,6 +35,7 @@ func run(args []string, stdout, stderr io.Writer, httpClient *http.Client) int {
 	inputRaw := flags.String("input", "{}", "JSON object input for provider invocation")
 	openAPIPaths := flags.String("openapi", "", "optional comma-separated OpenAPI files to validate")
 	distributed := flags.Bool("distributed", false, "run the primary-plus-node distributed smoke suite")
+	fakePublicAPIs := flags.Bool("fake-public-apis", false, "run contract checks against reusable C15 fake public APIs")
 	timeout := flags.Duration("timeout", 5*time.Second, "smoke check timeout")
 	if err := flags.Parse(args); err != nil {
 		return 2
@@ -43,6 +45,9 @@ func run(args []string, stdout, stderr io.Writer, httpClient *http.Client) int {
 	}
 	if *distributed {
 		return runDistributedSmoke(*timeout, stdout, stderr)
+	}
+	if *fakePublicAPIs {
+		return runFakePublicAPISmoke(*timeout, stdout, stderr)
 	}
 	if *componentURL != "" {
 		return runComponentSmoke(*componentURL, *componentKind, *componentCredential, *timeout, stdout, stderr, httpClient)
@@ -98,6 +103,94 @@ func runDistributedSmoke(timeout time.Duration, stdout, stderr io.Writer) int {
 		return 0
 	}
 	for _, check := range report.Checks {
+		if !check.OK {
+			fmt.Fprintf(stderr, "%s: %s\n", check.Name, check.Error)
+		}
+	}
+	return 1
+}
+
+type fakePublicAPICheck struct {
+	Name       string
+	OK         bool
+	HTTPStatus int
+	Error      string
+}
+
+func runFakePublicAPISmoke(timeout time.Duration, stdout, stderr io.Writer) int {
+	ctx := context.Background()
+	if timeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, timeout)
+		defer cancel()
+	}
+	checks := []fakePublicAPICheck{}
+	componentKinds := []string{"artifacts", "catalog", "gateway", "jobs", "leases", "node", "policy", "runner"}
+	for _, kind := range componentKinds {
+		handler, err := testkit.NewFakeComponentHandler(testkit.FakeComponentConfig{Kind: kind})
+		if err != nil {
+			checks = append(checks, fakePublicAPICheck{Name: "fake.component." + kind + ".create", Error: err.Error()})
+			continue
+		}
+		server := httptest.NewServer(handler)
+		report := testkit.CheckComponent(ctx, server.Client(), testkit.ComponentCheckOptions{
+			BaseURL:   server.URL,
+			Kind:      kind,
+			RequestID: "req_contract_fake_" + kind,
+		})
+		server.Close()
+		for _, check := range report.Checks {
+			checks = append(checks, fakePublicAPICheck{
+				Name:       "fake.component." + kind + "." + check.Name,
+				OK:         check.OK,
+				HTTPStatus: check.HTTPStatus,
+				Error:      check.Error,
+			})
+		}
+	}
+
+	handler, err := testkit.NewFakeProviderHandler(testkit.FakeProviderConfig{Endpoint: "http://provider.fake"})
+	if err != nil {
+		checks = append(checks, fakePublicAPICheck{Name: "fake.provider.create", Error: err.Error()})
+	} else {
+		server := httptest.NewServer(handler)
+		report := testkit.CheckProvider(ctx, server.Client(), testkit.ProviderCheckOptions{
+			BaseURL:      server.URL,
+			CapabilityID: "cap_echo",
+			Input:        map[string]any{"message": "hello"},
+			RequestID:    "req_contract_fake_provider",
+		})
+		server.Close()
+		for _, check := range report.Checks {
+			checks = append(checks, fakePublicAPICheck{
+				Name:       "fake.provider." + check.Name,
+				OK:         check.OK,
+				HTTPStatus: check.HTTPStatus,
+				Error:      check.Error,
+			})
+		}
+	}
+
+	passed := true
+	fmt.Fprintf(stdout, "fake-public-apis=checked components=%d checks=%d\n", len(componentKinds), len(checks))
+	for _, check := range checks {
+		status := "fail"
+		if check.OK {
+			status = "pass"
+		} else {
+			passed = false
+		}
+		if check.HTTPStatus != 0 {
+			fmt.Fprintf(stdout, "check=%s status=%s http_status=%d\n", check.Name, status, check.HTTPStatus)
+			continue
+		}
+		fmt.Fprintf(stdout, "check=%s status=%s\n", check.Name, status)
+	}
+	if passed {
+		fmt.Fprintln(stdout, "fake-public-apis=pass")
+		return 0
+	}
+	for _, check := range checks {
 		if !check.OK {
 			fmt.Fprintf(stderr, "%s: %s\n", check.Name, check.Error)
 		}

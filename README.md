@@ -89,6 +89,7 @@ Contract simulation data is kept as test input, not as product behavior.
 go test ./...
 go run ./cmd/pacp-contract-smoke
 go run ./cmd/pacp-contract-smoke -openapi openapi/public-gateway.v1.yaml,openapi/component-services.v1.yaml
+go run ./cmd/pacp-contract-smoke -fake-public-apis
 go run ./cmd/pacp-contract-smoke -distributed
 go run ./cmd/pacp-contract-smoke -component-url http://localhost:18082 -component-kind jobs -component-credential token_component
 go run ./cmd/pacp-contract-smoke -provider-url http://localhost:18088 -provider-credential token_worker -capability-id cap_dev_echo -input '{"message":"hello"}'

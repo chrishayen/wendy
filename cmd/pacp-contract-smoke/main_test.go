@@ -221,6 +221,27 @@ components:
 	}
 }
 
+func TestRunFakePublicAPISmokePasses(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := run([]string{"-fake-public-apis", "-timeout", "5s"}, &stdout, &stderr, http.DefaultClient)
+	if code != 0 {
+		t.Fatalf("code=%d stderr=%s stdout=%s", code, stderr.String(), stdout.String())
+	}
+	for _, expected := range []string{
+		"fake-public-apis=checked",
+		"check=fake.component.catalog.component.surface.catalog.capabilities status=pass",
+		"check=fake.component.jobs.component.surface.jobs.list status=pass",
+		"check=fake.component.node.component.surface.node.resources status=pass",
+		"check=fake.provider.provider.invoke status=pass",
+		"check=fake.provider.provider.invalid_input status=pass",
+		"fake-public-apis=pass",
+	} {
+		if !strings.Contains(stdout.String(), expected) {
+			t.Fatalf("stdout missing %q:\n%s", expected, stdout.String())
+		}
+	}
+}
+
 func TestRunDistributedSmokePasses(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	code := run([]string{"-distributed", "-timeout", "5s"}, &stdout, &stderr, http.DefaultClient)
