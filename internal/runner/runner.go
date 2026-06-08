@@ -74,6 +74,29 @@ type keepaliveFailure struct {
 	logFields     map[string]any
 }
 
+type artifactFailure struct {
+	contracts.ErrorObject
+	stage         string
+	logMessage    string
+	releaseReason string
+}
+
+type artifactStageError struct {
+	Stage string
+	Err   error
+}
+
+func (e artifactStageError) Error() string {
+	if e.Err == nil {
+		return e.Stage
+	}
+	return e.Err.Error()
+}
+
+func (e artifactStageError) Unwrap() error {
+	return e.Err
+}
+
 func (e keepaliveFailure) Error() string {
 	if e.Message != "" {
 		return e.Message
@@ -240,14 +263,17 @@ func (r *Runner) runJob(ctx context.Context, job contracts.Job) error {
 	if len(response.ContentRefs) > 0 {
 		fetched, err := r.fetchProviderContentRefs(ctx, plan.Route.ProviderEndpoint, response.ContentRefs)
 		if err != nil {
-			_ = r.failJob(ctx, job.JobID, "artifact_upload_failed", err.Error())
+			err = artifactStageError{Stage: "provider_content", Err: err}
+			failure := r.failArtifactMaterialization(ctx, job.JobID, err)
+			leaseReleaseReason = failure.releaseReason
 			return err
 		}
 		artifactsToUpload = append(artifactsToUpload, fetched...)
 	}
 	artifactIDs, err := r.uploadArtifacts(ctx, job.JobID, plan.SubjectID, plan.CapabilityID, artifactsToUpload)
 	if err != nil {
-		_ = r.failJob(ctx, job.JobID, "artifact_upload_failed", err.Error())
+		failure := r.failArtifactMaterialization(ctx, job.JobID, err)
+		leaseReleaseReason = failure.releaseReason
 		return err
 	}
 	if err := r.completeJob(ctx, job.JobID, artifactIDs); err != nil {
@@ -776,16 +802,53 @@ func normalizeLeaseKeepaliveError(leaseID string, err error) keepaliveFailure {
 	return failure
 }
 
+func (r *Runner) failArtifactMaterialization(ctx context.Context, jobID string, err error) artifactFailure {
+	failure := normalizeArtifactError(err)
+	fields := map[string]any{"code": failure.Code}
+	if failure.stage != "" {
+		fields["stage"] = failure.stage
+	}
+	_ = r.appendLogFields(ctx, jobID, "error", failure.logMessage, fields)
+	_ = r.failJobWithError(ctx, jobID, failure.ErrorObject)
+	return failure
+}
+
+func normalizeArtifactError(err error) artifactFailure {
+	failure := artifactFailure{
+		ErrorObject: contracts.ErrorObject{
+			Code:      "artifact_upload_failed",
+			Message:   err.Error(),
+			Retryable: false,
+		},
+		stage:         "unknown",
+		logMessage:    "artifact materialization failed",
+		releaseReason: "artifact upload failed",
+	}
+	var stageErr artifactStageError
+	if errors.As(err, &stageErr) && stageErr.Stage != "" {
+		failure.stage = stageErr.Stage
+	}
+	var componentErr componentError
+	if errors.As(err, &componentErr) {
+		failure.Retryable = componentErr.Retryable
+	}
+	return failure
+}
+
+func artifactStage(stage string, err error) error {
+	return artifactStageError{Stage: stage, Err: err}
+}
+
 func (r *Runner) uploadArtifacts(ctx context.Context, jobID, ownerSubjectID, capabilityID string, artifacts []contracts.ProviderArtifact) ([]string, error) {
 	ids := make([]string, 0, len(artifacts))
 	for index, artifact := range artifacts {
 		body, err := base64.StdEncoding.DecodeString(artifact.ContentBase64)
 		if err != nil {
-			return nil, fmt.Errorf("provider artifact content decode failed: %w", err)
+			return nil, artifactStage("provider_artifact", fmt.Errorf("provider artifact content decode failed: %w", err))
 		}
 		checksum, digest := checksumAndDigest(body)
 		if artifact.Checksum != "" && artifact.Checksum != checksum {
-			return nil, fmt.Errorf("provider artifact checksum mismatch")
+			return nil, artifactStage("provider_artifact", fmt.Errorf("provider artifact checksum mismatch"))
 		}
 		size := int64(len(body))
 		name := artifact.Name
@@ -810,14 +873,14 @@ func (r *Runner) uploadArtifacts(ctx context.Context, jobID, ownerSubjectID, cap
 		}
 		keyPrefix := "runner-artifact-" + jobID + "-" + strconv.Itoa(index)
 		if err := r.postJSON(ctx, r.cfg.ArtifactsURL+"/v1/artifact-uploads", create, keyPrefix+"-create", &upload); err != nil {
-			return nil, fmt.Errorf("artifact upload create failed: %w", err)
+			return nil, artifactStage("create", fmt.Errorf("artifact upload create failed: %w", err))
 		}
 		if err := r.putBytes(ctx, r.cfg.ArtifactsURL+"/v1/artifact-uploads/"+url.PathEscape(upload.UploadID)+"/content", body, mediaType, digest, keyPrefix+"-content", &upload); err != nil {
-			return nil, fmt.Errorf("artifact upload content failed: %w", err)
+			return nil, artifactStage("content", fmt.Errorf("artifact upload content failed: %w", err))
 		}
 		var completed contracts.Artifact
 		if err := r.postJSON(ctx, r.cfg.ArtifactsURL+"/v1/artifact-uploads/"+url.PathEscape(upload.UploadID)+"/complete", contracts.CompleteArtifactUploadRequest{Checksum: checksum, Size: size}, keyPrefix+"-complete", &completed); err != nil {
-			return nil, fmt.Errorf("artifact upload complete failed: %w", err)
+			return nil, artifactStage("complete", fmt.Errorf("artifact upload complete failed: %w", err))
 		}
 		ids = append(ids, completed.ArtifactID)
 	}

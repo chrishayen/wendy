@@ -669,6 +669,198 @@ func TestRunnerFailsJobWithArtifactUploadCreateStage(t *testing.T) {
 	if !strings.Contains(failed.TerminalError.Message, "artifact upload create failed") || !strings.Contains(failed.TerminalError.Message, "artifact store unavailable") {
 		t.Fatalf("terminal error = %#v", failed.TerminalError)
 	}
+	if !failed.TerminalError.Retryable {
+		t.Fatalf("terminal error should preserve retryability: %#v", failed.TerminalError)
+	}
+	assertRunnerArtifactFailureLog(t, jobStore, created.JobID, "create")
+}
+
+func TestRunnerFailsJobWithArtifactUploadContentStageAndReleasesLease(t *testing.T) {
+	runArtifactUploadStageFailure(t, "content", "artifact upload content failed")
+}
+
+func TestRunnerFailsJobWithArtifactUploadCompleteStageAndReleasesLease(t *testing.T) {
+	runArtifactUploadStageFailure(t, "complete", "artifact upload complete failed")
+}
+
+func runArtifactUploadStageFailure(t *testing.T, failStage string, wantMessage string) {
+	t.Helper()
+	jobStore := jobs.NewStore()
+	jobsServer := httptest.NewServer(jobs.NewHandler(jobStore))
+	defer jobsServer.Close()
+
+	leaseStore := leases.NewStore()
+	if _, err := leaseStore.RegisterResource(contracts.RegisterResourceRequest{Selector: "gpu", Status: contracts.ResourceAvailable}); err != nil {
+		t.Fatalf("register resource: %v", err)
+	}
+	leasesServer := httptest.NewServer(leases.NewHandler(leaseStore))
+	defer leasesServer.Close()
+
+	body := []byte("artifact bytes")
+	checksum, digest := checksumAndDigest(body)
+	providerServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/v1/provider/capabilities/cap_artifact/invoke" {
+			t.Fatalf("unexpected provider request %s %s", r.Method, r.URL.Path)
+		}
+		writeRunnerTestSuccess(w, http.StatusOK, contracts.ProviderInvokeResponse{
+			Output: map[string]any{"artifact_count": 1},
+			Artifacts: []contracts.ProviderArtifact{{
+				Name:          "fake-image.txt",
+				MediaType:     "text/plain",
+				ContentBase64: base64.StdEncoding.EncodeToString(body),
+				Checksum:      checksum,
+			}},
+		})
+	}))
+	defer providerServer.Close()
+
+	var sawContent bool
+	var sawComplete bool
+	artifactsServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/v1/artifact-uploads":
+			writeRunnerTestSuccess(w, http.StatusCreated, contracts.ArtifactUploadSession{
+				UploadID:         "upload_runner_failure",
+				State:            contracts.ArtifactUploadCreated,
+				Name:             "fake-image.txt",
+				MediaType:        "text/plain",
+				ProducerRef:      "job_runner_failure",
+				OwnerSubjectID:   "sub_agent",
+				ExpectedSize:     ptrInt64(int64(len(body))),
+				ExpectedChecksum: checksum,
+			})
+		case r.Method == http.MethodPut && r.URL.Path == "/v1/artifact-uploads/upload_runner_failure/content":
+			sawContent = true
+			if r.Header.Get("Content-Type") != "text/plain" || r.Header.Get("Digest") != digest {
+				t.Fatalf("content headers Content-Type=%q Digest=%q", r.Header.Get("Content-Type"), r.Header.Get("Digest"))
+			}
+			if failStage == "content" {
+				writeRunnerTestError(w, http.StatusServiceUnavailable, contracts.ErrorObject{
+					Code:      "artifact_store_unavailable",
+					Message:   "artifact content backend unavailable",
+					Retryable: true,
+				})
+				return
+			}
+			writeRunnerTestSuccess(w, http.StatusOK, contracts.ArtifactUploadSession{
+				UploadID:         "upload_runner_failure",
+				State:            contracts.ArtifactUploadReceived,
+				Name:             "fake-image.txt",
+				MediaType:        "text/plain",
+				ProducerRef:      "job_runner_failure",
+				OwnerSubjectID:   "sub_agent",
+				ReceivedSize:     ptrInt64(int64(len(body))),
+				ExpectedSize:     ptrInt64(int64(len(body))),
+				ExpectedChecksum: checksum,
+			})
+		case r.Method == http.MethodPost && r.URL.Path == "/v1/artifact-uploads/upload_runner_failure/complete":
+			sawComplete = true
+			if failStage != "complete" {
+				t.Fatalf("unexpected complete request for stage %s", failStage)
+			}
+			writeRunnerTestError(w, http.StatusServiceUnavailable, contracts.ErrorObject{
+				Code:      "artifact_store_unavailable",
+				Message:   "artifact completion backend unavailable",
+				Retryable: true,
+			})
+		default:
+			t.Fatalf("unexpected artifact request %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer artifactsServer.Close()
+
+	route := contracts.CapabilityRoute{
+		CapabilityID:       "cap_artifact",
+		ServiceID:          "svc_artifact_provider",
+		ProviderEndpoint:   providerServer.URL,
+		ProviderHealthPath: "/v1/provider/health",
+		ProviderInvokePath: "/v1/provider/capabilities/cap_artifact/invoke",
+		ServiceStartMode:   "manual",
+		ResourceHints:      []contracts.ResourceHint{{Selector: "gpu", Required: true}},
+		ArtifactHints:      []contracts.ArtifactHint{{MediaType: "text/plain", Count: "one"}},
+	}
+	created, _, err := jobStore.Create(contracts.CreateJobRequest{
+		RequesterID:  "sub_agent",
+		CapabilityID: "cap_artifact",
+		InputSummary: map[string]any{"prompt_present": true},
+		Metadata: map[string]any{"execution_plan": map[string]any{
+			"capability_id":     "cap_artifact",
+			"subject_id":        "sub_agent",
+			"input":             map[string]any{"prompt": "red mug"},
+			"route":             route,
+			"resource_selector": "gpu",
+			"timeout_seconds":   30,
+		}},
+	}, "create-artifact-"+failStage+"-failure-job")
+	if err != nil {
+		t.Fatalf("create job: %v", err)
+	}
+
+	r := New(Config{
+		WorkerID:       "runner_test",
+		JobsURL:        jobsServer.URL,
+		LeasesURL:      leasesServer.URL,
+		ArtifactsURL:   artifactsServer.URL,
+		ActorSubjectID: "sub_runner_test",
+		Client:         jobsServer.Client(),
+	})
+	jobID, ok, err := r.RunOnce(context.Background())
+	if err == nil {
+		t.Fatalf("expected artifact upload %s error", failStage)
+	}
+	if !strings.Contains(err.Error(), wantMessage) {
+		t.Fatalf("error = %v", err)
+	}
+	if !ok || jobID != created.JobID {
+		t.Fatalf("run result jobID=%q ok=%v", jobID, ok)
+	}
+	if !sawContent {
+		t.Fatal("artifact content upload was not attempted")
+	}
+	if failStage == "complete" && !sawComplete {
+		t.Fatal("artifact complete was not attempted")
+	}
+	if failStage == "content" && sawComplete {
+		t.Fatal("artifact complete should not run after content failure")
+	}
+
+	failed, err := jobStore.Get(created.JobID)
+	if err != nil {
+		t.Fatalf("get failed job: %v", err)
+	}
+	if failed.State != contracts.JobFailed || failed.TerminalError == nil || failed.TerminalError.Code != "artifact_upload_failed" || !failed.TerminalError.Retryable {
+		t.Fatalf("failed job = %#v", failed)
+	}
+	if !strings.Contains(failed.TerminalError.Message, wantMessage) {
+		t.Fatalf("terminal error = %#v", failed.TerminalError)
+	}
+	assertRunnerArtifactFailureLog(t, jobStore, created.JobID, failStage)
+	auditEvents := leaseStore.AuditEvents()
+	if len(auditEvents) != 1 || auditEvents[0].ReleaseReason != "artifact upload failed" || auditEvents[0].HolderID != created.JobID {
+		t.Fatalf("lease audit events = %#v", auditEvents)
+	}
+}
+
+func assertRunnerArtifactFailureLog(t *testing.T, store *jobs.Store, jobID string, stage string) {
+	t.Helper()
+	logs, _, err := store.Logs(jobID, "", 20)
+	if err != nil {
+		t.Fatalf("read logs: %v", err)
+	}
+	for _, entry := range logs {
+		if entry.Level != "error" || entry.Message != "artifact materialization failed" {
+			continue
+		}
+		if entry.Fields["code"] != "artifact_upload_failed" || entry.Fields["stage"] != stage {
+			t.Fatalf("artifact failure log = %#v", entry)
+		}
+		return
+	}
+	t.Fatalf("artifact failure log for stage %s not found: %#v", stage, logs)
+}
+
+func ptrInt64(value int64) *int64 {
+	return &value
 }
 
 func TestRunnerPreservesProviderTimeoutFailureCodeAndReleaseReason(t *testing.T) {
