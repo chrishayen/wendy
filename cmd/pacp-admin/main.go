@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"pacp/internal/contracts"
+	"pacp/internal/observability"
 )
 
 type adminConfig struct {
@@ -33,6 +34,7 @@ type adminConfig struct {
 	GatewayToken   string
 	NodeToken      string
 	RunnerToken    string
+	RequestID      string
 	Timeout        time.Duration
 }
 
@@ -48,6 +50,7 @@ type serviceTarget struct {
 	ServiceID   string
 	NodeID      string
 	ConfigError string
+	RequestID   string
 }
 
 type healthReport struct {
@@ -153,9 +156,14 @@ func run(args []string, stdout, stderr io.Writer, httpClient *http.Client) int {
 	flags.StringVar(&cfg.GatewayToken, "gateway-token", envFirst("PACP_GATEWAY_TOKEN", "PACP_AGENT_TOKEN"), "optional gateway API bearer token or raw token")
 	flags.StringVar(&cfg.NodeToken, "node-token", os.Getenv("PACP_NODE_TOKEN"), "optional node API bearer token or raw token")
 	flags.StringVar(&cfg.RunnerToken, "runner-token", os.Getenv("PACP_RUNNER_MONITOR_TOKEN"), "optional runner monitor bearer token or raw token")
+	flags.StringVar(&cfg.RequestID, "request-id", os.Getenv("PACP_REQUEST_ID"), "optional request id propagated as X-Request-ID")
 	flags.DurationVar(&cfg.Timeout, "timeout", 5*time.Second, "per-command timeout")
 	if err := flags.Parse(args); err != nil {
 		return 2
+	}
+	cfg.RequestID = strings.TrimSpace(cfg.RequestID)
+	if cfg.RequestID == "" {
+		cfg.RequestID = observability.NewRequestID("req_admin")
 	}
 	remaining := flags.Args()
 	if len(remaining) == 0 {
@@ -201,6 +209,7 @@ type alertOptions struct {
 	QueueDepthThreshold       int
 	RunnerHeartbeatStaleAfter time.Duration
 	Now                       time.Time
+	RequestID                 string
 }
 
 type diagnosticFinding struct {
@@ -295,6 +304,7 @@ func alertsCommand(cfg adminConfig, httpClient *http.Client, args []string, stdo
 		QueueDepthThreshold:       *queueDepthThreshold,
 		RunnerHeartbeatStaleAfter: *runnerHeartbeatStaleAfter,
 		Now:                       time.Now(),
+		RequestID:                 cfg.RequestID,
 	})
 	if err := writeJSON(stdout, report); err != nil {
 		fmt.Fprintf(stderr, "write alerts report: %v\n", err)
@@ -372,7 +382,7 @@ func catalogImportCommand(cfg adminConfig, httpClient *http.Client, args []strin
 			"response":   envelope,
 		})
 		if status < 200 || status >= 300 {
-			if err := writeJSON(stdout, map[string]any{"ok": false, "data": map[string]any{"items": results}, "links": map[string]any{}, "meta": map[string]string{"schema_version": "v1"}}); err != nil {
+			if err := writeJSON(stdout, map[string]any{"ok": false, "data": map[string]any{"items": results}, "links": map[string]any{}, "meta": map[string]string{"schema_version": "v1", "request_id": cfg.RequestID}}); err != nil {
 				fmt.Fprintln(stderr, err)
 			}
 			fmt.Fprintf(stderr, "component returned HTTP %d\n", status)
@@ -383,7 +393,7 @@ func catalogImportCommand(cfg adminConfig, httpClient *http.Client, args []strin
 		"ok":    true,
 		"data":  map[string]any{"items": results},
 		"links": map[string]any{},
-		"meta":  map[string]string{"schema_version": "v1", "admin_command": "catalog import"},
+		"meta":  map[string]string{"schema_version": "v1", "admin_command": "catalog import", "request_id": cfg.RequestID},
 	})
 }
 
@@ -1117,7 +1127,7 @@ func diagnoseJobCommand(cfg adminConfig, httpClient *http.Client, args []string,
 		"ok":    true,
 		"data":  data,
 		"links": map[string]any{"job": "/v1/jobs/" + jobID, "logs": "/v1/jobs/" + jobID + "/logs"},
-		"meta":  map[string]string{"schema_version": "v1", "admin_command": "diagnose job"},
+		"meta":  map[string]string{"schema_version": "v1", "admin_command": "diagnose job", "request_id": cfg.RequestID},
 	})
 }
 
@@ -1155,7 +1165,7 @@ func diagnoseResourceCommand(cfg adminConfig, httpClient *http.Client, args []st
 			"resource":   "/v1/resources/" + resourceID,
 			"inspection": "/v1/resources/" + resourceID + "/inspection",
 		},
-		"meta": map[string]string{"schema_version": "v1", "admin_command": "diagnose resource"},
+		"meta": map[string]string{"schema_version": "v1", "admin_command": "diagnose resource", "request_id": cfg.RequestID},
 	})
 }
 
@@ -1652,12 +1662,12 @@ func checkHealth(cfg adminConfig, httpClient *http.Client, opts healthOptions) h
 	}
 	componentCredential := authorizationHeader(cfg.ComponentToken)
 	targets := []serviceTarget{
-		{Name: "catalog", Kind: "component", URL: cfg.CatalogURL, HealthPath: "/v1/catalog/health", Credential: componentCredential, Required: true},
-		{Name: "jobs", Kind: "component", URL: cfg.JobsURL, HealthPath: "/v1/jobs/health", Credential: componentCredential, Required: true},
-		{Name: "leases", Kind: "component", URL: cfg.LeasesURL, HealthPath: "/v1/leases/health", Credential: componentCredential, Required: true},
-		{Name: "artifacts", Kind: "component", URL: cfg.ArtifactsURL, HealthPath: "/v1/artifacts/health", Credential: componentCredential, Required: true},
-		{Name: "policy", Kind: "component", URL: cfg.PolicyURL, HealthPath: "/v1/policy/health", Credential: componentCredential, Required: true},
-		{Name: "gateway", Kind: "component", URL: cfg.GatewayURL, HealthPath: "/v1/gateway/health", Required: true},
+		{Name: "catalog", Kind: "component", URL: cfg.CatalogURL, HealthPath: "/v1/catalog/health", Credential: componentCredential, Required: true, RequestID: cfg.RequestID},
+		{Name: "jobs", Kind: "component", URL: cfg.JobsURL, HealthPath: "/v1/jobs/health", Credential: componentCredential, Required: true, RequestID: cfg.RequestID},
+		{Name: "leases", Kind: "component", URL: cfg.LeasesURL, HealthPath: "/v1/leases/health", Credential: componentCredential, Required: true, RequestID: cfg.RequestID},
+		{Name: "artifacts", Kind: "component", URL: cfg.ArtifactsURL, HealthPath: "/v1/artifacts/health", Credential: componentCredential, Required: true, RequestID: cfg.RequestID},
+		{Name: "policy", Kind: "component", URL: cfg.PolicyURL, HealthPath: "/v1/policy/health", Credential: componentCredential, Required: true, RequestID: cfg.RequestID},
+		{Name: "gateway", Kind: "component", URL: cfg.GatewayURL, HealthPath: "/v1/gateway/health", Required: true, RequestID: cfg.RequestID},
 	}
 	targets = append(targets, nodeHealthTargets(cfg)...)
 	if target, ok := runnerHealthTarget(cfg); ok {
@@ -1671,6 +1681,7 @@ func checkHealth(cfg adminConfig, httpClient *http.Client, opts healthOptions) h
 			"schema_version":  "v1",
 			"admin_command":   "health",
 			"optional_target": "node",
+			"request_id":      cfg.RequestID,
 		},
 	}
 	for _, target := range targets {
@@ -1706,6 +1717,7 @@ func collectMetrics(cfg adminConfig, httpClient *http.Client) metricsReport {
 			"schema_version":  "v1",
 			"admin_command":   "metrics",
 			"optional_target": "node",
+			"request_id":      cfg.RequestID,
 		},
 	}
 	for _, target := range targets {
@@ -1718,12 +1730,12 @@ func collectMetrics(cfg adminConfig, httpClient *http.Client) metricsReport {
 func metricsTargets(cfg adminConfig) []serviceTarget {
 	componentCredential := authorizationHeader(cfg.ComponentToken)
 	targets := []serviceTarget{
-		{Name: "catalog", Kind: "component", URL: cfg.CatalogURL, MetricsPath: "/v1/catalog/metrics", Credential: componentCredential, Required: true},
-		{Name: "jobs", Kind: "component", URL: cfg.JobsURL, MetricsPath: "/v1/jobs/metrics", Credential: componentCredential, Required: true},
-		{Name: "leases", Kind: "component", URL: cfg.LeasesURL, MetricsPath: "/v1/leases/metrics", Credential: componentCredential, Required: true},
-		{Name: "artifacts", Kind: "component", URL: cfg.ArtifactsURL, MetricsPath: "/v1/artifacts/metrics", Credential: componentCredential, Required: true},
-		{Name: "policy", Kind: "component", URL: cfg.PolicyURL, MetricsPath: "/v1/policy/metrics", Credential: componentCredential, Required: true},
-		{Name: "gateway", Kind: "component", URL: cfg.GatewayURL, MetricsPath: "/v1/gateway/metrics", Required: true},
+		{Name: "catalog", Kind: "component", URL: cfg.CatalogURL, MetricsPath: "/v1/catalog/metrics", Credential: componentCredential, Required: true, RequestID: cfg.RequestID},
+		{Name: "jobs", Kind: "component", URL: cfg.JobsURL, MetricsPath: "/v1/jobs/metrics", Credential: componentCredential, Required: true, RequestID: cfg.RequestID},
+		{Name: "leases", Kind: "component", URL: cfg.LeasesURL, MetricsPath: "/v1/leases/metrics", Credential: componentCredential, Required: true, RequestID: cfg.RequestID},
+		{Name: "artifacts", Kind: "component", URL: cfg.ArtifactsURL, MetricsPath: "/v1/artifacts/metrics", Credential: componentCredential, Required: true, RequestID: cfg.RequestID},
+		{Name: "policy", Kind: "component", URL: cfg.PolicyURL, MetricsPath: "/v1/policy/metrics", Credential: componentCredential, Required: true, RequestID: cfg.RequestID},
+		{Name: "gateway", Kind: "component", URL: cfg.GatewayURL, MetricsPath: "/v1/gateway/metrics", Required: true, RequestID: cfg.RequestID},
 	}
 	targets = append(targets, nodeMetricsTargets(cfg)...)
 	if target, ok := runnerMetricsTarget(cfg); ok {
@@ -1742,6 +1754,7 @@ func runnerHealthTarget(cfg adminConfig) (serviceTarget, bool) {
 		URL:        cfg.RunnerURL,
 		HealthPath: "/v1/runner/health",
 		Credential: authorizationHeader(cfg.RunnerToken),
+		RequestID:  cfg.RequestID,
 	}, true
 }
 
@@ -1755,6 +1768,7 @@ func runnerMetricsTarget(cfg adminConfig) (serviceTarget, bool) {
 		URL:         cfg.RunnerURL,
 		MetricsPath: "/v1/runner/metrics",
 		Credential:  authorizationHeader(cfg.RunnerToken),
+		RequestID:   cfg.RequestID,
 	}, true
 }
 
@@ -1777,6 +1791,7 @@ func nodeMetricsTargets(cfg adminConfig) []serviceTarget {
 			Required:    required,
 			NodeID:      nodeID,
 			ConfigError: configError,
+			RequestID:   cfg.RequestID,
 		})
 	}
 	if strings.TrimSpace(cfg.NodeURL) != "" {
@@ -1825,6 +1840,7 @@ func checkMetricsTarget(ctx context.Context, httpClient *http.Client, target ser
 	if target.Credential != "" {
 		req.Header.Set("Authorization", target.Credential)
 	}
+	setRequestIDHeader(req, target.RequestID)
 	resp, err := httpClient.Do(req)
 	if err != nil {
 		item.Error = err.Error()
@@ -1889,6 +1905,7 @@ func buildAlertsReport(health healthReport, metrics metricsReport, opts alertOpt
 			"checked_at":     time.Now().UTC().Format(time.RFC3339),
 			"schema_version": "v1",
 			"admin_command":  "alerts",
+			"request_id":     opts.RequestID,
 		},
 	}
 	for _, item := range health.Data.Items {
@@ -2059,6 +2076,7 @@ func checkTarget(ctx context.Context, httpClient *http.Client, target serviceTar
 	if target.Credential != "" {
 		req.Header.Set("Authorization", target.Credential)
 	}
+	setRequestIDHeader(req, target.RequestID)
 	resp, err := httpClient.Do(req)
 	if err != nil {
 		item.Status = "unhealthy"
@@ -2129,6 +2147,7 @@ func nodeHealthTargets(cfg adminConfig) []serviceTarget {
 			Required:    required,
 			NodeID:      nodeID,
 			ConfigError: configError,
+			RequestID:   cfg.RequestID,
 		})
 	}
 	if strings.TrimSpace(cfg.NodeURL) != "" {
@@ -2173,6 +2192,7 @@ func discoverProviderHealthTargets(ctx context.Context, httpClient *http.Client,
 	if credential := authorizationHeader(cfg.ComponentToken); credential != "" {
 		req.Header.Set("Authorization", credential)
 	}
+	setRequestIDHeader(req, cfg.RequestID)
 	resp, err := httpClient.Do(req)
 	if err != nil {
 		return nil, &healthItem{
@@ -2259,6 +2279,7 @@ func discoverProviderHealthTargets(ctx context.Context, httpClient *http.Client,
 			Required:   true,
 			ServiceID:  serviceID,
 			NodeID:     nodeID,
+			RequestID:  cfg.RequestID,
 		}
 		if endpoint == "" {
 			target.ConfigError = "provider endpoint is empty"
@@ -2307,6 +2328,7 @@ func getJSON(cfg adminConfig, httpClient *http.Client, baseURL, path, credential
 	if credential != "" {
 		req.Header.Set("Authorization", credential)
 	}
+	setRequestIDHeader(req, cfg.RequestID)
 	resp, err := httpClient.Do(req)
 	if err != nil {
 		fmt.Fprintln(stderr, err)
@@ -2347,6 +2369,7 @@ func getJSONDecode(cfg adminConfig, httpClient *http.Client, baseURL, path, cred
 	if credential != "" {
 		req.Header.Set("Authorization", credential)
 	}
+	setRequestIDHeader(req, cfg.RequestID)
 	resp, err := httpClient.Do(req)
 	if err != nil {
 		return 0, err
@@ -2419,6 +2442,7 @@ func putFile(cfg adminConfig, httpClient *http.Client, baseURL, path, credential
 	if idempotencyKey != "" {
 		req.Header.Set("Idempotency-Key", idempotencyKey)
 	}
+	setRequestIDHeader(req, cfg.RequestID)
 	resp, err := httpClient.Do(req)
 	if err != nil {
 		fmt.Fprintln(stderr, err)
@@ -2537,6 +2561,7 @@ func postJSONDecodeWithHeaders(cfg adminConfig, httpClient *http.Client, baseURL
 			req.Header.Set(key, value)
 		}
 	}
+	setRequestIDHeader(req, cfg.RequestID)
 	resp, err := httpClient.Do(req)
 	if err != nil {
 		return 0, err
@@ -2628,6 +2653,17 @@ func authorizationHeader(token string) string {
 		return token
 	}
 	return "Bearer " + token
+}
+
+func setRequestIDHeader(req *http.Request, requestID string) {
+	if req == nil {
+		return
+	}
+	requestID = strings.TrimSpace(requestID)
+	if requestID == "" {
+		return
+	}
+	req.Header.Set(observability.RequestIDHeader, requestID)
 }
 
 func writeJSON(w io.Writer, body any) error {

@@ -328,7 +328,9 @@ Runner operational logs are JSON records with request id, job id when present,
 and configured credentials redacted.
 Gateway and runner requests propagate `X-Request-ID` to downstream component,
 node, artifact, and provider calls so logs and response metadata can be
-correlated across the distributed flow.
+correlated across the distributed flow. `pacp-admin` also propagates an
+operator request id to every public API call; set `-request-id` or
+`PACP_REQUEST_ID` to reuse a known id, or let the CLI generate one.
 
 This is not the full production control plane yet. It is a usable service stack
 with public HTTP boundaries, file-backed local durability, a provider SDK, a

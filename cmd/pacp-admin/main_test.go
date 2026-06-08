@@ -20,12 +20,15 @@ func TestHealthChecksCoreServicesWithComponentToken(t *testing.T) {
 		if r.URL.Path != "/v1/gateway/health" && r.Header.Get("Authorization") != "Bearer component-token" {
 			t.Fatalf("%s Authorization = %q", r.URL.Path, r.Header.Get("Authorization"))
 		}
+		if r.Header.Get("X-Request-ID") != "req_admin_trace" {
+			t.Fatalf("%s X-Request-ID = %q", r.URL.Path, r.Header.Get("X-Request-ID"))
+		}
 		writeHealth(t, w, http.StatusOK, "healthy")
 	}))
 	defer server.Close()
 
 	var stdout, stderr bytes.Buffer
-	code := run(append(coreURLArgs(server.URL), "-component-token", "component-token", "health"), &stdout, &stderr, server.Client())
+	code := run(append(coreURLArgs(server.URL), "-component-token", "component-token", "-request-id", "req_admin_trace", "health"), &stdout, &stderr, server.Client())
 	if code != 0 {
 		t.Fatalf("code=%d stderr=%s stdout=%s", code, stderr.String(), stdout.String())
 	}
@@ -44,6 +47,9 @@ func TestHealthChecksCoreServicesWithComponentToken(t *testing.T) {
 	report := decodeReport(t, stdout.Bytes())
 	if !report.OK || report.Data.Summary.Healthy != 6 || report.Data.Summary.Skipped != 1 {
 		t.Fatalf("report = %#v", report)
+	}
+	if report.Meta["request_id"] != "req_admin_trace" {
+		t.Fatalf("meta = %#v", report.Meta)
 	}
 }
 
@@ -601,6 +607,9 @@ func TestCatalogRouteCommandUsesComponentToken(t *testing.T) {
 		if r.Header.Get("Authorization") != "Bearer component-token" {
 			t.Fatalf("Authorization = %q", r.Header.Get("Authorization"))
 		}
+		if r.Header.Get("X-Request-ID") != "req_catalog_trace" {
+			t.Fatalf("X-Request-ID = %q", r.Header.Get("X-Request-ID"))
+		}
 		writeEnvelope(t, w, http.StatusOK, map[string]any{"capability_id": "cap_1"})
 	}))
 	defer server.Close()
@@ -609,6 +618,7 @@ func TestCatalogRouteCommandUsesComponentToken(t *testing.T) {
 	code := run([]string{
 		"-catalog-url", server.URL,
 		"-component-token", "component-token",
+		"-request-id", "req_catalog_trace",
 		"catalog", "route", "cap_1",
 	}, &stdout, &stderr, server.Client())
 	if code != 0 {
@@ -761,6 +771,9 @@ func TestJobsCancelCommandUsesGatewayTokenAndIdempotencyKey(t *testing.T) {
 		if r.Header.Get("Idempotency-Key") != "cancel-1" {
 			t.Fatalf("Idempotency-Key = %q", r.Header.Get("Idempotency-Key"))
 		}
+		if r.Header.Get("X-Request-ID") != "req_cancel_trace" {
+			t.Fatalf("X-Request-ID = %q", r.Header.Get("X-Request-ID"))
+		}
 		var body map[string]any
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			t.Fatalf("decode body: %v", err)
@@ -776,6 +789,7 @@ func TestJobsCancelCommandUsesGatewayTokenAndIdempotencyKey(t *testing.T) {
 	code := run([]string{
 		"-gateway-url", server.URL,
 		"-gateway-token", "gateway-token",
+		"-request-id", "req_cancel_trace",
 		"jobs", "cancel", "job_1", "-idempotency-key", "cancel-1", "-reason", "stop running",
 	}, &stdout, &stderr, server.Client())
 	if code != 0 {
