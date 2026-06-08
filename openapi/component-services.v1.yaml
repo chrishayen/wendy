@@ -884,7 +884,7 @@ paths:
               $ref: "#/components/schemas/CreateAPIKeyRequest"
       responses:
         "201":
-          $ref: "#/components/responses/Success"
+          $ref: "#/components/responses/APIKeyResponse"
         default:
           $ref: "#/components/responses/Error"
   /v1/api-keys/{key_id}/revoke:
@@ -897,7 +897,7 @@ paths:
         - $ref: "#/components/parameters/KeyID"
       responses:
         "200":
-          $ref: "#/components/responses/Success"
+          $ref: "#/components/responses/APIKeyResponse"
         default:
           $ref: "#/components/responses/Error"
   /v1/api-keys/{key_id}/rotate:
@@ -916,7 +916,7 @@ paths:
               $ref: "#/components/schemas/RotateAPIKeyRequest"
       responses:
         "200":
-          $ref: "#/components/responses/Success"
+          $ref: "#/components/responses/APIKeyResponse"
         default:
           $ref: "#/components/responses/Error"
   /v1/auth/verify:
@@ -933,7 +933,7 @@ paths:
               $ref: "#/components/schemas/VerifyCredentialRequest"
       responses:
         "200":
-          $ref: "#/components/responses/Success"
+          $ref: "#/components/responses/CredentialVerificationResponse"
         default:
           $ref: "#/components/responses/Error"
   /v1/policy/check:
@@ -950,7 +950,7 @@ paths:
               $ref: "#/components/schemas/PolicyCheckRequest"
       responses:
         "200":
-          $ref: "#/components/responses/Success"
+          $ref: "#/components/responses/PolicyDecisionResponse"
         default:
           $ref: "#/components/responses/Error"
   /v1/policy/rules:
@@ -967,7 +967,7 @@ paths:
               $ref: "#/components/schemas/CreatePolicyRuleRequest"
       responses:
         "201":
-          $ref: "#/components/responses/Success"
+          $ref: "#/components/responses/PolicyRuleResponse"
         default:
           $ref: "#/components/responses/Error"
   /v1/secrets:
@@ -984,7 +984,7 @@ paths:
               $ref: "#/components/schemas/CreateSecretRequest"
       responses:
         "201":
-          $ref: "#/components/responses/Success"
+          $ref: "#/components/responses/SecretResponse"
         default:
           $ref: "#/components/responses/Error"
   /v1/secrets/resolve:
@@ -1001,7 +1001,7 @@ paths:
               $ref: "#/components/schemas/ResolveSecretRequest"
       responses:
         "200":
-          $ref: "#/components/responses/Success"
+          $ref: "#/components/responses/ResolvedSecretResponse"
         default:
           $ref: "#/components/responses/Error"
   /v1/redact:
@@ -1018,7 +1018,7 @@ paths:
               $ref: "#/components/schemas/RedactRequest"
       responses:
         "200":
-          $ref: "#/components/responses/Success"
+          $ref: "#/components/responses/RedactResponseEnvelope"
         default:
           $ref: "#/components/responses/Error"
 
@@ -1650,6 +1650,83 @@ components:
                 properties:
                   data:
                     $ref: "#/components/schemas/ArtifactPolicyContext"
+    APIKeyResponse:
+      description: API key envelope.
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: "#/components/schemas/SuccessEnvelope"
+              - type: object
+                properties:
+                  data:
+                    $ref: "#/components/schemas/APIKeyRecord"
+    CredentialVerificationResponse:
+      description: Credential verification envelope.
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: "#/components/schemas/SuccessEnvelope"
+              - type: object
+                properties:
+                  data:
+                    $ref: "#/components/schemas/CredentialVerification"
+    PolicyDecisionResponse:
+      description: Policy decision envelope.
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: "#/components/schemas/SuccessEnvelope"
+              - type: object
+                properties:
+                  data:
+                    $ref: "#/components/schemas/PolicyDecision"
+    PolicyRuleResponse:
+      description: Policy rule envelope.
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: "#/components/schemas/SuccessEnvelope"
+              - type: object
+                properties:
+                  data:
+                    $ref: "#/components/schemas/PolicyRule"
+    SecretResponse:
+      description: Secret metadata envelope.
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: "#/components/schemas/SuccessEnvelope"
+              - type: object
+                properties:
+                  data:
+                    $ref: "#/components/schemas/SecretRecord"
+    ResolvedSecretResponse:
+      description: Resolved secret value envelope.
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: "#/components/schemas/SuccessEnvelope"
+              - type: object
+                properties:
+                  data:
+                    $ref: "#/components/schemas/ResolvedSecret"
+    RedactResponseEnvelope:
+      description: Redaction envelope.
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: "#/components/schemas/SuccessEnvelope"
+              - type: object
+                properties:
+                  data:
+                    $ref: "#/components/schemas/RedactResponse"
     Success:
       description: Success envelope.
       content:
@@ -2639,6 +2716,29 @@ components:
             type: string
         token:
           type: string
+    APIKeyRecord:
+      type: object
+      required: [key_id, subject_id, scopes, created_at]
+      properties:
+        key_id:
+          type: string
+        subject_id:
+          type: string
+        scopes:
+          type: array
+          items:
+            type: string
+        token:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        rotated_at:
+          type: string
+          format: date-time
+        revoked_at:
+          type: string
+          format: date-time
     RotateAPIKeyRequest:
       type: object
       properties:
@@ -2652,6 +2752,19 @@ components:
           type: string
         context:
           $ref: "#/components/schemas/AnyMap"
+    CredentialVerification:
+      type: object
+      required: [valid, subject_id, scopes]
+      properties:
+        valid:
+          type: boolean
+        subject_id:
+          type: string
+          nullable: true
+        scopes:
+          type: array
+          items:
+            type: string
     PolicyCheckRequest:
       type: object
       required: [subject_id, action, resource]
@@ -2664,6 +2777,14 @@ components:
           type: string
         context:
           $ref: "#/components/schemas/AnyMap"
+    PolicyDecision:
+      type: object
+      required: [allowed, reason]
+      properties:
+        allowed:
+          type: boolean
+        reason:
+          type: string
     CreatePolicyRuleRequest:
       type: object
       required: [action, resource, effect]
@@ -2681,6 +2802,28 @@ components:
           enum: [allow, deny]
         reason:
           type: string
+    PolicyRule:
+      type: object
+      required: [rule_id, action, resource, effect, reason, created_at]
+      properties:
+        rule_id:
+          type: string
+        subject_id:
+          type: string
+        scope:
+          type: string
+        action:
+          type: string
+        resource:
+          type: string
+        effect:
+          type: string
+          enum: [allow, deny]
+        reason:
+          type: string
+        created_at:
+          type: string
+          format: date-time
     CreateSecretRequest:
       type: object
       required: [name, value]
@@ -2689,6 +2832,17 @@ components:
           type: string
         value:
           type: string
+    SecretRecord:
+      type: object
+      required: [secret_ref, name, created_at]
+      properties:
+        secret_ref:
+          type: string
+        name:
+          type: string
+        created_at:
+          type: string
+          format: date-time
     ResolveSecretRequest:
       type: object
       required: [secret_ref, subject_id]
@@ -2697,7 +2851,21 @@ components:
           type: string
         subject_id:
           type: string
+    ResolvedSecret:
+      type: object
+      required: [secret_ref, value]
+      properties:
+        secret_ref:
+          type: string
+        value:
+          type: string
     RedactRequest:
+      type: object
+      required: [text]
+      properties:
+        text:
+          type: string
+    RedactResponse:
       type: object
       required: [text]
       properties:
