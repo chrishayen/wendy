@@ -20,7 +20,9 @@ import (
 	"pacp/internal/components/gateway"
 	"pacp/internal/components/jobs"
 	"pacp/internal/components/leases"
+	"pacp/internal/components/noderegistry"
 	"pacp/internal/components/policy"
+	"pacp/internal/contracts"
 	"pacp/internal/observability"
 	"pacp/internal/routeauth"
 	"pacp/internal/runner"
@@ -34,6 +36,7 @@ type primaryConfig struct {
 	ArtifactsAddr          string
 	PolicyAddr             string
 	GatewayAddr            string
+	NodeRegistryAddr       string
 	ArtifactRoot           string
 	StateDir               string
 	ManifestPath           string
@@ -48,6 +51,7 @@ type primaryConfig struct {
 	WorkerID               string
 	NodeURL                string
 	NodeURLsRaw            string
+	NodeRegistryURL        string
 	NodeStartTimeout       time.Duration
 	NodeStartPoll          time.Duration
 	PollInterval           time.Duration
@@ -63,15 +67,17 @@ type primaryStores struct {
 	leaseStore    *leases.Store
 	artifactStore *artifacts.Store
 	policyStore   *policy.Store
+	nodeRegistry  *noderegistry.Store
 }
 
 type primaryEndpoints struct {
-	CatalogURL   string
-	JobsURL      string
-	LeasesURL    string
-	ArtifactsURL string
-	PolicyURL    string
-	GatewayURL   string
+	CatalogURL      string
+	JobsURL         string
+	LeasesURL       string
+	ArtifactsURL    string
+	PolicyURL       string
+	GatewayURL      string
+	NodeRegistryURL string
 }
 
 type boundService struct {
@@ -88,6 +94,7 @@ func main() {
 	flag.StringVar(&cfg.ArtifactsAddr, "artifacts-addr", "localhost:18084", "artifact listen address")
 	flag.StringVar(&cfg.PolicyAddr, "policy-addr", "localhost:18085", "policy listen address")
 	flag.StringVar(&cfg.GatewayAddr, "gateway-addr", "localhost:18086", "gateway listen address")
+	flag.StringVar(&cfg.NodeRegistryAddr, "node-registry-addr", "localhost:18080", "node registry listen address")
 	flag.StringVar(&cfg.ArtifactRoot, "artifact-root", "/tmp/pacp-artifacts", "artifact storage root")
 	flag.StringVar(&cfg.StateDir, "state-dir", "", "optional directory for durable primary state")
 	flag.StringVar(&cfg.ManifestPath, "manifest", "", "optional provider manifest file or directory to load into the catalog")
@@ -102,6 +109,7 @@ func main() {
 	flag.StringVar(&cfg.WorkerID, "worker-id", "runner_primary", "runner worker id")
 	flag.StringVar(&cfg.NodeURL, "node-url", os.Getenv("PACP_NODE_URL"), "optional default node service base URL")
 	flag.StringVar(&cfg.NodeURLsRaw, "node-urls", os.Getenv("PACP_NODE_URLS"), "optional comma-separated node_id=URL mappings")
+	flag.StringVar(&cfg.NodeRegistryURL, "node-registry-url", os.Getenv("PACP_NODE_REGISTRY_URL"), "optional external node registry URL; defaults to the embedded registry service")
 	flag.DurationVar(&cfg.NodeStartTimeout, "node-start-timeout", 30*time.Second, "maximum time to wait for node-managed service startup")
 	flag.DurationVar(&cfg.NodeStartPoll, "node-start-poll", 500*time.Millisecond, "poll interval while waiting for node-managed service startup")
 	flag.DurationVar(&cfg.PollInterval, "poll", time.Second, "runner poll interval")
@@ -169,6 +177,7 @@ func runPrimaryStack(ctx context.Context, cfg primaryConfig) error {
 			PolicyURL:           endpoints.PolicyURL,
 			NodeURL:             strings.TrimRight(cfg.NodeURL, "/"),
 			NodeURLs:            nodeURLs,
+			NodeRegistryURL:     primaryNodeRegistryURL(cfg, endpoints),
 			NodeStartTimeout:    cfg.NodeStartTimeout,
 			NodePollInterval:    cfg.NodeStartPoll,
 			LeasePollInterval:   cfg.LeasePoll,
@@ -193,6 +202,7 @@ func primaryComponentHandlers(cfg primaryConfig, endpoints primaryEndpoints, sto
 	jobsHandler := jobs.NewHandler(stores.jobStore)
 	leasesHandler := leases.NewHandler(stores.leaseStore)
 	artifactsHandler := artifacts.NewHandler(stores.artifactStore)
+	nodeRegistryHandler := transportauth.RequireBearer(noderegistry.NewHandler(stores.nodeRegistry), cfg.ComponentToken)
 	if cfg.RouteAwareAuth {
 		policyCredential := authorizationHeader(cfg.ComponentToken)
 		catalogHandler = transportauth.RequireVerifiedScopes(catalogHandler, transportauth.ScopeConfig{PolicyURL: endpoints.PolicyURL, PolicyCredential: policyCredential, Rules: routeauth.CatalogScopeRules()})
@@ -206,12 +216,13 @@ func primaryComponentHandlers(cfg primaryConfig, endpoints primaryEndpoints, sto
 		artifactsHandler = transportauth.RequireBearer(artifactsHandler, cfg.ComponentToken)
 	}
 	return map[string]http.Handler{
-		"catalog":   catalogHandler,
-		"jobs":      jobsHandler,
-		"leases":    leasesHandler,
-		"artifacts": artifactsHandler,
-		"policy":    transportauth.RequireBearer(policy.NewHandler(stores.policyStore), cfg.ComponentToken),
-		"gateway":   gatewayHandler,
+		"catalog":       catalogHandler,
+		"jobs":          jobsHandler,
+		"leases":        leasesHandler,
+		"artifacts":     artifactsHandler,
+		"policy":        transportauth.RequireBearer(policy.NewHandler(stores.policyStore), cfg.ComponentToken),
+		"gateway":       gatewayHandler,
+		"node_registry": nodeRegistryHandler,
 	}
 }
 
@@ -226,6 +237,7 @@ func bindPrimaryServices(cfg primaryConfig) ([]boundService, primaryEndpoints, e
 		{name: "artifacts", addr: cfg.ArtifactsAddr},
 		{name: "policy", addr: cfg.PolicyAddr},
 		{name: "gateway", addr: cfg.GatewayAddr},
+		{name: "node_registry", addr: cfg.NodeRegistryAddr},
 	}
 	bound := make([]boundService, 0, len(specs))
 	endpoints := primaryEndpoints{}
@@ -250,6 +262,8 @@ func bindPrimaryServices(cfg primaryConfig) ([]boundService, primaryEndpoints, e
 			endpoints.PolicyURL = service.url
 		case "gateway":
 			endpoints.GatewayURL = service.url
+		case "node_registry":
+			endpoints.NodeRegistryURL = service.url
 		}
 	}
 	return bound, endpoints, nil
@@ -281,7 +295,18 @@ func newPrimaryStores(cfg primaryConfig) (primaryStores, error) {
 	if err != nil {
 		return primaryStores{}, fmt.Errorf("create policy store: %w", err)
 	}
-	return primaryStores{catalogStore: catalogStore, jobStore: jobStore, leaseStore: leaseStore, artifactStore: artifactStore, policyStore: policyStore}, nil
+	nodeRegistryStore, err := newNodeRegistryStore(cfg)
+	if err != nil {
+		return primaryStores{}, fmt.Errorf("create node registry store: %w", err)
+	}
+	return primaryStores{
+		catalogStore:  catalogStore,
+		jobStore:      jobStore,
+		leaseStore:    leaseStore,
+		artifactStore: artifactStore,
+		policyStore:   policyStore,
+		nodeRegistry:  nodeRegistryStore,
+	}, nil
 }
 
 func newCatalogStore(cfg primaryConfig) (*catalog.Store, error) {
@@ -319,6 +344,13 @@ func newPolicyStore(cfg primaryConfig) (*policy.Store, error) {
 	return policy.NewStore(), nil
 }
 
+func newNodeRegistryStore(cfg primaryConfig) (*noderegistry.Store, error) {
+	if path := statePath(cfg, "node-registry"); path != "" {
+		return noderegistry.NewPersistentStore(path)
+	}
+	return noderegistry.NewStore(), nil
+}
+
 func loadPrimaryInputs(cfg primaryConfig, stores primaryStores) error {
 	if cfg.ManifestPath != "" {
 		loaded, err := loadManifests(stores.catalogStore, cfg.ManifestPath, cfg.StateDir != "")
@@ -345,7 +377,34 @@ func loadPrimaryInputs(cfg primaryConfig, stores primaryStores) error {
 		}
 		log.Printf("applied policy seed path=%s api_keys_created=%d api_keys_skipped=%d rules_created=%d rules_skipped=%d secrets_created=%d secrets_skipped=%d", cfg.PolicySeedPath, result.APIKeysCreated, result.APIKeysSkipped, result.RulesCreated, result.RulesSkipped, result.SecretsCreated, result.SecretsSkipped)
 	}
+	if cfg.NodeURLsRaw != "" {
+		loaded, err := loadConfiguredNodes(stores.nodeRegistry, cfg.NodeURLsRaw)
+		if err != nil {
+			return err
+		}
+		log.Printf("loaded node registry records count=%d", loaded)
+	}
 	return nil
+}
+
+func loadConfiguredNodes(store *noderegistry.Store, raw string) (int, error) {
+	nodes, err := parseNodeURLMap(raw)
+	if err != nil {
+		return 0, err
+	}
+	loaded := 0
+	for nodeID, nodeURL := range nodes {
+		if _, err := store.Register(contracts.RegisterNodeRequest{
+			NodeID:     nodeID,
+			URL:        nodeURL,
+			TrustState: contracts.NodeTrustTrusted,
+			Status:     contracts.NodeStatusRegistered,
+		}); err != nil {
+			return loaded, fmt.Errorf("register configured node %s: %w", nodeID, err)
+		}
+		loaded++
+	}
+	return loaded, nil
 }
 
 func loadManifests(store *catalog.Store, path string, durable bool) (int, error) {
@@ -503,6 +562,13 @@ func normalizePrimaryConfig(cfg primaryConfig) primaryConfig {
 		cfg.RunnerPolicyCredential = cfg.ComponentToken
 	}
 	return cfg
+}
+
+func primaryNodeRegistryURL(cfg primaryConfig, endpoints primaryEndpoints) string {
+	if strings.TrimSpace(cfg.NodeRegistryURL) != "" {
+		return strings.TrimRight(cfg.NodeRegistryURL, "/")
+	}
+	return strings.TrimRight(endpoints.NodeRegistryURL, "/")
 }
 
 func authorizationHeader(token string) string {

@@ -88,8 +88,8 @@ Contract simulation data is kept as test input, not as product behavior.
 - `cmd/pacp-runner`: runnable composition runner with optional health and
   metrics monitor endpoints.
 - `cmd/pacp-primary`: primary-host process for the catalog, gateway, jobs,
-  leases, artifacts, policy, and an optional runner using arbitrary manifests,
-  resources, and policy seed files.
+  leases, artifacts, policy, node registry, and an optional runner using
+  arbitrary manifests, resources, and policy seed files.
 - `cmd/pacp-bundle`: renders one deployment bundle into catalog manifests,
   node config, lease resource seed, and optional policy seed files.
 - `cmd/pacp-admin`: JSON-first operator CLI for component, gateway, node,
@@ -276,6 +276,11 @@ co-hosted catalog URL to the embedded runner automatically.
 Use `pacp-runner -node-urls` or `PACP_NODE_URLS` for distributed nodes. The
 format is comma-separated `node_id=URL` entries, for example
 `node_linux_gpu=http://linux-box:18087,node_mac_services=http://mac:18087`.
+`pacp-primary` seeds those entries into its node registry as trusted registered
+nodes and passes the registry URL to its embedded runner. Standalone runners can
+use `-node-registry-url` or `PACP_NODE_REGISTRY_URL`; when set, explicit
+`node_id` routes are resolved through `/v1/node-registry/nodes/{node_id}` and
+disabled, untrusted, unreachable, or stale nodes are not used.
 
 HTTP provider bridge route files can set literal `headers` for non-secret
 values, `headers_from_env` for node-local backend credentials, and

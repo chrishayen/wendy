@@ -21,6 +21,7 @@ import (
 	"pacp/internal/components/artifacts"
 	"pacp/internal/components/jobs"
 	"pacp/internal/components/leases"
+	"pacp/internal/components/noderegistry"
 	"pacp/internal/components/policy"
 	"pacp/internal/contracts"
 	"pacp/internal/observability"
@@ -1653,6 +1654,79 @@ func TestRunnerWaitsForNodeManagedServiceStartup(t *testing.T) {
 	}
 	if starts != 1 || gets < 3 {
 		t.Fatalf("starts=%d gets=%d", starts, gets)
+	}
+}
+
+func TestRunnerResolvesTrustedNodeFromRegistry(t *testing.T) {
+	nodeGets := 0
+	nodeServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		nodeGets++
+		if r.Method != http.MethodGet || r.URL.Path != "/v1/node/services/svc_remote_provider" {
+			t.Fatalf("unexpected node request %s %s", r.Method, r.URL.Path)
+		}
+		writeRunnerTestSuccess(w, http.StatusOK, contracts.NodeService{ServiceID: "svc_remote_provider", Status: "running"})
+	}))
+	defer nodeServer.Close()
+
+	registryStore := noderegistry.NewStore()
+	if _, err := registryStore.Register(contracts.RegisterNodeRequest{
+		NodeID:     "node_linux_gpu",
+		URL:        nodeServer.URL,
+		TrustState: contracts.NodeTrustTrusted,
+		Status:     contracts.NodeStatusRegistered,
+	}); err != nil {
+		t.Fatalf("register node: %v", err)
+	}
+	registryServer := httptest.NewServer(noderegistry.NewHandler(registryStore))
+	defer registryServer.Close()
+
+	r := New(Config{
+		NodeRegistryURL:  registryServer.URL + "/",
+		NodeStartTimeout: 250 * time.Millisecond,
+		NodePollInterval: time.Millisecond,
+		Client:           nodeServer.Client(),
+	})
+	nodeID := "node_linux_gpu"
+	route := contracts.CapabilityRoute{ServiceID: "svc_remote_provider", NodeID: &nodeID, NodeManaged: true}
+	if _, err := r.ensureNodeService(context.Background(), route); err != nil {
+		t.Fatalf("ensureNodeService: %v", err)
+	}
+	if nodeGets != 1 {
+		t.Fatalf("node gets = %d", nodeGets)
+	}
+}
+
+func TestRunnerBlocksDisabledNodeFromRegistry(t *testing.T) {
+	var nodeCalls atomic.Int32
+	nodeServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		nodeCalls.Add(1)
+		writeRunnerTestSuccess(w, http.StatusOK, contracts.NodeService{ServiceID: "svc_remote_provider", Status: "running"})
+	}))
+	defer nodeServer.Close()
+
+	registryStore := noderegistry.NewStore()
+	if _, err := registryStore.Register(contracts.RegisterNodeRequest{
+		NodeID:     "node_linux_gpu",
+		URL:        nodeServer.URL,
+		TrustState: contracts.NodeTrustDisabled,
+		Status:     contracts.NodeStatusRegistered,
+	}); err != nil {
+		t.Fatalf("register node: %v", err)
+	}
+	registryServer := httptest.NewServer(noderegistry.NewHandler(registryStore))
+	defer registryServer.Close()
+
+	r := New(Config{
+		NodeRegistryURL: registryServer.URL,
+		Client:          nodeServer.Client(),
+	})
+	nodeID := "node_linux_gpu"
+	route := contracts.CapabilityRoute{ServiceID: "svc_remote_provider", NodeID: &nodeID, NodeManaged: true}
+	if _, err := r.ensureNodeService(context.Background(), route); err == nil || !strings.Contains(err.Error(), "not runnable") {
+		t.Fatalf("expected not runnable error, got %v", err)
+	}
+	if nodeCalls.Load() != 0 {
+		t.Fatalf("node was called %d times", nodeCalls.Load())
 	}
 }
 

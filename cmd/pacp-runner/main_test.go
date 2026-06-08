@@ -53,6 +53,13 @@ func TestParseNodeURLMap(t *testing.T) {
 	}
 }
 
+func TestNodeRegistryURLFlagUsesEnvDefault(t *testing.T) {
+	t.Setenv("PACP_NODE_REGISTRY_URL", "http://primary.local:18080")
+	if got := nodeRegistryURLDefault(); got != "http://primary.local:18080" {
+		t.Fatalf("node registry default = %q", got)
+	}
+}
+
 func TestParseNodeURLMapRejectsMalformedEntry(t *testing.T) {
 	if _, err := parseNodeURLMap("node_linux_gpu"); err == nil {
 		t.Fatal("expected malformed mapping error")

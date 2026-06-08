@@ -34,6 +34,12 @@ servers:
       policy_url:
         default: https://policy.pacp.example
         description: Replace with the deployed policy URL, or a local development URL.
+  - url: "{node_registry_url}"
+    description: Configured node registry service base URL.
+    variables:
+      node_registry_url:
+        default: https://node-registry.pacp.example
+        description: Replace with the deployed node registry URL, or a local development URL.
   - url: "{node_url}"
     description: Configured node service base URL.
     variables:
@@ -60,6 +66,7 @@ tags:
   - name: leases
   - name: artifacts
   - name: policy
+  - name: node_registry
   - name: node
   - name: provider
   - name: runner
@@ -1060,6 +1067,99 @@ paths:
         default:
           $ref: "#/components/responses/Error"
 
+  /v1/node-registry/health:
+    get:
+      tags: [node_registry]
+      operationId: getNodeRegistryHealth
+      x-operation-audience: monitor
+      x-policy-action: node.registry.health.read
+      responses:
+        "200":
+          $ref: "#/components/responses/Health"
+        default:
+          $ref: "#/components/responses/Error"
+  /v1/node-registry/nodes:
+    get:
+      tags: [node_registry]
+      operationId: listRegisteredNodes
+      x-operation-audience: [component, worker, admin]
+      x-policy-action: node.registry.read
+      parameters:
+        - $ref: "#/components/parameters/Cursor"
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          $ref: "#/components/responses/NodeRecordListResponse"
+        default:
+          $ref: "#/components/responses/Error"
+    post:
+      tags: [node_registry]
+      operationId: registerNode
+      x-operation-audience: [component, admin]
+      x-policy-action: node.registry.register
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RegisterNodeRequest"
+      responses:
+        "200":
+          $ref: "#/components/responses/NodeRecordResponse"
+        default:
+          $ref: "#/components/responses/Error"
+  /v1/node-registry/nodes/{node_id}:
+    get:
+      tags: [node_registry]
+      operationId: getRegisteredNode
+      x-operation-audience: [component, worker, admin]
+      x-policy-action: node.registry.read
+      parameters:
+        - $ref: "#/components/parameters/NodeID"
+      responses:
+        "200":
+          $ref: "#/components/responses/NodeRecordResponse"
+        default:
+          $ref: "#/components/responses/Error"
+  /v1/node-registry/nodes/{node_id}/trust:
+    post:
+      tags: [node_registry]
+      operationId: updateNodeTrust
+      x-operation-audience: admin
+      x-policy-action: node.registry.trust.update
+      parameters:
+        - $ref: "#/components/parameters/NodeID"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateNodeTrustRequest"
+      responses:
+        "200":
+          $ref: "#/components/responses/NodeRecordResponse"
+        default:
+          $ref: "#/components/responses/Error"
+  /v1/node-registry/nodes/{node_id}/heartbeat:
+    post:
+      tags: [node_registry]
+      operationId: heartbeatRegisteredNode
+      x-operation-audience: [component, monitor]
+      x-policy-action: node.registry.heartbeat
+      parameters:
+        - $ref: "#/components/parameters/NodeID"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/NodeHeartbeatRequest"
+      responses:
+        "200":
+          $ref: "#/components/responses/NodeRecordResponse"
+        default:
+          $ref: "#/components/responses/Error"
+
   /v1/node/health:
     get:
       tags: [node]
@@ -1394,6 +1494,12 @@ components:
         type: string
     LeaseID:
       name: lease_id
+      in: path
+      required: true
+      schema:
+        type: string
+    NodeID:
+      name: node_id
       in: path
       required: true
       schema:
@@ -1827,6 +1933,28 @@ components:
                 properties:
                   data:
                     $ref: "#/components/schemas/NodeHealth"
+    NodeRecordResponse:
+      description: Node registry record envelope.
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: "#/components/schemas/SuccessEnvelope"
+              - type: object
+                properties:
+                  data:
+                    $ref: "#/components/schemas/NodeRecord"
+    NodeRecordListResponse:
+      description: Node registry record list envelope.
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: "#/components/schemas/SuccessEnvelope"
+              - type: object
+                properties:
+                  data:
+                    $ref: "#/components/schemas/NodeRecordList"
     NodeResourceListResponse:
       description: Node resource list envelope.
       content:
@@ -2847,6 +2975,90 @@ components:
         deleted_artifact_files:
           type: integer
 
+    RegisterNodeRequest:
+      type: object
+      required: [node_id, url]
+      properties:
+        node_id:
+          type: string
+        url:
+          type: string
+          format: uri
+        display_name:
+          type: string
+        trust_state:
+          type: string
+          enum: [trusted, untrusted, disabled]
+        status:
+          type: string
+          enum: [registered, reachable, unreachable]
+        tags:
+          type: array
+          items:
+            type: string
+        metadata:
+          $ref: "#/components/schemas/AnyMap"
+    UpdateNodeTrustRequest:
+      type: object
+      required: [trust_state]
+      properties:
+        trust_state:
+          type: string
+          enum: [trusted, untrusted, disabled]
+        reason:
+          type: string
+    NodeHeartbeatRequest:
+      type: object
+      required: [status]
+      properties:
+        status:
+          type: string
+          enum: [registered, reachable, unreachable]
+        metadata:
+          $ref: "#/components/schemas/AnyMap"
+    NodeRecord:
+      type: object
+      required: [node_id, url, trust_state, status, links]
+      properties:
+        node_id:
+          type: string
+        url:
+          type: string
+          format: uri
+        display_name:
+          type: string
+        trust_state:
+          type: string
+          enum: [trusted, untrusted, disabled]
+        status:
+          type: string
+          enum: [registered, reachable, unreachable, stale]
+        disabled_reason:
+          type: string
+        last_seen_at:
+          type: string
+          format: date-time
+        last_checked_at:
+          type: string
+          format: date-time
+        tags:
+          type: array
+          items:
+            type: string
+        metadata:
+          $ref: "#/components/schemas/AnyMap"
+        links:
+          $ref: "#/components/schemas/Links"
+    NodeRecordList:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/NodeRecord"
+        next_cursor:
+          type: string
     NodeHealth:
       type: object
       required: [status, version, checked_at, details]

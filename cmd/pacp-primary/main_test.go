@@ -49,6 +49,7 @@ func TestRunPrimaryStackServesCoreHealth(t *testing.T) {
 		{url: endpoints.ArtifactsURL, path: "/v1/artifacts/health"},
 		{url: endpoints.PolicyURL, path: "/v1/policy/health"},
 		{url: endpoints.GatewayURL, path: "/v1/gateway/health"},
+		{url: endpoints.NodeRegistryURL, path: "/v1/node-registry/health"},
 	} {
 		assertHealth(t, client, target.url+target.path, "")
 	}
@@ -80,7 +81,11 @@ func TestRunPrimaryStackProtectsCoreComponentsWithToken(t *testing.T) {
 	client := &http.Client{Timeout: time.Second}
 	unauthorized := assertStatus(t, client, endpoints.JobsURL+"/v1/jobs/health", "", http.StatusUnauthorized)
 	_ = unauthorized.Body.Close()
+	unauthorizedRegistry := assertStatus(t, client, endpoints.NodeRegistryURL+"/v1/node-registry/nodes", "", http.StatusUnauthorized)
+	_ = unauthorizedRegistry.Body.Close()
 	assertHealth(t, client, endpoints.JobsURL+"/v1/jobs/health", "Bearer component-token")
+	authorizedRegistry := assertStatus(t, client, endpoints.NodeRegistryURL+"/v1/node-registry/nodes", "Bearer component-token", http.StatusOK)
+	_ = authorizedRegistry.Body.Close()
 	assertHealth(t, client, endpoints.GatewayURL+"/v1/gateway/health", "")
 
 	cancel()
@@ -206,6 +211,40 @@ func TestParseNodeURLMap(t *testing.T) {
 	}
 	if _, err := parseNodeURLMap("bad-entry"); err == nil {
 		t.Fatal("expected invalid node URL mapping error")
+	}
+}
+
+func TestRunPrimaryStackSeedsNodeRegistryFromNodeURLs(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ready := make(chan primaryEndpoints, 1)
+	errCh := make(chan error, 1)
+	cfg := ephemeralPrimaryConfig(t)
+	cfg.ComponentToken = "component-token"
+	cfg.NodeURLsRaw = "node_linux_gpu=http://linux.local:18087"
+	cfg.ready = ready
+	go func() {
+		errCh <- runPrimaryStack(ctx, cfg)
+	}()
+
+	endpoints := waitForPrimaryReady(t, ready)
+	client := &http.Client{Timeout: time.Second}
+	var list struct {
+		Items []contracts.NodeRecord `json:"items"`
+	}
+	primaryJSON(t, client, http.MethodGet, endpoints.NodeRegistryURL+"/v1/node-registry/nodes", "component-token", "", nil, http.StatusOK, &list)
+	if len(list.Items) != 1 || list.Items[0].NodeID != "node_linux_gpu" || list.Items[0].TrustState != contracts.NodeTrustTrusted {
+		t.Fatalf("node registry list = %#v", list.Items)
+	}
+
+	cancel()
+	select {
+	case err := <-errCh:
+		if err != nil {
+			t.Fatalf("run primary: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("primary stack did not stop after context cancellation")
 	}
 }
 
@@ -340,15 +379,16 @@ func ephemeralPrimaryConfig(t *testing.T) primaryConfig {
 	t.Helper()
 	root := t.TempDir()
 	return primaryConfig{
-		CatalogAddr:   "127.0.0.1:0",
-		JobsAddr:      "127.0.0.1:0",
-		LeasesAddr:    "127.0.0.1:0",
-		ArtifactsAddr: "127.0.0.1:0",
-		PolicyAddr:    "127.0.0.1:0",
-		GatewayAddr:   "127.0.0.1:0",
-		ArtifactRoot:  filepath.Join(root, "artifacts"),
-		StateDir:      filepath.Join(root, "state"),
-		DisableRunner: true,
+		CatalogAddr:      "127.0.0.1:0",
+		JobsAddr:         "127.0.0.1:0",
+		LeasesAddr:       "127.0.0.1:0",
+		ArtifactsAddr:    "127.0.0.1:0",
+		PolicyAddr:       "127.0.0.1:0",
+		GatewayAddr:      "127.0.0.1:0",
+		NodeRegistryAddr: "127.0.0.1:0",
+		ArtifactRoot:     filepath.Join(root, "artifacts"),
+		StateDir:         filepath.Join(root, "state"),
+		DisableRunner:    true,
 	}
 }
 

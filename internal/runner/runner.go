@@ -29,6 +29,7 @@ type Config struct {
 	PolicyURL                 string
 	NodeURL                   string
 	NodeURLs                  map[string]string
+	NodeRegistryURL           string
 	NodeStartTimeout          time.Duration
 	NodePollInterval          time.Duration
 	LeasePollInterval         time.Duration
@@ -140,6 +141,7 @@ func New(cfg Config) *Runner {
 	cfg.ArtifactsURL = strings.TrimRight(cfg.ArtifactsURL, "/")
 	cfg.PolicyURL = strings.TrimRight(cfg.PolicyURL, "/")
 	cfg.NodeURL = strings.TrimRight(cfg.NodeURL, "/")
+	cfg.NodeRegistryURL = strings.TrimRight(cfg.NodeRegistryURL, "/")
 	cfg.NodeURLs = normalizeNodeURLs(cfg.NodeURLs)
 	if cfg.ActorSubjectID == "" {
 		cfg.ActorSubjectID = cfg.WorkerSubjectID
@@ -531,7 +533,7 @@ func (r *Runner) heartbeatLease(ctx context.Context, leaseID, holderID string) e
 
 func (r *Runner) ensureNodeService(ctx context.Context, route contracts.CapabilityRoute) (contracts.NodeService, error) {
 	serviceID := route.ServiceID
-	nodeURL, err := r.nodeURLForRoute(route)
+	nodeURL, err := r.nodeURLForRoute(ctx, route)
 	if err != nil {
 		return contracts.NodeService{}, err
 	}
@@ -568,8 +570,18 @@ func (r *Runner) ensureNodeService(ctx context.Context, route contracts.Capabili
 	}
 }
 
-func (r *Runner) nodeURLForRoute(route contracts.CapabilityRoute) (string, error) {
+func (r *Runner) nodeURLForRoute(ctx context.Context, route contracts.CapabilityRoute) (string, error) {
 	if route.NodeID != nil && *route.NodeID != "" {
+		if r.cfg.NodeRegistryURL != "" {
+			record, err := r.getNodeRegistryRecord(ctx, *route.NodeID)
+			if err != nil {
+				return "", err
+			}
+			if reason := contracts.NodeRunnableBlockReason(record); reason != "" {
+				return "", fmt.Errorf("node %s is not runnable: %s", *route.NodeID, reason)
+			}
+			return strings.TrimRight(record.URL, "/"), nil
+		}
 		if nodeURL := r.cfg.NodeURLs[*route.NodeID]; nodeURL != "" {
 			return nodeURL, nil
 		}
@@ -589,6 +601,14 @@ func (r *Runner) nodeURLForRoute(route contracts.CapabilityRoute) (string, error
 	return "", errors.New("node URL is not configured for node-managed service")
 }
 
+func (r *Runner) getNodeRegistryRecord(ctx context.Context, nodeID string) (contracts.NodeRecord, error) {
+	var record contracts.NodeRecord
+	if err := r.getJSON(ctx, r.cfg.NodeRegistryURL+"/v1/node-registry/nodes/"+url.PathEscape(nodeID), &record); err != nil {
+		return contracts.NodeRecord{}, err
+	}
+	return record, nil
+}
+
 func (r *Runner) getNodeService(ctx context.Context, nodeURL, serviceID string) (contracts.NodeService, error) {
 	var service contracts.NodeService
 	err := r.getJSON(ctx, nodeURL+"/v1/node/services/"+url.PathEscape(serviceID), &service)
@@ -602,7 +622,7 @@ func (r *Runner) startNodeService(ctx context.Context, nodeURL, serviceID string
 }
 
 func (r *Runner) touchNodeService(ctx context.Context, route contracts.CapabilityRoute) error {
-	nodeURL, err := r.nodeURLForRoute(route)
+	nodeURL, err := r.nodeURLForRoute(ctx, route)
 	if err != nil {
 		return err
 	}

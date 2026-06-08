@@ -24,6 +24,7 @@ func main() {
 	policyURL := flag.String("policy-url", os.Getenv("PACP_POLICY_URL"), "optional policy service base URL for provider.invoke checks")
 	nodeURL := flag.String("node-url", os.Getenv("PACP_NODE_URL"), "optional node service base URL")
 	nodeURLsRaw := flag.String("node-urls", os.Getenv("PACP_NODE_URLS"), "optional comma-separated node_id=URL mappings for node-managed services")
+	nodeRegistryURL := flag.String("node-registry-url", nodeRegistryURLDefault(), "optional node registry service base URL used to resolve and trust-check node_id routes")
 	credential := flag.String("credential", componentCredentialDefault("PACP_RUNNER_CREDENTIAL"), "component credential for downstream calls; defaults to PACP_RUNNER_CREDENTIAL or PACP_COMPONENT_TOKEN")
 	policyCredential := flag.String("policy-credential", componentCredentialDefault("PACP_RUNNER_POLICY_CREDENTIAL"), "component credential for policy service calls; defaults to PACP_RUNNER_POLICY_CREDENTIAL or PACP_COMPONENT_TOKEN")
 	workerSubjectID := flag.String("worker-subject-id", os.Getenv("PACP_RUNNER_SUBJECT_ID"), "optional worker subject id for policy checks; defaults to verifying the runner credential")
@@ -53,6 +54,7 @@ func main() {
 		PolicyURL:           *policyURL,
 		NodeURL:             *nodeURL,
 		NodeURLs:            nodeURLs,
+		NodeRegistryURL:     *nodeRegistryURL,
 		NodeStartTimeout:    *nodeStartTimeout,
 		NodePollInterval:    *nodeStartPoll,
 		LeasePollInterval:   *leasePoll,
@@ -98,6 +100,10 @@ func componentCredentialDefault(primaryEnv string) string {
 		return value
 	}
 	return os.Getenv("PACP_COMPONENT_TOKEN")
+}
+
+func nodeRegistryURLDefault() string {
+	return os.Getenv("PACP_NODE_REGISTRY_URL")
 }
 
 func authorizationHeader(token string) string {
