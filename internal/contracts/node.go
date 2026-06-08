@@ -22,15 +22,16 @@ type NodeAuthSubject struct {
 }
 
 type NodeServiceConfig struct {
-	ServiceID        string                `json:"service_id"`
-	DisplayName      string                `json:"display_name,omitempty"`
-	RuntimeAdapter   string                `json:"runtime_adapter"`
-	ProviderEndpoint string                `json:"provider_endpoint"`
-	InitialStatus    string                `json:"initial_status,omitempty"`
-	Manifest         *ProviderManifest     `json:"manifest,omitempty"`
-	Process          *ProcessRuntimeConfig `json:"process,omitempty"`
-	Docker           *DockerRuntimeConfig  `json:"docker,omitempty"`
-	Metadata         map[string]any        `json:"metadata,omitempty"`
+	ServiceID          string                `json:"service_id"`
+	DisplayName        string                `json:"display_name,omitempty"`
+	RuntimeAdapter     string                `json:"runtime_adapter"`
+	ProviderEndpoint   string                `json:"provider_endpoint"`
+	InitialStatus      string                `json:"initial_status,omitempty"`
+	IdleTimeoutSeconds int                   `json:"idle_timeout_seconds,omitempty"`
+	Manifest           *ProviderManifest     `json:"manifest,omitempty"`
+	Process            *ProcessRuntimeConfig `json:"process,omitempty"`
+	Docker             *DockerRuntimeConfig  `json:"docker,omitempty"`
+	Metadata           map[string]any        `json:"metadata,omitempty"`
 }
 
 type ProcessRuntimeConfig struct {

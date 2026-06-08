@@ -13,7 +13,7 @@
       "token": "token_runner_smoke",
       "subject_id": "sub_runner_smoke",
       "scopes": ["worker"],
-      "allowed_actions": ["node.read", "node.service.start", "node.service.stop"]
+      "allowed_actions": ["node.read", "node.service.start", "node.service.touch", "node.service.stop"]
     }
   ],
   "services": [
@@ -23,6 +23,7 @@
       "runtime_adapter": "docker",
       "provider_endpoint": "http://localhost:8188",
       "initial_status": "stopped",
+      "idle_timeout_seconds": 900,
       "docker": {
         "container_name": "provider-container",
         "ready_url": "http://localhost:8188/v1/provider/health",

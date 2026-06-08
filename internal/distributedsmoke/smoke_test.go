@@ -37,6 +37,7 @@ func TestRunDistributedSmokePassesPrimaryPlusNodeFlow(t *testing.T) {
 		"gateway.artifact_content",
 		"node.service_running",
 		"node.start_metric",
+		"node.touch_metric",
 		"leases.release_audit",
 		"provider.invoked",
 	} {

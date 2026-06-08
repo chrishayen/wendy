@@ -211,6 +211,9 @@ func (r *Runner) runJob(ctx context.Context, job contracts.Job) error {
 	} else if terminal {
 		return nil
 	}
+	if plan.Route.NodeManaged {
+		_ = r.touchNodeService(ctx, plan.Route)
+	}
 	invokeCtx, stopKeepalive := r.providerInvocationContext(ctx, job.JobID, plan, lease)
 	response, err := r.invokeProvider(invokeCtx, job.JobID, plan, lease)
 	keepaliveErr := stopKeepalive()
@@ -568,6 +571,26 @@ func (r *Runner) startNodeService(ctx context.Context, nodeURL, serviceID string
 	var service contracts.NodeService
 	err := r.postJSON(ctx, nodeURL+"/v1/node/services/"+url.PathEscape(serviceID)+"/start", nil, "runner-start-"+serviceID, &service)
 	return service, err
+}
+
+func (r *Runner) touchNodeService(ctx context.Context, route contracts.CapabilityRoute) error {
+	nodeURL, err := r.nodeURLForRoute(route)
+	if err != nil {
+		return err
+	}
+	var service contracts.NodeService
+	err = r.postJSON(ctx, nodeURL+"/v1/node/services/"+url.PathEscape(route.ServiceID)+"/touch", nil, "", &service)
+	if err == nil {
+		return nil
+	}
+	var componentErr componentError
+	if errors.As(err, &componentErr) {
+		switch componentErr.StatusCode {
+		case http.StatusUnauthorized, http.StatusForbidden, http.StatusNotFound, http.StatusMethodNotAllowed:
+			return nil
+		}
+	}
+	return err
 }
 
 func (r *Runner) invokeProvider(ctx context.Context, jobID string, plan executionPlan, lease *contracts.Lease) (contracts.ProviderInvokeResponse, error) {

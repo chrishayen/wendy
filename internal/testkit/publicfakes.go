@@ -801,11 +801,28 @@ func (h *fakeNodeHandler) serviceRoute(w http.ResponseWriter, r *http.Request, t
 	switch parts[1] {
 	case "start":
 		h.lifecycle(w, r, serviceID, "start")
+	case "touch":
+		h.touch(w, r, serviceID)
 	case "stop":
 		h.lifecycle(w, r, serviceID, "stop")
 	default:
 		writeFakeError(w, r, http.StatusNotFound, "not_found", "fake node service route not found", false)
 	}
+}
+
+func (h *fakeNodeHandler) touch(w http.ResponseWriter, r *http.Request, serviceID string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	service, ok := h.services[serviceID]
+	if !ok {
+		writeFakeError(w, r, http.StatusNotFound, "not_found", "fake node service not found", false)
+		return
+	}
+	if service.Status == "stopped" {
+		writeFakeError(w, r, http.StatusServiceUnavailable, "provider_unavailable", "fake node service is not running", true)
+		return
+	}
+	writeFakeSuccess(w, r, http.StatusOK, cloneFakeNodeService(service))
 }
 
 func (h *fakeNodeHandler) lifecycle(w http.ResponseWriter, r *http.Request, serviceID, operation string) {

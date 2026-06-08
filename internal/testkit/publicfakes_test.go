@@ -945,6 +945,11 @@ func TestFakeNodeHandlerStartsAndStopsService(t *testing.T) {
 		t.Fatalf("missing key envelope = %#v", missingKey)
 	}
 
+	touchStopped := doFakeNodeEnvelope(t, server, http.MethodPost, "/v1/node/services/svc_fake_stopped/touch", nil, http.StatusServiceUnavailable)
+	if touchStopped.OK || touchStopped.Error.Code != "provider_unavailable" {
+		t.Fatalf("touch stopped envelope = %#v", touchStopped)
+	}
+
 	started := doFakeNodeEnvelope(t, server, http.MethodPost, "/v1/node/services/svc_fake_stopped/start", map[string]string{
 		"Idempotency-Key": "fake-node-start-1",
 	}, http.StatusAccepted)
@@ -952,6 +957,12 @@ func TestFakeNodeHandlerStartsAndStopsService(t *testing.T) {
 	decodeEnvelopeData(t, started, &service)
 	if service.Status != "starting" {
 		t.Fatalf("start service = %#v", service)
+	}
+
+	touched := doFakeNodeEnvelope(t, server, http.MethodPost, "/v1/node/services/svc_fake_running/touch", nil, http.StatusOK)
+	decodeEnvelopeData(t, touched, &service)
+	if service.Status != "running" {
+		t.Fatalf("touch service = %#v", service)
 	}
 
 	stopped := doFakeNodeEnvelope(t, server, http.MethodPost, "/v1/node/services/svc_fake_stopped/stop", map[string]string{

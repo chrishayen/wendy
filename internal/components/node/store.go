@@ -27,14 +27,15 @@ var (
 )
 
 type Store struct {
-	mu          sync.RWMutex
-	now         func() time.Time
-	config      contracts.NodeConfig
-	authByToken map[string]contracts.NodeAuthSubject
-	services    map[string]*serviceRecord
-	idempotency map[string]idempotentLifecycle
-	startCount  int
-	stopCount   int
+	mu            sync.RWMutex
+	now           func() time.Time
+	config        contracts.NodeConfig
+	authByToken   map[string]contracts.NodeAuthSubject
+	services      map[string]*serviceRecord
+	idempotency   map[string]idempotentLifecycle
+	startCount    int
+	stopCount     int
+	idleStopCount int
 }
 
 type serviceRecord struct {
@@ -42,6 +43,7 @@ type serviceRecord struct {
 	status              string
 	process             *processRuntime
 	dockerReadyDeadline time.Time
+	lastUsedAt          time.Time
 }
 
 type idempotentLifecycle struct {
@@ -104,7 +106,7 @@ func NewStore(cfg contracts.NodeConfig) (*Store, error) {
 		if status == "" {
 			status = "stopped"
 		}
-		store.services[service.ServiceID] = &serviceRecord{config: service, status: status}
+		store.services[service.ServiceID] = &serviceRecord{config: service, status: status, lastUsedAt: store.now()}
 	}
 	return store, nil
 }
@@ -151,6 +153,7 @@ func (s *Store) Metrics() contracts.ComponentMetrics {
 		contracts.CountMetric("node_services_total", len(s.services), map[string]string{"node_id": s.config.NodeID}),
 		contracts.CountMetric("node_service_start_total", s.startCount, map[string]string{"node_id": s.config.NodeID}),
 		contracts.CountMetric("node_service_stop_total", s.stopCount, map[string]string{"node_id": s.config.NodeID}),
+		contracts.CountMetric("node_service_idle_stop_total", s.idleStopCount, map[string]string{"node_id": s.config.NodeID}),
 	}
 	servicesByStatus := map[string]int{}
 	servicesByAdapter := map[string]int{}
@@ -268,8 +271,26 @@ func (s *Store) StartService(serviceID, idempotencyKey string) (contracts.NodeSe
 	default:
 		return contracts.NodeService{}, 0, ErrRuntimeUnavailable
 	}
+	if rec.status == "starting" || rec.status == "running" {
+		rec.lastUsedAt = s.now()
+	}
 	s.idempotency[idempotencyKey] = idempotentLifecycle{fingerprint: fingerprint, serviceID: serviceID}
 	return serviceProjection(rec), status, nil
+}
+
+func (s *Store) TouchService(serviceID string) (contracts.NodeService, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	rec, ok := s.services[serviceID]
+	if !ok {
+		return contracts.NodeService{}, ErrNotFound
+	}
+	s.advanceRuntimeLocked(rec)
+	if rec.status == "stopped" {
+		return contracts.NodeService{}, ErrRuntimeUnavailable
+	}
+	rec.lastUsedAt = s.now()
+	return serviceProjection(rec), nil
 }
 
 func (s *Store) StopService(serviceID, idempotencyKey string) (contracts.NodeService, int, error) {
@@ -339,12 +360,14 @@ func (s *Store) advanceRuntimeLocked(rec *serviceRecord) {
 	case "fake":
 		if rec.status == "starting" {
 			rec.status = "running"
+			rec.lastUsedAt = s.now()
 		}
 	case "docker":
 		s.advanceDockerRuntimeLocked(rec)
 	case "process":
 		s.advanceProcessRuntimeLocked(rec)
 	}
+	s.applyIdleShutdownLocked(rec)
 }
 
 func (s *Store) advanceDockerRuntimeLocked(rec *serviceRecord) {
@@ -363,10 +386,12 @@ func (s *Store) advanceDockerRuntimeLocked(rec *serviceRecord) {
 		return
 	}
 	if rec.status == "running" {
+		s.applyIdleShutdownLocked(rec)
 		return
 	}
 	if rec.config.Docker == nil || rec.config.Docker.ReadyURL == "" || processReady(rec.config.Docker.ReadyURL) {
 		rec.status = "running"
+		rec.lastUsedAt = s.now()
 		return
 	}
 	if !rec.dockerReadyDeadline.IsZero() && s.now().After(rec.dockerReadyDeadline) {
@@ -396,10 +421,12 @@ func (s *Store) advanceProcessRuntimeLocked(rec *serviceRecord) {
 	}
 	if rec.config.Process == nil || rec.config.Process.ReadyURL == "" {
 		rec.status = "running"
+		rec.lastUsedAt = s.now()
 		return
 	}
 	if processReady(rec.config.Process.ReadyURL) {
 		rec.status = "running"
+		rec.lastUsedAt = s.now()
 		return
 	}
 	if !rec.process.readyDeadline.IsZero() && s.now().After(rec.process.readyDeadline) {
@@ -409,6 +436,48 @@ func (s *Store) advanceProcessRuntimeLocked(rec *serviceRecord) {
 		rec.process = nil
 		rec.status = "failed"
 	}
+}
+
+func (s *Store) applyIdleShutdownLocked(rec *serviceRecord) {
+	timeout := idleTimeout(rec.config)
+	if timeout <= 0 || rec.status != "running" {
+		return
+	}
+	if rec.lastUsedAt.IsZero() {
+		rec.lastUsedAt = s.now()
+		return
+	}
+	if s.now().Before(rec.lastUsedAt.Add(timeout)) {
+		return
+	}
+	switch rec.config.RuntimeAdapter {
+	case "fake":
+		rec.status = "stopped"
+		s.stopCount++
+		s.idleStopCount++
+	case "process":
+		process := rec.process
+		rec.process = nil
+		rec.status = "stopped"
+		s.stopCount++
+		s.idleStopCount++
+		go stopProcessRuntime(process, processStopTimeout(rec.config))
+	case "docker":
+		rec.status = "stopped"
+		rec.dockerReadyDeadline = time.Time{}
+		s.stopCount++
+		s.idleStopCount++
+		go func(config contracts.NodeServiceConfig) {
+			_ = stopDockerRuntime(config)
+		}(rec.config)
+	}
+}
+
+func idleTimeout(service contracts.NodeServiceConfig) time.Duration {
+	if service.IdleTimeoutSeconds <= 0 {
+		return 0
+	}
+	return time.Duration(service.IdleTimeoutSeconds) * time.Second
 }
 
 func (s *Store) formatNow() string {
@@ -424,6 +493,9 @@ func parseBearer(credential string) (string, error) {
 }
 
 func validateRuntimeConfig(service contracts.NodeServiceConfig) error {
+	if service.IdleTimeoutSeconds < 0 {
+		return fmt.Errorf("%w: idle_timeout_seconds must be >= 0", ErrValidation)
+	}
 	switch service.RuntimeAdapter {
 	case "fake":
 		return nil
@@ -592,6 +664,11 @@ func serviceLinks(serviceID, status string) map[string]any {
 		}
 	case "starting":
 		return map[string]any{"status": map[string]any{"method": "GET", "href": "/v1/node/services/" + serviceID, "description": "Poll service status."}}
+	case "running":
+		return map[string]any{
+			"touch": map[string]any{"method": "POST", "href": "/v1/node/services/" + serviceID + "/touch", "description": "Record active service use."},
+			"stop":  map[string]any{"method": "POST", "href": "/v1/node/services/" + serviceID + "/stop", "description": "Stop service."},
+		}
 	default:
 		return map[string]any{"stop": map[string]any{"method": "POST", "href": "/v1/node/services/" + serviceID + "/stop", "description": "Stop service."}}
 	}

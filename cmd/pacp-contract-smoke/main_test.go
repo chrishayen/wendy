@@ -261,6 +261,7 @@ func TestRunFakePublicAPISmokePasses(t *testing.T) {
 		"check=fake.node.service.failed_detail status=pass",
 		"check=fake.node.lifecycle.missing_idempotency status=pass",
 		"check=fake.node.lifecycle.start status=pass",
+		"check=fake.node.lifecycle.touch status=pass",
 		"check=fake.node.lifecycle.stop status=pass",
 		"check=fake.node.unreachable.component_unavailable status=pass",
 		"check=fake.policy.auth.allow status=pass",

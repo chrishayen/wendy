@@ -89,6 +89,16 @@ func (h Handler) serviceRoute(w http.ResponseWriter, r *http.Request, tail strin
 			return
 		}
 		writeSuccess(w, r, status, service)
+	case "touch":
+		if !h.require(w, r, "node.service.touch") {
+			return
+		}
+		service, err := h.store.TouchService(serviceID)
+		if err != nil {
+			writeStoreError(w, r, err)
+			return
+		}
+		writeSuccess(w, r, http.StatusOK, service)
 	case "stop":
 		if !h.require(w, r, "node.service.stop") {
 			return

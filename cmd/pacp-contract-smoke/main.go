@@ -991,6 +991,7 @@ func appendFakeNodeChecks(ctx context.Context, checks *[]fakePublicAPICheck) {
 		checkFakeNodeServiceDetail(ctx, server.Client(), server.URL),
 		checkFakeNodeMissingIdempotency(ctx, server.Client(), server.URL),
 		checkFakeNodeLifecycle(ctx, server.Client(), server.URL, "start"),
+		checkFakeNodeTouch(ctx, server.Client(), server.URL),
 		checkFakeNodeLifecycle(ctx, server.Client(), server.URL, "stop"),
 	)
 
@@ -1059,6 +1060,19 @@ func checkFakeNodeLifecycle(ctx context.Context, client *http.Client, baseURL, o
 	if service.Status != wantStatus {
 		check.OK = false
 		check.Error = fmt.Sprintf("service status = %q, want %q", service.Status, wantStatus)
+	}
+	return check
+}
+
+func checkFakeNodeTouch(ctx context.Context, client *http.Client, baseURL string) fakePublicAPICheck {
+	var service contracts.NodeService
+	check := requestFakeNodeJSON(ctx, client, baseURL, http.MethodPost, "/v1/node/services/svc_fake_running/touch", "fake.node.lifecycle.touch", nil, &service)
+	if !check.OK {
+		return check
+	}
+	if service.Status != "running" {
+		check.OK = false
+		check.Error = fmt.Sprintf("service status = %q, want running", service.Status)
 	}
 	return check
 }

@@ -9,13 +9,13 @@
       "token": "token_node_runner",
       "subject_id": "sub_runner",
       "scopes": ["worker"],
-      "allowed_actions": ["node.read", "node.service.start", "node.service.stop"]
+      "allowed_actions": ["node.read", "node.service.start", "node.service.touch", "node.service.stop"]
     },
     {
       "token": "token_node_admin",
       "subject_id": "sub_admin",
       "scopes": ["admin"],
-      "allowed_actions": ["node.read", "node.service.start", "node.service.stop"]
+      "allowed_actions": ["node.read", "node.service.start", "node.service.touch", "node.service.stop"]
     }
   ],
   "resources": [
@@ -33,6 +33,7 @@
     {
       "runtime_adapter": "fake",
       "initial_status": "stopped",
+      "idle_timeout_seconds": 900,
       "manifest": {
         "schema_version": "v1",
         "service": {

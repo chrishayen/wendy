@@ -13,7 +13,7 @@
       "token": "token_runner_smoke",
       "subject_id": "sub_runner_smoke",
       "scopes": ["worker"],
-      "allowed_actions": ["node.read", "node.service.start", "node.service.stop"]
+      "allowed_actions": ["node.read", "node.service.start", "node.service.touch", "node.service.stop"]
     },
     {
       "token": "token_agent_smoke",
@@ -28,7 +28,8 @@
       "display_name": "ComfyUI GPU",
       "runtime_adapter": "fake",
       "provider_endpoint": "http://node_linux_gpu:8188",
-      "initial_status": "stopped"
+      "initial_status": "stopped",
+      "idle_timeout_seconds": 900
     }
   ]
 }

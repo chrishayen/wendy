@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"pacp/internal/contracts"
 )
@@ -75,6 +76,81 @@ func TestStoreResources(t *testing.T) {
 	resources := store.Resources()
 	if len(resources) != 1 || resources[0].ResourceID != "res_gpu_0" {
 		t.Fatalf("resources = %#v", resources)
+	}
+}
+
+func TestStoreIdleShutdownStopsFakeService(t *testing.T) {
+	now := time.Date(2026, 6, 8, 12, 0, 0, 0, time.UTC)
+	cfg := testConfig()
+	cfg.Services[0].IdleTimeoutSeconds = 10
+	store, err := NewStore(cfg)
+	if err != nil {
+		t.Fatalf("new store: %v", err)
+	}
+	store.SetClock(func() time.Time { return now })
+
+	if _, _, err := store.StartService("svc_comfyui_gpu", "start-idle-1"); err != nil {
+		t.Fatalf("start service: %v", err)
+	}
+	running, err := store.GetService("svc_comfyui_gpu")
+	if err != nil {
+		t.Fatalf("get running service: %v", err)
+	}
+	if running.Status != "running" {
+		t.Fatalf("running service = %#v", running)
+	}
+	now = now.Add(11 * time.Second)
+	stopped, err := store.GetService("svc_comfyui_gpu")
+	if err != nil {
+		t.Fatalf("get idle-stopped service: %v", err)
+	}
+	if stopped.Status != "stopped" {
+		t.Fatalf("idle-stopped service = %#v", stopped)
+	}
+	metrics := store.Metrics()
+	assertStoreMetric(t, metrics, "node_service_idle_stop_total", 1)
+	assertStoreMetric(t, metrics, "node_service_stop_total", 1)
+}
+
+func TestStoreTouchRefreshesIdleDeadline(t *testing.T) {
+	now := time.Date(2026, 6, 8, 12, 0, 0, 0, time.UTC)
+	cfg := testConfig()
+	cfg.Services[0].IdleTimeoutSeconds = 10
+	store, err := NewStore(cfg)
+	if err != nil {
+		t.Fatalf("new store: %v", err)
+	}
+	store.SetClock(func() time.Time { return now })
+
+	if _, _, err := store.StartService("svc_comfyui_gpu", "start-touch-1"); err != nil {
+		t.Fatalf("start service: %v", err)
+	}
+	if _, err := store.GetService("svc_comfyui_gpu"); err != nil {
+		t.Fatalf("get running service: %v", err)
+	}
+	now = now.Add(9 * time.Second)
+	touched, err := store.TouchService("svc_comfyui_gpu")
+	if err != nil {
+		t.Fatalf("touch service: %v", err)
+	}
+	if touched.Status != "running" {
+		t.Fatalf("touched service = %#v", touched)
+	}
+	now = now.Add(9 * time.Second)
+	running, err := store.GetService("svc_comfyui_gpu")
+	if err != nil {
+		t.Fatalf("get touched service: %v", err)
+	}
+	if running.Status != "running" {
+		t.Fatalf("service stopped before refreshed idle deadline: %#v", running)
+	}
+	now = now.Add(2 * time.Second)
+	stopped, err := store.GetService("svc_comfyui_gpu")
+	if err != nil {
+		t.Fatalf("get expired service: %v", err)
+	}
+	if stopped.Status != "stopped" {
+		t.Fatalf("expired service = %#v", stopped)
 	}
 }
 
@@ -218,6 +294,27 @@ func TestStoreRejectsInvalidDockerRuntimeConfig(t *testing.T) {
 	}
 }
 
+func TestStoreRejectsNegativeIdleTimeout(t *testing.T) {
+	cfg := testConfig()
+	cfg.Services[0].IdleTimeoutSeconds = -1
+	if _, err := NewStore(cfg); !errors.Is(err, ErrValidation) {
+		t.Fatalf("expected validation error, got %v", err)
+	}
+}
+
+func assertStoreMetric(t *testing.T, metrics contracts.ComponentMetrics, name string, value float64) {
+	t.Helper()
+	for _, sample := range metrics.Samples {
+		if sample.Name == name {
+			if sample.Value != value {
+				t.Fatalf("metric %s value=%v want=%v", name, sample.Value, value)
+			}
+			return
+		}
+	}
+	t.Fatalf("metric %s not found in %#v", name, metrics.Samples)
+}
+
 func newTestStore(t *testing.T) *Store {
 	t.Helper()
 	store, err := NewStore(testConfig())
@@ -271,7 +368,7 @@ func testConfig() contracts.NodeConfig {
 			Metadata:   map[string]any{"kind": "gpu"},
 		}},
 		Auth: []contracts.NodeAuthSubject{
-			{Token: "token_runner", SubjectID: "sub_runner", Scopes: []string{"worker"}, AllowedActions: []string{"node.read", "node.service.start", "node.service.stop"}},
+			{Token: "token_runner", SubjectID: "sub_runner", Scopes: []string{"worker"}, AllowedActions: []string{"node.read", "node.service.start", "node.service.touch", "node.service.stop"}},
 			{Token: "token_agent", SubjectID: "sub_agent", Scopes: []string{"agent"}, AllowedActions: []string{"node.read"}},
 		},
 		Services: []contracts.NodeServiceConfig{{

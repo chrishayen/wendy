@@ -1329,6 +1329,7 @@ func TestRunnerUsesNodeReturnedProviderEndpoint(t *testing.T) {
 
 	var serviceGets atomic.Int32
 	var serviceStarts atomic.Int32
+	var serviceTouches atomic.Int32
 	nodeServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.Method == http.MethodGet && r.URL.Path == "/v1/node/services/svc_node_endpoint_provider":
@@ -1347,6 +1348,13 @@ func TestRunnerUsesNodeReturnedProviderEndpoint(t *testing.T) {
 			writeRunnerTestSuccess(w, http.StatusAccepted, contracts.NodeService{
 				ServiceID:        "svc_node_endpoint_provider",
 				Status:           "starting",
+				ProviderEndpoint: providerServer.URL,
+			})
+		case r.Method == http.MethodPost && r.URL.Path == "/v1/node/services/svc_node_endpoint_provider/touch":
+			serviceTouches.Add(1)
+			writeRunnerTestSuccess(w, http.StatusOK, contracts.NodeService{
+				ServiceID:        "svc_node_endpoint_provider",
+				Status:           "running",
 				ProviderEndpoint: providerServer.URL,
 			})
 		default:
@@ -1398,8 +1406,8 @@ func TestRunnerUsesNodeReturnedProviderEndpoint(t *testing.T) {
 	if !ok || jobID != created.JobID {
 		t.Fatalf("run result jobID=%q ok=%v", jobID, ok)
 	}
-	if serviceStarts.Load() != 1 || providerInvocations.Load() != 1 {
-		t.Fatalf("starts=%d providerInvocations=%d", serviceStarts.Load(), providerInvocations.Load())
+	if serviceStarts.Load() != 1 || serviceTouches.Load() != 1 || providerInvocations.Load() != 1 {
+		t.Fatalf("starts=%d touches=%d providerInvocations=%d", serviceStarts.Load(), serviceTouches.Load(), providerInvocations.Load())
 	}
 	completed, err := jobStore.Get(created.JobID)
 	if err != nil {

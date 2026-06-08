@@ -194,7 +194,7 @@ func Run(ctx context.Context) DistributedSmokeReport {
 			Token:          runnerToken,
 			SubjectID:      runnerID,
 			Scopes:         []string{"worker"},
-			AllowedActions: []string{"node.read", "node.service.start", "node.service.stop"},
+			AllowedActions: []string{"node.read", "node.service.start", "node.service.touch", "node.service.stop"},
 		}},
 		Services: []contracts.NodeServiceConfig{{
 			ServiceID:        serviceID,
@@ -287,6 +287,7 @@ func Run(ctx context.Context) DistributedSmokeReport {
 	checkGatewayArtifactContent(ctx, client, gatewayHTTP.URL, agentToken, report.ArtifactID, &report)
 	checkNodeService(ctx, client, nodeHTTP.URL, runnerToken, serviceID, &report)
 	checkNodeStartMetric(ctx, client, nodeHTTP.URL, runnerToken, &report)
+	checkNodeTouchMetric(ctx, client, nodeHTTP.URL, runnerToken, &report)
 	checkLeaseReleaseAudit(leaseStore, runnerID, jobID, &report)
 	if providerInvocations.Load() != 1 {
 		report.add(DistributedSmokeCheck{Name: "provider.invoked", Error: fmt.Sprintf("invocations=%d", providerInvocations.Load())})
@@ -766,6 +767,50 @@ func checkNodeStartMetric(ctx context.Context, client *http.Client, nodeURL, run
 	}
 	check.Error = "node_service_start_total was not incremented"
 	report.add(check)
+}
+
+func checkNodeTouchMetric(ctx context.Context, client *http.Client, nodeURL, runnerToken string, report *DistributedSmokeReport) {
+	var envelope rawSuccessEnvelope
+	status, err := requestJSON(ctx, client, http.MethodGet, joinURLPath(nodeURL, "/v1/node/metrics"), nil, map[string]string{"Authorization": "Bearer " + runnerToken}, &envelope)
+	check := DistributedSmokeCheck{Name: "node.touch_metric", HTTPStatus: status}
+	if err != nil {
+		check.Error = err.Error()
+		report.add(check)
+		return
+	}
+	if status != http.StatusOK || !envelope.OK {
+		check.Error = fmt.Sprintf("HTTP %d ok=%t", status, envelope.OK)
+		report.add(check)
+		return
+	}
+	var metrics contracts.ComponentMetrics
+	if err := json.Unmarshal(envelope.Data, &metrics); err != nil {
+		check.Error = "decode metrics: " + err.Error()
+		report.add(check)
+		return
+	}
+	for _, sample := range metrics.Samples {
+		if sample.Name == "http_requests_total" && sample.Value >= 1 && metricLabelsInclude(sample.Labels, map[string]string{
+			"method":       "POST",
+			"route_group":  "/v1/node/services/{service_id}/touch",
+			"status_class": "2xx",
+		}) {
+			check.OK = true
+			report.add(check)
+			return
+		}
+	}
+	check.Error = "node touch HTTP metric was not incremented"
+	report.add(check)
+}
+
+func metricLabelsInclude(labels, want map[string]string) bool {
+	for key, value := range want {
+		if labels[key] != value {
+			return false
+		}
+	}
+	return true
 }
 
 func firstAgentArtifactID(items []contracts.AgentArtifact) string {

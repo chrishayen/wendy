@@ -1015,7 +1015,7 @@ func nodeCommand(cfg adminConfig, httpClient *http.Client, args []string, stdout
 		return 2
 	}
 	if len(args) == 0 {
-		return usage(stderr, "usage: pacp-admin [flags] node <resources|services|service|start|stop> [id]")
+		return usage(stderr, "usage: pacp-admin [flags] node <resources|services|service|start|touch|stop> [id]")
 	}
 	switch args[0] {
 	case "resources":
@@ -1035,10 +1035,12 @@ func nodeCommand(cfg adminConfig, httpClient *http.Client, args []string, stdout
 		return getJSON(cfg, httpClient, cfg.NodeURL, "/v1/node/services/"+url.PathEscape(args[1]), authorizationHeader(cfg.NodeToken), stdout, stderr)
 	case "start":
 		return nodeStartCommand(cfg, httpClient, args[1:], stdout, stderr)
+	case "touch":
+		return nodeTouchCommand(cfg, httpClient, args[1:], stdout, stderr)
 	case "stop":
 		return nodeStopCommand(cfg, httpClient, args[1:], stdout, stderr)
 	default:
-		return usage(stderr, "usage: pacp-admin [flags] node <resources|services|service|start|stop> [id]")
+		return usage(stderr, "usage: pacp-admin [flags] node <resources|services|service|start|touch|stop> [id]")
 	}
 }
 
@@ -1058,6 +1060,20 @@ func nodeStartCommand(cfg adminConfig, httpClient *http.Client, args []string, s
 	}
 	path := "/v1/node/services/" + url.PathEscape(remaining[0]) + "/start"
 	return postJSON(cfg, httpClient, cfg.NodeURL, path, authorizationHeader(cfg.NodeToken), *idempotencyKey, stdout, stderr)
+}
+
+func nodeTouchCommand(cfg adminConfig, httpClient *http.Client, args []string, stdout, stderr io.Writer) int {
+	flags := flag.NewFlagSet("node touch", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	remaining, err := parseSubcommandFlags(flags, args)
+	if err != nil {
+		return 2
+	}
+	if len(remaining) != 1 {
+		return usage(stderr, "usage: pacp-admin [flags] node touch <service-id>")
+	}
+	path := "/v1/node/services/" + url.PathEscape(remaining[0]) + "/touch"
+	return postJSON(cfg, httpClient, cfg.NodeURL, path, authorizationHeader(cfg.NodeToken), "", stdout, stderr)
 }
 
 func nodeStopCommand(cfg adminConfig, httpClient *http.Client, args []string, stdout, stderr io.Writer) int {

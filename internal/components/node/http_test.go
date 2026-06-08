@@ -51,7 +51,7 @@ func s003FixtureConfig() contracts.NodeConfig {
 			Metadata:   map[string]any{"kind": "gpu"},
 		}},
 		Auth: []contracts.NodeAuthSubject{
-			{Token: "token_s003_runner", SubjectID: "sub_runner_s003", Scopes: []string{"worker"}, AllowedActions: []string{"node.read", "node.service.start", "node.service.stop"}},
+			{Token: "token_s003_runner", SubjectID: "sub_runner_s003", Scopes: []string{"worker"}, AllowedActions: []string{"node.read", "node.service.start", "node.service.touch", "node.service.stop"}},
 			{Token: "token_s003_agent", SubjectID: "sub_agent_s003", Scopes: []string{"agent"}, AllowedActions: []string{"node.read"}},
 		},
 		Services: []contracts.NodeServiceConfig{{
@@ -94,6 +94,12 @@ func TestHandlerNodeLifecycle(t *testing.T) {
 	if running["status"] != "running" {
 		t.Fatalf("running = %#v", running)
 	}
+	touched := doJSON(t, handler, http.MethodPost, "/v1/node/services/svc_comfyui_gpu/touch", map[string]string{
+		"Authorization": "Bearer token_runner",
+	}, http.StatusOK)
+	if touched["status"] != "running" {
+		t.Fatalf("touch = %#v", touched)
+	}
 	stopped := doJSON(t, handler, http.MethodPost, "/v1/node/services/svc_comfyui_gpu/stop", map[string]string{
 		"Authorization":   "Bearer token_runner",
 		"Idempotency-Key": "stop-http-1",
@@ -115,6 +121,7 @@ func TestHandlerNodeLifecycle(t *testing.T) {
 	assertMetric(t, metrics, "node_service_start_total", map[string]string{"node_id": "node_linux_gpu"}, 1)
 	assertMetric(t, metrics, "node_service_stop_total", map[string]string{"node_id": "node_linux_gpu"}, 1)
 	assertMetric(t, metrics, "http_requests_total", map[string]string{"method": "POST", "route_group": "/v1/node/services/{service_id}/start", "status_class": "2xx"}, 1)
+	assertMetric(t, metrics, "http_requests_total", map[string]string{"method": "POST", "route_group": "/v1/node/services/{service_id}/touch", "status_class": "2xx"}, 1)
 }
 
 func TestHandlerRejectsUnauthorizedLifecycle(t *testing.T) {

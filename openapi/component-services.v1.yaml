@@ -1049,6 +1049,21 @@ paths:
           $ref: "#/components/responses/Success"
         default:
           $ref: "#/components/responses/Error"
+  /v1/node/services/{service_id}/touch:
+    post:
+      tags: [node]
+      operationId: touchNodeService
+      x-operation-audience: worker
+      x-policy-action: node.service.touch
+      security:
+        - nodeBearer: []
+      parameters:
+        - $ref: "#/components/parameters/ServiceID"
+      responses:
+        "200":
+          $ref: "#/components/responses/Success"
+        default:
+          $ref: "#/components/responses/Error"
   /v1/node/services/{service_id}/stop:
     post:
       tags: [node]

@@ -1724,6 +1724,35 @@ func TestNodeStartRequiresIdempotencyKey(t *testing.T) {
 	}
 }
 
+func TestNodeTouchCommandPostsWithoutIdempotencyKey(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/v1/node/services/svc_gpu/touch" {
+			t.Fatalf("request = %s %s", r.Method, r.URL.Path)
+		}
+		if r.Header.Get("Authorization") != "Bearer node-token" {
+			t.Fatalf("Authorization = %q", r.Header.Get("Authorization"))
+		}
+		if r.Header.Get("Idempotency-Key") != "" {
+			t.Fatalf("Idempotency-Key = %q", r.Header.Get("Idempotency-Key"))
+		}
+		writeEnvelope(t, w, http.StatusOK, map[string]any{"service_id": "svc_gpu", "status": "running"})
+	}))
+	defer server.Close()
+
+	var stdout, stderr bytes.Buffer
+	code := run([]string{
+		"-node-url", server.URL,
+		"-node-token", "node-token",
+		"node", "touch", "svc_gpu",
+	}, &stdout, &stderr, server.Client())
+	if code != 0 {
+		t.Fatalf("code=%d stderr=%s stdout=%s", code, stderr.String(), stdout.String())
+	}
+	if !strings.Contains(stdout.String(), `"status": "running"`) {
+		t.Fatalf("stdout = %s", stdout.String())
+	}
+}
+
 func TestNodeStopCommandPosts(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost || r.URL.Path != "/v1/node/services/svc_gpu/stop" {
