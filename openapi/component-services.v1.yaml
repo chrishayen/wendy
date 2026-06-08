@@ -1032,7 +1032,7 @@ paths:
         - nodeBearer: []
       responses:
         "200":
-          $ref: "#/components/responses/Success"
+          $ref: "#/components/responses/NodeHealthResponse"
         default:
           $ref: "#/components/responses/Error"
   /v1/node/metrics:
@@ -1061,7 +1061,7 @@ paths:
         - $ref: "#/components/parameters/Limit"
       responses:
         "200":
-          $ref: "#/components/responses/Success"
+          $ref: "#/components/responses/NodeResourceListResponse"
         default:
           $ref: "#/components/responses/Error"
   /v1/node/events:
@@ -1077,7 +1077,7 @@ paths:
         - $ref: "#/components/parameters/Limit"
       responses:
         "200":
-          $ref: "#/components/responses/Success"
+          $ref: "#/components/responses/NodeLifecycleEventListResponse"
         default:
           $ref: "#/components/responses/Error"
   /v1/node/services:
@@ -1093,7 +1093,7 @@ paths:
         - $ref: "#/components/parameters/Limit"
       responses:
         "200":
-          $ref: "#/components/responses/Success"
+          $ref: "#/components/responses/NodeServiceListResponse"
         default:
           $ref: "#/components/responses/Error"
   /v1/node/services/{service_id}:
@@ -1108,7 +1108,7 @@ paths:
         - $ref: "#/components/parameters/ServiceID"
       responses:
         "200":
-          $ref: "#/components/responses/Success"
+          $ref: "#/components/responses/NodeServiceResponse"
         default:
           $ref: "#/components/responses/Error"
   /v1/node/services/{service_id}/start:
@@ -1124,9 +1124,9 @@ paths:
         - $ref: "#/components/parameters/IdempotencyKeyRequired"
       responses:
         "200":
-          $ref: "#/components/responses/Success"
+          $ref: "#/components/responses/NodeServiceResponse"
         "202":
-          $ref: "#/components/responses/Success"
+          $ref: "#/components/responses/NodeServiceResponse"
         default:
           $ref: "#/components/responses/Error"
   /v1/node/services/{service_id}/touch:
@@ -1141,7 +1141,7 @@ paths:
         - $ref: "#/components/parameters/ServiceID"
       responses:
         "200":
-          $ref: "#/components/responses/Success"
+          $ref: "#/components/responses/NodeServiceResponse"
         default:
           $ref: "#/components/responses/Error"
   /v1/node/services/{service_id}/stop:
@@ -1157,9 +1157,9 @@ paths:
         - $ref: "#/components/parameters/IdempotencyKeyRequired"
       responses:
         "200":
-          $ref: "#/components/responses/Success"
+          $ref: "#/components/responses/NodeServiceResponse"
         "202":
-          $ref: "#/components/responses/Success"
+          $ref: "#/components/responses/NodeServiceResponse"
         default:
           $ref: "#/components/responses/Error"
 
@@ -1727,6 +1727,61 @@ components:
                 properties:
                   data:
                     $ref: "#/components/schemas/RedactResponse"
+    NodeHealthResponse:
+      description: Node health envelope.
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: "#/components/schemas/SuccessEnvelope"
+              - type: object
+                properties:
+                  data:
+                    $ref: "#/components/schemas/NodeHealth"
+    NodeResourceListResponse:
+      description: Node resource list envelope.
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: "#/components/schemas/SuccessEnvelope"
+              - type: object
+                properties:
+                  data:
+                    $ref: "#/components/schemas/NodeResourceList"
+    NodeLifecycleEventListResponse:
+      description: Node lifecycle event list envelope.
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: "#/components/schemas/SuccessEnvelope"
+              - type: object
+                properties:
+                  data:
+                    $ref: "#/components/schemas/NodeLifecycleEventList"
+    NodeServiceResponse:
+      description: Node service envelope.
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: "#/components/schemas/SuccessEnvelope"
+              - type: object
+                properties:
+                  data:
+                    $ref: "#/components/schemas/NodeService"
+    NodeServiceListResponse:
+      description: Node service list envelope.
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: "#/components/schemas/SuccessEnvelope"
+              - type: object
+                properties:
+                  data:
+                    $ref: "#/components/schemas/NodeServiceList"
     Success:
       description: Success envelope.
       content:
@@ -2683,6 +2738,82 @@ components:
         deleted_artifact_files:
           type: integer
 
+    NodeHealth:
+      type: object
+      required: [status, version, checked_at, details]
+      properties:
+        status:
+          type: string
+        version:
+          type: string
+        checked_at:
+          type: string
+          format: date-time
+        details:
+          $ref: "#/components/schemas/AnyMap"
+    NodeResource:
+      type: object
+      required: [resource_id, tags]
+      properties:
+        resource_id:
+          type: string
+        tags:
+          type: array
+          items:
+            type: string
+        metadata:
+          $ref: "#/components/schemas/AnyMap"
+    NodeResourceList:
+      type: object
+      required: [items, next_cursor]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/NodeResource"
+        next_cursor:
+          type: string
+          nullable: true
+    NodeService:
+      type: object
+      required: [service_id, status, runtime_adapter, provider_endpoint, manifest, links]
+      properties:
+        service_id:
+          type: string
+        status:
+          type: string
+        runtime_adapter:
+          type: string
+        provider_endpoint:
+          type: string
+        manifest:
+          nullable: true
+          allOf:
+            - $ref: "#/components/schemas/ProviderManifest"
+        links:
+          $ref: "#/components/schemas/Links"
+    NodeServiceList:
+      type: object
+      required: [items, next_cursor]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/NodeService"
+        next_cursor:
+          type: string
+          nullable: true
+    NodeLifecycleEventList:
+      type: object
+      required: [items, next_cursor]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/NodeLifecycleEvent"
+        next_cursor:
+          type: string
+          nullable: true
     NodeLifecycleEvent:
       type: object
       required: [event_id, service_id, action, status, occurred_at]
