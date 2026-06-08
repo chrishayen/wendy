@@ -134,7 +134,6 @@ curl http://localhost:18083/v1/leases/health
 curl http://localhost:18084/v1/artifacts/health
 curl http://localhost:18085/v1/policy/health
 curl http://localhost:18086/v1/gateway/health
-curl -X POST http://localhost:18085/v1/api-keys -H 'Content-Type: application/json' -d '{"subject_id":"sub_agent_local","scopes":["agent"],"token":"token_agent"}'
 go run ./cmd/pacp-control -gateway-url http://localhost:18086 -token token_agent tools
 ```
 

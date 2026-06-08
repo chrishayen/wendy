@@ -465,7 +465,7 @@ components:
           type: string
         state:
           type: string
-          enum: [queued, running, succeeded, failed, canceled]
+          enum: [queued, claimed, running, succeeded, failed, canceled, expired]
         created_at:
           type: string
           format: date-time
