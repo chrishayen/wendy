@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"flag"
@@ -12,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"pacp/internal/contracts"
 	"pacp/internal/distributedsmoke"
 	"pacp/internal/openapicheck"
 	"pacp/internal/testkit"
@@ -186,6 +188,8 @@ func runFakePublicAPISmoke(timeout time.Duration, stdout, stderr io.Writer) int 
 		server.Close()
 	}
 
+	appendFakePolicyChecks(ctx, &checks)
+
 	passed := true
 	fmt.Fprintf(stdout, "fake-public-apis=checked components=%d checks=%d\n", len(componentKinds), len(checks))
 	for _, check := range checks {
@@ -211,6 +215,139 @@ func runFakePublicAPISmoke(timeout time.Duration, stdout, stderr io.Writer) int 
 		}
 	}
 	return 1
+}
+
+type fakePolicyEnvelope struct {
+	OK    bool                  `json:"ok"`
+	Data  json.RawMessage       `json:"data"`
+	Error contracts.ErrorObject `json:"error"`
+}
+
+func appendFakePolicyChecks(ctx context.Context, checks *[]fakePublicAPICheck) {
+	allowServer := httptest.NewServer(testkit.NewFakePolicyHandler(testkit.FakePolicyConfig{
+		ValidCredential: "token_fake_policy",
+		SubjectID:       "sub_fake_policy",
+		Scopes:          []string{"component", "worker"},
+		Decision:        contracts.PolicyDecision{Allowed: true, Reason: "fake_allow"},
+		Secrets:         map[string]string{"secret_fake": "super-secret"},
+	}))
+	defer allowServer.Close()
+
+	*checks = append(*checks,
+		checkFakePolicyAuth(ctx, allowServer.Client(), allowServer.URL, "fake.policy.auth.allow", "Bearer token_fake_policy", true),
+		checkFakePolicyAuth(ctx, allowServer.Client(), allowServer.URL, "fake.policy.auth.failure", "Bearer wrong-token", false),
+		checkFakePolicyDecision(ctx, allowServer.Client(), allowServer.URL, "fake.policy.check.allow", true),
+		checkFakePolicySecret(ctx, allowServer.Client(), allowServer.URL),
+		checkFakePolicyRedact(ctx, allowServer.Client(), allowServer.URL),
+	)
+
+	denyServer := httptest.NewServer(testkit.NewFakePolicyHandler(testkit.FakePolicyConfig{
+		Decision: contracts.PolicyDecision{Allowed: false, Reason: "fake_deny"},
+	}))
+	defer denyServer.Close()
+	*checks = append(*checks, checkFakePolicyDecision(ctx, denyServer.Client(), denyServer.URL, "fake.policy.check.deny", false))
+}
+
+func checkFakePolicyAuth(ctx context.Context, client *http.Client, baseURL, name, credential string, wantValid bool) fakePublicAPICheck {
+	var verification contracts.CredentialVerification
+	check := postFakePolicyJSON(ctx, client, baseURL, "/v1/auth/verify", name, contracts.VerifyCredentialRequest{Credential: credential}, &verification)
+	if !check.OK {
+		return check
+	}
+	if verification.Valid != wantValid {
+		check.OK = false
+		check.Error = fmt.Sprintf("valid = %v, want %v", verification.Valid, wantValid)
+		return check
+	}
+	if wantValid && (verification.SubjectID == nil || *verification.SubjectID == "") {
+		check.OK = false
+		check.Error = "valid verification missing subject_id"
+	}
+	return check
+}
+
+func checkFakePolicyDecision(ctx context.Context, client *http.Client, baseURL, name string, wantAllowed bool) fakePublicAPICheck {
+	var decision contracts.PolicyDecision
+	check := postFakePolicyJSON(ctx, client, baseURL, "/v1/policy/check", name, contracts.PolicyCheckRequest{
+		SubjectID: "sub_fake_policy",
+		Action:    "tool.invoke",
+		Resource:  "cap_fake",
+	}, &decision)
+	if !check.OK {
+		return check
+	}
+	if decision.Allowed != wantAllowed {
+		check.OK = false
+		check.Error = fmt.Sprintf("allowed = %v, want %v", decision.Allowed, wantAllowed)
+	}
+	return check
+}
+
+func checkFakePolicySecret(ctx context.Context, client *http.Client, baseURL string) fakePublicAPICheck {
+	var secret contracts.ResolvedSecret
+	check := postFakePolicyJSON(ctx, client, baseURL, "/v1/secrets/resolve", "fake.policy.secret.resolve", contracts.ResolveSecretRequest{
+		SecretRef: "secret_fake",
+		SubjectID: "sub_fake_policy",
+	}, &secret)
+	if !check.OK {
+		return check
+	}
+	if secret.Value != "super-secret" {
+		check.OK = false
+		check.Error = "secret value mismatch"
+	}
+	return check
+}
+
+func checkFakePolicyRedact(ctx context.Context, client *http.Client, baseURL string) fakePublicAPICheck {
+	var redacted contracts.RedactResponse
+	check := postFakePolicyJSON(ctx, client, baseURL, "/v1/redact", "fake.policy.redact", contracts.RedactRequest{Text: "token is super-secret"}, &redacted)
+	if !check.OK {
+		return check
+	}
+	if redacted.Text != "token is [REDACTED]" {
+		check.OK = false
+		check.Error = "redacted text mismatch"
+	}
+	return check
+}
+
+func postFakePolicyJSON(ctx context.Context, client *http.Client, baseURL, path, name string, request any, out any) fakePublicAPICheck {
+	raw, err := json.Marshal(request)
+	if err != nil {
+		return fakePublicAPICheck{Name: name, Error: err.Error()}
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, baseURL+path, bytes.NewReader(raw))
+	if err != nil {
+		return fakePublicAPICheck{Name: name, Error: err.Error()}
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Request-ID", "req_contract_fake_policy")
+	resp, err := client.Do(req)
+	if err != nil {
+		return fakePublicAPICheck{Name: name, Error: err.Error()}
+	}
+	defer resp.Body.Close()
+	check := fakePublicAPICheck{Name: name, HTTPStatus: resp.StatusCode}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		check.Error = fmt.Sprintf("HTTP %d", resp.StatusCode)
+		return check
+	}
+	var envelope fakePolicyEnvelope
+	if err := json.NewDecoder(resp.Body).Decode(&envelope); err != nil {
+		check.Error = err.Error()
+		return check
+	}
+	if !envelope.OK {
+		check.Error = envelope.Error.Message
+		return check
+	}
+	if err := json.Unmarshal(envelope.Data, out); err != nil {
+		check.Error = err.Error()
+		return check
+	}
+	check.OK = true
+	return check
 }
 
 func appendFakeProviderChecks(checks *[]fakePublicAPICheck, prefix string, report testkit.ProviderCheckReport) {

@@ -1,6 +1,7 @@
 package testkit
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"net/http"
@@ -198,6 +199,134 @@ func TestFakeComponentHandlerRejectsUnknownBehavior(t *testing.T) {
 	}
 }
 
+func TestFakePolicyHandlerSupportsAuthAllowAndDeny(t *testing.T) {
+	handler := NewFakePolicyHandler(FakePolicyConfig{
+		ValidCredential: "token_policy",
+		SubjectID:       "sub_policy",
+		Scopes:          []string{"component", "worker"},
+		Decision:        contracts.PolicyDecision{Allowed: true, Reason: "test_allow"},
+		Now:             fixedFakeClock,
+	})
+	server := httptest.NewServer(handler)
+	defer server.Close()
+
+	verify := postFakePolicyEnvelope(t, server, "/v1/auth/verify", contracts.VerifyCredentialRequest{Credential: "Bearer token_policy"}, http.StatusOK)
+	var verification contracts.CredentialVerification
+	decodeEnvelopeData(t, verify, &verification)
+	if !verification.Valid || verification.SubjectID == nil || *verification.SubjectID != "sub_policy" {
+		t.Fatalf("verification = %#v", verification)
+	}
+	if len(verification.Scopes) != 2 {
+		t.Fatalf("scopes = %#v", verification.Scopes)
+	}
+
+	check := postFakePolicyEnvelope(t, server, "/v1/policy/check", contracts.PolicyCheckRequest{
+		SubjectID: "sub_policy",
+		Action:    "tool.invoke",
+		Resource:  "cap_fake",
+	}, http.StatusOK)
+	var decision contracts.PolicyDecision
+	decodeEnvelopeData(t, check, &decision)
+	if !decision.Allowed || decision.Reason != "test_allow" {
+		t.Fatalf("decision = %#v", decision)
+	}
+
+	denyHandler := NewFakePolicyHandler(FakePolicyConfig{
+		Decision: contracts.PolicyDecision{Allowed: false, Reason: "test_deny"},
+	})
+	denyServer := httptest.NewServer(denyHandler)
+	defer denyServer.Close()
+	denyEnvelope := postFakePolicyEnvelope(t, denyServer, "/v1/policy/check", contracts.PolicyCheckRequest{
+		SubjectID: "sub_policy",
+		Action:    "tool.invoke",
+		Resource:  "cap_fake",
+	}, http.StatusOK)
+	decodeEnvelopeData(t, denyEnvelope, &decision)
+	if decision.Allowed || decision.Reason != "test_deny" {
+		t.Fatalf("deny decision = %#v", decision)
+	}
+}
+
+func TestFakePolicyHandlerSupportsAuthFailure(t *testing.T) {
+	handler := NewFakePolicyHandler(FakePolicyConfig{ValidCredential: "token_policy"})
+	server := httptest.NewServer(handler)
+	defer server.Close()
+
+	envelope := postFakePolicyEnvelope(t, server, "/v1/auth/verify", contracts.VerifyCredentialRequest{Credential: "Bearer other"}, http.StatusOK)
+	var verification contracts.CredentialVerification
+	decodeEnvelopeData(t, envelope, &verification)
+	if verification.Valid || verification.SubjectID != nil || len(verification.Scopes) != 0 {
+		t.Fatalf("verification = %#v", verification)
+	}
+}
+
+func TestFakePolicyHandlerSupportsSecretsAndRedaction(t *testing.T) {
+	handler := NewFakePolicyHandler(FakePolicyConfig{
+		SubjectID: "sub_component",
+		Secrets:   map[string]string{"secret_fake": "super-secret"},
+	})
+	server := httptest.NewServer(handler)
+	defer server.Close()
+
+	resolve := postFakePolicyEnvelope(t, server, "/v1/secrets/resolve", contracts.ResolveSecretRequest{
+		SecretRef: "secret_fake",
+		SubjectID: "sub_component",
+	}, http.StatusOK)
+	var secret contracts.ResolvedSecret
+	decodeEnvelopeData(t, resolve, &secret)
+	if secret.Value != "super-secret" {
+		t.Fatalf("secret = %#v", secret)
+	}
+
+	redact := postFakePolicyEnvelope(t, server, "/v1/redact", contracts.RedactRequest{Text: "token is super-secret"}, http.StatusOK)
+	var redacted contracts.RedactResponse
+	decodeEnvelopeData(t, redact, &redacted)
+	if redacted.Text != "token is [REDACTED]" {
+		t.Fatalf("redacted = %#v", redacted)
+	}
+
+	forbidden := postFakePolicyEnvelope(t, server, "/v1/secrets/resolve", contracts.ResolveSecretRequest{
+		SecretRef: "secret_fake",
+		SubjectID: "sub_agent",
+	}, http.StatusForbidden)
+	if forbidden.OK || forbidden.Error.Code != "forbidden" {
+		t.Fatalf("forbidden envelope = %#v", forbidden)
+	}
+}
+
+func TestFakePolicyHandlerRequiresComponentCredential(t *testing.T) {
+	handler := NewFakePolicyHandler(FakePolicyConfig{ComponentCredential: "component-token"})
+	server := httptest.NewServer(handler)
+	defer server.Close()
+
+	req, err := http.NewRequest(http.MethodGet, server.URL+"/v1/policy/health", nil)
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	resp, err := server.Client().Do(req)
+	if err != nil {
+		t.Fatalf("get health: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("status = %d", resp.StatusCode)
+	}
+
+	req, err = http.NewRequest(http.MethodGet, server.URL+"/v1/policy/health", nil)
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	req.Header.Set("Authorization", "Bearer component-token")
+	resp, err = server.Client().Do(req)
+	if err != nil {
+		t.Fatalf("get authorized health: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("authorized status = %d", resp.StatusCode)
+	}
+}
+
 func TestFakeProviderHandlerPassesProviderCheck(t *testing.T) {
 	handler, err := NewFakeProviderHandler(FakeProviderConfig{
 		Endpoint:   "http://provider.fake",
@@ -324,4 +453,47 @@ func hasProviderCheck(report ProviderCheckReport, name string) bool {
 		}
 	}
 	return false
+}
+
+type fakePolicyEnvelope struct {
+	OK    bool                  `json:"ok"`
+	Data  json.RawMessage       `json:"data"`
+	Error contracts.ErrorObject `json:"error"`
+}
+
+func postFakePolicyEnvelope(t *testing.T, server *httptest.Server, path string, body any, wantStatus int) fakePolicyEnvelope {
+	t.Helper()
+	var raw bytes.Buffer
+	if err := json.NewEncoder(&raw).Encode(body); err != nil {
+		t.Fatalf("encode body: %v", err)
+	}
+	req, err := http.NewRequest(http.MethodPost, server.URL+path, &raw)
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Request-ID", "req_fake_policy")
+	resp, err := server.Client().Do(req)
+	if err != nil {
+		t.Fatalf("post %s: %v", path, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != wantStatus {
+		t.Fatalf("POST %s status = %d, want %d", path, resp.StatusCode, wantStatus)
+	}
+	var envelope fakePolicyEnvelope
+	if err := json.NewDecoder(resp.Body).Decode(&envelope); err != nil {
+		t.Fatalf("decode envelope: %v", err)
+	}
+	return envelope
+}
+
+func decodeEnvelopeData(t *testing.T, envelope fakePolicyEnvelope, out any) {
+	t.Helper()
+	if !envelope.OK {
+		t.Fatalf("expected success envelope, got %#v", envelope.Error)
+	}
+	if err := json.Unmarshal(envelope.Data, out); err != nil {
+		t.Fatalf("decode data: %v", err)
+	}
 }

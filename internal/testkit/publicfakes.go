@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -37,6 +38,17 @@ type FakeProviderConfig struct {
 	Endpoint   string
 	Credential string
 	Now        func() time.Time
+}
+
+type FakePolicyConfig struct {
+	ComponentCredential string
+	ValidCredential     string
+	SubjectID           string
+	Scopes              []string
+	Decision            contracts.PolicyDecision
+	Secrets             map[string]string
+	Now                 func() time.Time
+	Samples             []contracts.MetricSample
 }
 
 func NewFakeComponentHandler(cfg FakeComponentConfig) (http.Handler, error) {
@@ -122,9 +134,44 @@ func NewFakeProviderHandler(cfg FakeProviderConfig) (http.Handler, error) {
 	return server, nil
 }
 
+func NewFakePolicyHandler(cfg FakePolicyConfig) http.Handler {
+	if cfg.Now == nil {
+		cfg.Now = time.Now
+	}
+	if cfg.ValidCredential == "" {
+		cfg.ValidCredential = "Bearer token_fake_policy"
+	}
+	cfg.ValidCredential = normalizeFakeCredential(cfg.ValidCredential)
+	if cfg.SubjectID == "" {
+		cfg.SubjectID = "sub_fake_policy"
+	}
+	if cfg.Scopes == nil {
+		cfg.Scopes = []string{"component"}
+	}
+	if cfg.Decision.Reason == "" {
+		if cfg.Decision.Allowed {
+			cfg.Decision.Reason = "fake_allow"
+		} else {
+			cfg.Decision = contracts.PolicyDecision{Allowed: true, Reason: "fake_allow"}
+		}
+	}
+	if cfg.Secrets == nil {
+		cfg.Secrets = map[string]string{}
+	}
+	handler := &fakePolicyHandler{cfg: cfg}
+	if cfg.ComponentCredential != "" {
+		return requireFakeCredential(cfg.ComponentCredential, handler)
+	}
+	return handler
+}
+
 type fakeComponentHandler struct {
 	cfg      FakeComponentConfig
 	contract componentContract
+}
+
+type fakePolicyHandler struct {
+	cfg FakePolicyConfig
 }
 
 func (h *fakeComponentHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -159,6 +206,78 @@ func (h *fakeComponentHandler) ServeHTTP(w http.ResponseWriter, r *http.Request)
 	}
 }
 
+func (h *fakePolicyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	path := strings.TrimSuffix(r.URL.Path, "/")
+	switch {
+	case r.Method == http.MethodGet && path == "/v1/policy/health":
+		health := contracts.NewComponentHealth("policy", map[string]any{"fake": true})
+		health.CheckedAt = h.cfg.Now().UTC().Format(time.RFC3339)
+		writeFakeSuccess(w, r, http.StatusOK, health)
+	case r.Method == http.MethodGet && path == "/v1/policy/metrics":
+		metrics := contracts.NewComponentMetrics("policy", h.cfg.Samples)
+		metrics.CollectedAt = h.cfg.Now().UTC().Format(time.RFC3339)
+		writeFakeSuccess(w, r, http.StatusOK, metrics)
+	case r.Method == http.MethodPost && path == "/v1/auth/verify":
+		var req contracts.VerifyCredentialRequest
+		if !decodeFakeBody(w, r, &req) {
+			return
+		}
+		if normalizeFakeCredential(req.Credential) != h.cfg.ValidCredential {
+			writeFakeSuccess(w, r, http.StatusOK, contracts.CredentialVerification{Valid: false, Scopes: []string{}})
+			return
+		}
+		subjectID := h.cfg.SubjectID
+		writeFakeSuccess(w, r, http.StatusOK, contracts.CredentialVerification{
+			Valid:     true,
+			SubjectID: &subjectID,
+			Scopes:    append([]string(nil), h.cfg.Scopes...),
+		})
+	case r.Method == http.MethodPost && path == "/v1/policy/check":
+		var req contracts.PolicyCheckRequest
+		if !decodeFakeBody(w, r, &req) {
+			return
+		}
+		if req.SubjectID == "" || req.Action == "" {
+			writeFakeError(w, r, http.StatusBadRequest, "validation_failed", "subject_id and action are required", false)
+			return
+		}
+		writeFakeSuccess(w, r, http.StatusOK, h.cfg.Decision)
+	case r.Method == http.MethodPost && path == "/v1/secrets/resolve":
+		var req contracts.ResolveSecretRequest
+		if !decodeFakeBody(w, r, &req) {
+			return
+		}
+		if req.SecretRef == "" || req.SubjectID == "" {
+			writeFakeError(w, r, http.StatusBadRequest, "validation_failed", "secret_ref and subject_id are required", false)
+			return
+		}
+		value, ok := h.cfg.Secrets[req.SecretRef]
+		if !ok {
+			writeFakeError(w, r, http.StatusNotFound, "not_found", "fake secret not found", false)
+			return
+		}
+		if req.SubjectID != h.cfg.SubjectID {
+			writeFakeError(w, r, http.StatusForbidden, "forbidden", "fake subject is not authorized for this secret", false)
+			return
+		}
+		writeFakeSuccess(w, r, http.StatusOK, contracts.ResolvedSecret{SecretRef: req.SecretRef, Value: value})
+	case r.Method == http.MethodPost && path == "/v1/redact":
+		var req contracts.RedactRequest
+		if !decodeFakeBody(w, r, &req) {
+			return
+		}
+		text := req.Text
+		for _, value := range h.cfg.Secrets {
+			if value != "" {
+				text = strings.ReplaceAll(text, value, "[REDACTED]")
+			}
+		}
+		writeFakeSuccess(w, r, http.StatusOK, contracts.RedactResponse{Text: text})
+	default:
+		writeFakeError(w, r, http.StatusNotFound, "not_found", "fake policy route not found", false)
+	}
+}
+
 func (h *fakeComponentHandler) writeBlocked(w http.ResponseWriter, r *http.Request) bool {
 	switch h.cfg.Behavior {
 	case FakeComponentDenied:
@@ -170,6 +289,15 @@ func (h *fakeComponentHandler) writeBlocked(w http.ResponseWriter, r *http.Reque
 	default:
 		return false
 	}
+}
+
+func decodeFakeBody(w http.ResponseWriter, r *http.Request, out any) bool {
+	defer r.Body.Close()
+	if err := json.NewDecoder(r.Body).Decode(out); err != nil {
+		writeFakeError(w, r, http.StatusBadRequest, "validation_failed", "request body is invalid JSON", false)
+		return false
+	}
+	return true
 }
 
 func fakeListPayload(kind string, override []any) map[string]any {
