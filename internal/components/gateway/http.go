@@ -373,6 +373,10 @@ func (h *Handler) invokeTool(w http.ResponseWriter, r *http.Request, capabilityI
 	if !decodeBody(w, r, &req) {
 		return
 	}
+	if !validPreferredMode(req.PreferredMode) {
+		writeError(w, r, http.StatusBadRequest, "validation_failed", "preferred_mode must be sync or async", false)
+		return
+	}
 	fp := invokeFingerprint(sub.ID, capabilityID, req)
 	if replay, ok := h.idempotencyReplay(idempotencyKey, fp); ok {
 		writeJSON(w, replayStatus(replay), contracts.SuccessEnvelope{OK: true, Data: replay.response, Links: replay.links, Meta: meta(r)})
@@ -1196,6 +1200,10 @@ func shouldRunSync(capability contracts.Capability, req contracts.InvokeToolRequ
 		return false
 	}
 	return capability.ExecutionMode == "sync"
+}
+
+func validPreferredMode(value string) bool {
+	return value == "" || value == "sync" || value == "async"
 }
 
 func clampLimit(raw string, defaultValue, min, max int) int {

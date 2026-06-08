@@ -210,6 +210,26 @@ func TestGatewayRejectsInvalidInputTypeBeforeJobCreation(t *testing.T) {
 	}
 }
 
+func TestGatewayRejectsInvalidPreferredModeBeforeJobCreation(t *testing.T) {
+	env := newGatewayTestEnv(t)
+
+	envelope := env.doJSONEnvelope(http.MethodPost, "/v1/tools/cap_image_generate_gpu/invoke", map[string]any{
+		"input":          map[string]any{"prompt": "red mug"},
+		"preferred_mode": "streaming",
+	}, map[string]string{"Authorization": "Bearer token_agent", "Idempotency-Key": "invoke-invalid-mode"}, http.StatusBadRequest)
+	errObj := envelope["error"].(map[string]any)
+	if errObj["code"] != "validation_failed" || errObj["message"] != "preferred_mode must be sync or async" {
+		t.Fatalf("error = %#v", errObj)
+	}
+	created, _, err := env.jobStore.List(jobs.ListFilter{})
+	if err != nil {
+		t.Fatalf("list jobs: %v", err)
+	}
+	if len(created) != 0 {
+		t.Fatalf("jobs were created for invalid preferred_mode: %#v", created)
+	}
+}
+
 func TestGatewayAgentJobProjectionIncludesLeaseQueueStatus(t *testing.T) {
 	env := newGatewayTestEnv(t)
 
