@@ -70,11 +70,12 @@ func TestRunnerCompletesJobAndUploadsArtifact(t *testing.T) {
 	}
 
 	r := New(Config{
-		WorkerID:     "runner_test",
-		JobsURL:      jobsServer.URL,
-		LeasesURL:    leasesServer.URL,
-		ArtifactsURL: artifactsServer.URL,
-		Client:       jobsServer.Client(),
+		WorkerID:       "runner_test",
+		JobsURL:        jobsServer.URL,
+		LeasesURL:      leasesServer.URL,
+		ArtifactsURL:   artifactsServer.URL,
+		ActorSubjectID: "sub_runner_test",
+		Client:         jobsServer.Client(),
 	})
 	jobID, ok, err := r.RunOnce(context.Background())
 	if err != nil {
@@ -96,6 +97,10 @@ func TestRunnerCompletesJobAndUploadsArtifact(t *testing.T) {
 	}
 	if artifact.ProducerRef != created.JobID || artifact.OwnerSubjectID != "sub_agent" {
 		t.Fatalf("artifact = %#v", artifact)
+	}
+	auditEvents := leaseStore.AuditEvents()
+	if len(auditEvents) != 1 || auditEvents[0].ActorSubjectID != "sub_runner_test" {
+		t.Fatalf("lease audit events = %#v", auditEvents)
 	}
 
 	metrics := r.Metrics(context.Background())

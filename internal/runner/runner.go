@@ -32,6 +32,7 @@ type Config struct {
 	NodePollInterval    time.Duration
 	ComponentCredential string
 	WorkerSubjectID     string
+	ActorSubjectID      string
 	Client              *http.Client
 }
 
@@ -67,6 +68,9 @@ func New(cfg Config) *Runner {
 	cfg.PolicyURL = strings.TrimRight(cfg.PolicyURL, "/")
 	cfg.NodeURL = strings.TrimRight(cfg.NodeURL, "/")
 	cfg.NodeURLs = normalizeNodeURLs(cfg.NodeURLs)
+	if cfg.ActorSubjectID == "" {
+		cfg.ActorSubjectID = cfg.WorkerSubjectID
+	}
 	return &Runner{cfg: cfg, client: client, stats: newRunnerStats()}
 }
 
@@ -256,7 +260,11 @@ func (r *Runner) acquireLease(ctx context.Context, jobID, selector string) (*con
 
 func (r *Runner) releaseLease(ctx context.Context, leaseID, holderID, reason string) (contracts.Lease, error) {
 	var lease contracts.Lease
-	err := r.postJSON(ctx, r.cfg.LeasesURL+"/v1/leases/"+url.PathEscape(leaseID)+"/release", contracts.LeaseReleaseRequest{HolderID: holderID, Reason: reason}, "runner-release-"+leaseID, &lease)
+	headers := map[string]string{}
+	if r.cfg.ActorSubjectID != "" {
+		headers["X-Actor-Subject-ID"] = r.cfg.ActorSubjectID
+	}
+	err := r.postJSONWithHeaders(ctx, r.cfg.LeasesURL+"/v1/leases/"+url.PathEscape(leaseID)+"/release", contracts.LeaseReleaseRequest{HolderID: holderID, Reason: reason}, "runner-release-"+leaseID, headers, &lease)
 	return lease, err
 }
 
@@ -486,6 +494,10 @@ func (r *Runner) getJSON(ctx context.Context, target string, out any) error {
 }
 
 func (r *Runner) postJSON(ctx context.Context, target string, body any, idempotencyKey string, out any) error {
+	return r.postJSONWithHeaders(ctx, target, body, idempotencyKey, nil, out)
+}
+
+func (r *Runner) postJSONWithHeaders(ctx context.Context, target string, body any, idempotencyKey string, headers map[string]string, out any) error {
 	var reader io.Reader
 	if body != nil {
 		raw, err := json.Marshal(body)
@@ -503,6 +515,9 @@ func (r *Runner) postJSON(ctx context.Context, target string, body any, idempote
 	}
 	if idempotencyKey != "" {
 		req.Header.Set("Idempotency-Key", idempotencyKey)
+	}
+	for key, value := range headers {
+		req.Header.Set(key, value)
 	}
 	r.addAuth(req)
 	resp, err := r.client.Do(req)

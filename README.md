@@ -143,7 +143,7 @@ go run ./cmd/pacp-artifacts -addr localhost:18084 -root /tmp/pacp-artifacts -sta
 go run ./cmd/pacp-policy -addr localhost:18085 -state-file /tmp/pacp-policy-state.json -seed testdata/policy/local-seed.json
 go run ./cmd/pacp-gateway -addr localhost:18086 -catalog-url http://localhost:18081 -jobs-url http://localhost:18082 -artifacts-url http://localhost:18084 -policy-url http://localhost:18085 -idempotency-state-file /tmp/pacp-gateway-idempotency-state.json
 go run ./cmd/pacp-node -addr localhost:18087 -config testdata/node/linux-gpu-fake.json
-go run ./cmd/pacp-runner -once -worker-id runner_local -jobs-url http://localhost:18082 -leases-url http://localhost:18083 -artifacts-url http://localhost:18084 -policy-url http://localhost:18085 -credential token_worker -node-urls node_linux_gpu=http://localhost:18087 -node-start-timeout 30s -addr localhost:18089
+go run ./cmd/pacp-runner -once -worker-id runner_local -actor-subject-id sub_runner_local -jobs-url http://localhost:18082 -leases-url http://localhost:18083 -artifacts-url http://localhost:18084 -policy-url http://localhost:18085 -credential token_worker -node-urls node_linux_gpu=http://localhost:18087 -node-start-timeout 30s -addr localhost:18089
 ```
 
 Deployment bundles are offline packaging inputs for distributed nodes. Render a
@@ -161,7 +161,7 @@ For a single primary host, `pacp-primary` hosts the control-plane components in
 one process while preserving HTTP component boundaries:
 
 ```sh
-go run ./cmd/pacp-primary -manifest /tmp/pacp-bundle/catalog -resources /tmp/pacp-bundle/leases/resources.json -policy-seed /tmp/pacp-bundle/policy/policy-seed.json -runner-credential token_runner -state-dir /tmp/pacp-primary-state -artifact-root /tmp/pacp-primary-artifacts -node-urls node_linux_gpu=http://linux-box:18087
+go run ./cmd/pacp-primary -manifest /tmp/pacp-bundle/catalog -resources /tmp/pacp-bundle/leases/resources.json -policy-seed /tmp/pacp-bundle/policy/policy-seed.json -runner-credential token_runner -runner-actor-subject-id sub_runner_local -state-dir /tmp/pacp-primary-state -artifact-root /tmp/pacp-primary-artifacts -node-urls node_linux_gpu=http://linux-box:18087
 ```
 
 Node resource declarations can be converted into lease resource seed files:
@@ -190,6 +190,10 @@ authentication is a separate transport guard.
 When `pacp-runner` is given `-policy-url`, or when the primary embedded runner
 uses the co-hosted policy service, the runner credential should identify a
 subject with `worker` scope so `provider.invoke` is allowed intentionally.
+Set `-actor-subject-id` on `pacp-runner` or `-runner-actor-subject-id` on
+`pacp-primary` when lease release audit records should use a stable policy
+subject. If omitted, the runner falls back to the configured runner subject id,
+then omits the audit header and lets the lease service use its local default.
 Set `-addr` to expose `/v1/runner/health` and `/v1/runner/metrics`; set
 `-monitor-token` or `PACP_RUNNER_MONITOR_TOKEN` when those endpoints should
 require a bearer token.

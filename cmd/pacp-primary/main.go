@@ -42,6 +42,7 @@ type primaryConfig struct {
 	GatewayCredential string
 	RunnerCredential  string
 	RunnerSubjectID   string
+	RunnerActorID     string
 	WorkerID          string
 	NodeURL           string
 	NodeURLsRaw       string
@@ -92,6 +93,7 @@ func main() {
 	flag.StringVar(&cfg.GatewayCredential, "gateway-credential", componentCredentialDefault("PACP_GATEWAY_CREDENTIAL"), "component credential used by the gateway for downstream calls")
 	flag.StringVar(&cfg.RunnerCredential, "runner-credential", componentCredentialDefault("PACP_RUNNER_CREDENTIAL"), "component credential used by the runner for downstream calls")
 	flag.StringVar(&cfg.RunnerSubjectID, "runner-subject-id", os.Getenv("PACP_RUNNER_SUBJECT_ID"), "optional runner subject id for policy checks")
+	flag.StringVar(&cfg.RunnerActorID, "runner-actor-subject-id", os.Getenv("PACP_RUNNER_ACTOR_SUBJECT_ID"), "optional runner actor subject id for lease release audit; defaults to runner subject id")
 	flag.StringVar(&cfg.WorkerID, "worker-id", "runner_primary", "runner worker id")
 	flag.StringVar(&cfg.NodeURL, "node-url", os.Getenv("PACP_NODE_URL"), "optional default node service base URL")
 	flag.StringVar(&cfg.NodeURLsRaw, "node-urls", os.Getenv("PACP_NODE_URLS"), "optional comma-separated node_id=URL mappings")
@@ -169,6 +171,7 @@ func runPrimaryStack(ctx context.Context, cfg primaryConfig) error {
 			NodePollInterval:    cfg.NodeStartPoll,
 			ComponentCredential: authorizationHeader(cfg.RunnerCredential),
 			WorkerSubjectID:     cfg.RunnerSubjectID,
+			ActorSubjectID:      cfg.RunnerActorID,
 		})
 		go runnerLoop(ctx, r, cfg.PollInterval, cfg.RunnerCredential)
 	}

@@ -144,6 +144,7 @@ func runDevStack(ctx context.Context, cfg devConfig) error {
 			LeasesURL:           leasesURL,
 			ArtifactsURL:        artifactsURL,
 			ComponentCredential: authorizationHeader(cfg.WorkerToken),
+			ActorSubjectID:      "sub_runner_local",
 		})
 		go runnerLoop(ctx, r, cfg.PollInterval, cfg.WorkerToken)
 	}

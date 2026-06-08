@@ -25,6 +25,7 @@ func main() {
 	nodeURLsRaw := flag.String("node-urls", os.Getenv("PACP_NODE_URLS"), "optional comma-separated node_id=URL mappings for node-managed services")
 	credential := flag.String("credential", componentCredentialDefault("PACP_RUNNER_CREDENTIAL"), "component credential for downstream calls; defaults to PACP_RUNNER_CREDENTIAL or PACP_COMPONENT_TOKEN")
 	workerSubjectID := flag.String("worker-subject-id", os.Getenv("PACP_RUNNER_SUBJECT_ID"), "optional worker subject id for policy checks; defaults to verifying the runner credential")
+	actorSubjectID := flag.String("actor-subject-id", os.Getenv("PACP_RUNNER_ACTOR_SUBJECT_ID"), "optional actor subject id for lease release audit; defaults to worker subject id")
 	addr := flag.String("addr", "", "optional HTTP listen address for runner health and metrics")
 	monitorToken := flag.String("monitor-token", os.Getenv("PACP_RUNNER_MONITOR_TOKEN"), "optional bearer token required for runner health and metrics")
 	nodeStartTimeout := flag.Duration("node-start-timeout", 30*time.Second, "maximum time to wait for node-managed service startup")
@@ -52,6 +53,7 @@ func main() {
 		NodePollInterval:    *nodeStartPoll,
 		ComponentCredential: authorizationHeader(*credential),
 		WorkerSubjectID:     *workerSubjectID,
+		ActorSubjectID:      *actorSubjectID,
 	})
 	logger := observability.NewStructuredLogger(os.Stderr, "runner", observability.WithRedactionValues(*credential, *monitorToken))
 	if strings.TrimSpace(*addr) != "" {
