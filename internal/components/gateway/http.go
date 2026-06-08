@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/url"
@@ -322,7 +323,8 @@ func (h *Handler) listTools(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	records, nextCursor, err := h.listCapabilities(r.Context(), 50)
+	limit := clampLimit(r.URL.Query().Get("limit"), 50, 1, 100)
+	records, nextCursor, err := h.listCapabilities(r.Context(), limit, r.URL.Query().Get("cursor"))
 	if err != nil {
 		h.writeGatewayError(w, r, err)
 		return
@@ -537,7 +539,14 @@ func (h *Handler) listAgentArtifacts(w http.ResponseWriter, r *http.Request, job
 		Items      []contracts.Artifact `json:"items"`
 		NextCursor *string              `json:"next_cursor"`
 	}
-	if err := h.getJSON(r.Context(), h.cfg.ArtifactsURL+"/v1/artifacts?producer_ref="+url.QueryEscape(jobID), &data); err != nil {
+	limit := clampLimit(r.URL.Query().Get("limit"), 50, 1, 100)
+	query := url.Values{}
+	query.Set("producer_ref", jobID)
+	query.Set("limit", strconv.Itoa(limit))
+	if cursor := r.URL.Query().Get("cursor"); cursor != "" {
+		query.Set("cursor", cursor)
+	}
+	if err := h.getJSON(r.Context(), h.cfg.ArtifactsURL+"/v1/artifacts?"+query.Encode(), &data); err != nil {
 		h.writeGatewayError(w, r, err)
 		return
 	}
@@ -698,26 +707,61 @@ func (h *Handler) getCapabilityRoute(ctx context.Context, capabilityID string) (
 	return route, err
 }
 
-func (h *Handler) listCapabilities(ctx context.Context, limit int) ([]contracts.CatalogCapabilityRecord, *string, error) {
+func (h *Handler) listCapabilities(ctx context.Context, limit int, cursor string) ([]contracts.CatalogCapabilityRecord, *string, error) {
 	if h.useStaticCatalog() {
-		records := make([]contracts.CatalogCapabilityRecord, 0, len(h.staticRecords))
-		for _, record := range h.staticRecords {
-			records = append(records, cloneCatalogRecord(record))
-			if limit > 0 && len(records) >= limit {
-				break
+		start := 0
+		if cursor != "" {
+			parsed, err := parseStaticToolCursor(cursor)
+			if err != nil {
+				return nil, nil, downstreamError{status: http.StatusBadRequest, code: "invalid_cursor", message: "cursor is invalid or expired"}
 			}
+			start = parsed
 		}
-		return records, nil, nil
+		if start > len(h.staticRecords) {
+			return nil, nil, downstreamError{status: http.StatusBadRequest, code: "invalid_cursor", message: "cursor is invalid or expired"}
+		}
+		end := len(h.staticRecords)
+		var next *string
+		if limit > 0 && start+limit < end {
+			end = start + limit
+			value := staticToolCursor(end)
+			next = &value
+		}
+		records := make([]contracts.CatalogCapabilityRecord, 0, len(h.staticRecords))
+		for _, record := range h.staticRecords[start:end] {
+			records = append(records, cloneCatalogRecord(record))
+		}
+		return records, next, nil
 	}
 	var data struct {
 		Items      []contracts.CatalogCapabilityRecord `json:"items"`
 		NextCursor *string                             `json:"next_cursor"`
 	}
-	target := h.cfg.CatalogURL + "/v1/catalog/capabilities?limit=" + strconv.Itoa(limit)
+	query := url.Values{}
+	query.Set("limit", strconv.Itoa(limit))
+	if cursor != "" {
+		query.Set("cursor", cursor)
+	}
+	target := h.cfg.CatalogURL + "/v1/catalog/capabilities?" + query.Encode()
 	if err := h.getJSON(ctx, target, &data); err != nil {
 		return nil, nil, err
 	}
 	return data.Items, data.NextCursor, nil
+}
+
+func staticToolCursor(index int) string {
+	return fmt.Sprintf("cursor_gateway_tools_%06d", index)
+}
+
+func parseStaticToolCursor(cursor string) (int, error) {
+	var index int
+	if _, err := fmt.Sscanf(cursor, "cursor_gateway_tools_%06d", &index); err != nil {
+		return 0, err
+	}
+	if index < 0 || staticToolCursor(index) != cursor {
+		return 0, downstreamError{status: http.StatusBadRequest, code: "invalid_cursor", message: "cursor is invalid or expired"}
+	}
+	return index, nil
 }
 
 func (h *Handler) hasStaticCatalog() bool {

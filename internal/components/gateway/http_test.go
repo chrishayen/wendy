@@ -11,6 +11,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -955,6 +956,119 @@ func TestGatewayStaticManifestListsAndInvokesWithoutCatalog(t *testing.T) {
 	}, map[string]string{"Authorization": "Bearer token_agent", "Idempotency-Key": "static-sync-1"}, http.StatusOK)
 	if invoked["mode"] != "sync" || invoked["output"].(map[string]any)["message"] != "hello" {
 		t.Fatalf("invoke = %#v", invoked)
+	}
+}
+
+func TestGatewayStaticToolsPaginate(t *testing.T) {
+	policyStore := policy.NewStore()
+	if _, err := policyStore.CreateAPIKey(contracts.CreateAPIKeyRequest{SubjectID: "sub_agent", Scopes: []string{"agent"}, Token: "token_agent"}); err != nil {
+		t.Fatalf("create agent key: %v", err)
+	}
+	if _, err := policyStore.CreateAPIKey(contracts.CreateAPIKeyRequest{SubjectID: "sub_gateway", Scopes: []string{"component"}, Token: "token_gateway"}); err != nil {
+		t.Fatalf("create gateway key: %v", err)
+	}
+	policyServer := httptest.NewServer(policy.NewHandler(policyStore))
+	defer policyServer.Close()
+
+	manifest := syncTestManifest("http://provider.invalid")
+	manifest.Capabilities[0].ID = "cap_a"
+	second := manifest.Capabilities[0]
+	second.ID = "cap_b"
+	second.Name = "Sync echo B"
+	manifest.Capabilities = append(manifest.Capabilities, second)
+
+	gateway := NewHandler(Config{
+		PolicyURL:         policyServer.URL,
+		GatewayCredential: "Bearer token_gateway",
+		Client:            policyServer.Client(),
+		StaticManifests:   []contracts.ProviderManifest{manifest},
+	})
+	env := &gatewayTestEnv{gateway: gateway, t: t}
+
+	first := env.doJSON(http.MethodGet, "/v1/tools?limit=1", nil, map[string]string{"Authorization": "Bearer token_agent"}, http.StatusOK)
+	items := first["items"].([]any)
+	if len(items) != 1 || items[0].(map[string]any)["id"] != "cap_a" {
+		t.Fatalf("first tools page = %#v", first)
+	}
+	cursor, ok := first["next_cursor"].(string)
+	if !ok || cursor == "" {
+		t.Fatalf("first tools page missing cursor = %#v", first)
+	}
+
+	secondPage := env.doJSON(http.MethodGet, "/v1/tools?limit=1&cursor="+cursor, nil, map[string]string{"Authorization": "Bearer token_agent"}, http.StatusOK)
+	items = secondPage["items"].([]any)
+	if len(items) != 1 || items[0].(map[string]any)["id"] != "cap_b" || secondPage["next_cursor"] != nil {
+		t.Fatalf("second tools page = %#v", secondPage)
+	}
+
+	invalid := env.doJSONEnvelope(http.MethodGet, "/v1/tools?cursor=cursor_catalog_capabilities_000001", nil, map[string]string{"Authorization": "Bearer token_agent"}, http.StatusBadRequest)
+	if invalid["error"].(map[string]any)["code"] != "invalid_cursor" {
+		t.Fatalf("invalid cursor error = %#v", invalid)
+	}
+}
+
+func TestGatewayListAgentArtifactsForwardsPagination(t *testing.T) {
+	var artifactQuery string
+	agentSubjectID := "sub_agent"
+	downstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/auth/verify":
+			writeGatewayTestEnvelope(t, w, http.StatusOK, contracts.CredentialVerification{
+				Valid:     true,
+				SubjectID: &agentSubjectID,
+				Scopes:    []string{"agent"},
+			})
+		case "/v1/jobs/job_page/policy-context":
+			writeGatewayTestEnvelope(t, w, http.StatusOK, contracts.JobPolicyContext{
+				ResourceKind:   "job",
+				JobID:          "job_page",
+				OwnerSubjectID: "sub_agent",
+				JobState:       string(contracts.JobSucceeded),
+				PolicyState:    "readable",
+			})
+		case "/v1/policy/check":
+			writeGatewayTestEnvelope(t, w, http.StatusOK, contracts.PolicyDecision{Allowed: true, Reason: "test_allow"})
+		case "/v1/artifacts":
+			artifactQuery = r.URL.RawQuery
+			writeGatewayTestEnvelope(t, w, http.StatusOK, map[string]any{
+				"items": []contracts.Artifact{{
+					ArtifactID:     "art_page",
+					Name:           "page.png",
+					MediaType:      "image/png",
+					Size:           8,
+					Checksum:       "sha256:test",
+					CreatedAt:      "2026-06-08T12:00:00Z",
+					ProducerRef:    "job_page",
+					OwnerSubjectID: "sub_agent",
+					Links:          map[string]any{},
+				}},
+				"next_cursor": "cursor_artifacts_list_000002",
+			})
+		default:
+			t.Fatalf("unexpected downstream request: %s %s", r.Method, r.URL.String())
+		}
+	}))
+	defer downstream.Close()
+
+	gateway := NewHandler(Config{
+		PolicyURL:    downstream.URL,
+		JobsURL:      downstream.URL,
+		ArtifactsURL: downstream.URL,
+		Client:       downstream.Client(),
+	})
+	env := &gatewayTestEnv{gateway: gateway, t: t}
+
+	data := env.doJSON(http.MethodGet, "/v1/agent/jobs/job_page/artifacts?limit=2&cursor=cursor_artifacts_list_000001", nil, map[string]string{"Authorization": "Bearer token_agent"}, http.StatusOK)
+	items := data["items"].([]any)
+	if len(items) != 1 || items[0].(map[string]any)["artifact_id"] != "art_page" || data["next_cursor"] != "cursor_artifacts_list_000002" {
+		t.Fatalf("artifact page = %#v", data)
+	}
+	query, err := url.ParseQuery(artifactQuery)
+	if err != nil {
+		t.Fatalf("parse artifact query %q: %v", artifactQuery, err)
+	}
+	if query.Get("producer_ref") != "job_page" || query.Get("limit") != "2" || query.Get("cursor") != "cursor_artifacts_list_000001" {
+		t.Fatalf("artifact query = %q", artifactQuery)
 	}
 }
 

@@ -47,6 +47,20 @@ paths:
       x-operation-audience: agent
       x-policy-action: tool.discover
       summary: List tools visible to the authenticated agent.
+      parameters:
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 50
+        - name: cursor
+          in: query
+          required: false
+          schema:
+            type: string
       responses:
         "200":
           description: Visible tools.
@@ -182,6 +196,19 @@ paths:
       summary: List artifacts produced by a job.
       parameters:
         - $ref: "#/components/parameters/JobID"
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 50
+        - name: cursor
+          in: query
+          required: false
+          schema:
+            type: string
       responses:
         "200":
           description: Public artifact metadata.
