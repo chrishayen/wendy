@@ -289,12 +289,13 @@ func alertsCommand(cfg adminConfig, httpClient *http.Client, args []string, stdo
 	queueDepthThreshold := flags.Int("queue-depth-threshold", 0, "lease queue depth above this value produces a warning")
 	runnerHeartbeatStaleAfter := flags.Duration("runner-heartbeat-stale-after", 0, "active runner heartbeat age above this duration produces a warning")
 	providers := flags.Bool("providers", false, "check registered provider health through catalog routes")
+	nodeRegistry := flags.Bool("node-registry", false, "include node registry trust and reachability alerts")
 	remaining, err := parseSubcommandFlags(flags, args)
 	if err != nil {
 		return 2
 	}
 	if len(remaining) != 0 {
-		return usage(stderr, "usage: pacp-admin [flags] alerts [-providers] [-queue-depth-threshold n] [-runner-heartbeat-stale-after duration]")
+		return usage(stderr, "usage: pacp-admin [flags] alerts [-providers] [-node-registry] [-queue-depth-threshold n] [-runner-heartbeat-stale-after duration]")
 	}
 	if *queueDepthThreshold < 0 {
 		return usage(stderr, "queue-depth-threshold must be zero or greater")
@@ -310,6 +311,10 @@ func alertsCommand(cfg adminConfig, httpClient *http.Client, args []string, stdo
 		Now:                       time.Now(),
 		RequestID:                 cfg.RequestID,
 	})
+	if *nodeRegistry {
+		enrichNodeRegistryAlerts(cfg, httpClient, &report)
+	}
+	finalizeAlertsReport(&report)
 	if err := writeJSON(stdout, report); err != nil {
 		fmt.Fprintf(stderr, "write alerts report: %v\n", err)
 		return 1
@@ -2168,10 +2173,71 @@ func buildAlertsReport(health healthReport, metrics metricsReport, opts alertOpt
 		}
 		addMetricFindings(&report, item, opts)
 	}
-	if len(report.Data.Findings) == 0 {
-		addAlertFinding(&report, diagnosticFinding{Severity: "info", Code: "no_alerts", Message: "no alert conditions were detected"})
-	}
 	return report
+}
+
+func enrichNodeRegistryAlerts(cfg adminConfig, httpClient *http.Client, report *alertsReport) {
+	cursor := ""
+	for {
+		path := "/v1/node-registry/nodes?limit=100"
+		if cursor != "" {
+			path += "&cursor=" + url.QueryEscape(cursor)
+		}
+		var envelope struct {
+			OK    bool                     `json:"ok"`
+			Data  contracts.NodeRecordList `json:"data"`
+			Error contracts.ErrorObject    `json:"error"`
+		}
+		status, err := getJSONDecode(cfg, httpClient, cfg.NodeRegistryURL, path, authorizationHeader(cfg.ComponentToken), &envelope)
+		if err != nil {
+			addAlertFinding(report, diagnosticFinding{Severity: "warning", Code: "node_registry_unavailable", Message: "node registry unavailable: " + err.Error()})
+			return
+		}
+		if status < 200 || status >= 300 || !envelope.OK {
+			message := envelope.Error.Message
+			if message == "" {
+				message = fmt.Sprintf("node registry returned HTTP %d", status)
+			}
+			addAlertFinding(report, diagnosticFinding{Severity: "warning", Code: "node_registry_unavailable", Message: message})
+			return
+		}
+		for _, record := range envelope.Data.Items {
+			addNodeRegistryRecordAlerts(report, record)
+		}
+		if envelope.Data.NextCursor == nil || strings.TrimSpace(*envelope.Data.NextCursor) == "" {
+			return
+		}
+		cursor = strings.TrimSpace(*envelope.Data.NextCursor)
+	}
+}
+
+func addNodeRegistryRecordAlerts(report *alertsReport, record contracts.NodeRecord) {
+	nodeID := record.NodeID
+	if nodeID == "" {
+		nodeID = "unknown"
+	}
+	switch record.TrustState {
+	case contracts.NodeTrustDisabled:
+		message := fmt.Sprintf("node %s is disabled", nodeID)
+		if record.DisabledReason != "" {
+			message += ": " + record.DisabledReason
+		}
+		addAlertFinding(report, diagnosticFinding{Severity: "warning", Code: "node_disabled", Message: message})
+	case contracts.NodeTrustUntrusted:
+		addAlertFinding(report, diagnosticFinding{Severity: "warning", Code: "node_untrusted", Message: fmt.Sprintf("node %s is not trusted", nodeID)})
+	}
+	switch record.Status {
+	case contracts.NodeStatusUnreachable:
+		addAlertFinding(report, diagnosticFinding{Severity: "error", Code: "node_unreachable", Message: fmt.Sprintf("node %s is unreachable", nodeID)})
+	case contracts.NodeStatusStale:
+		addAlertFinding(report, diagnosticFinding{Severity: "warning", Code: "node_stale", Message: fmt.Sprintf("node %s heartbeat is stale", nodeID)})
+	}
+}
+
+func finalizeAlertsReport(report *alertsReport) {
+	if report != nil && len(report.Data.Findings) == 0 {
+		addAlertFinding(report, diagnosticFinding{Severity: "info", Code: "no_alerts", Message: "no alert conditions were detected"})
+	}
 }
 
 func addMetricFindings(report *alertsReport, item metricsItem, opts alertOptions) {

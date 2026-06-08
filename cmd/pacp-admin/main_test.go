@@ -605,6 +605,66 @@ func TestAlertsReportsStaleRunnerHeartbeat(t *testing.T) {
 	}
 }
 
+func TestAlertsCanIncludeNodeRegistryFindings(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/health"):
+			writeHealth(t, w, http.StatusOK, "healthy")
+		case strings.HasSuffix(r.URL.Path, "/metrics"):
+			writeMetrics(t, w, http.StatusOK, "component", []map[string]any{})
+		case r.URL.Path == "/v1/node-registry/nodes":
+			if r.Header.Get("Authorization") != "Bearer component-token" {
+				t.Fatalf("registry Authorization = %q", r.Header.Get("Authorization"))
+			}
+			if r.URL.Query().Get("limit") != "100" {
+				t.Fatalf("registry query = %s", r.URL.RawQuery)
+			}
+			writeEnvelope(t, w, http.StatusOK, map[string]any{
+				"items": []map[string]any{
+					{"node_id": "node_unreachable", "trust_state": "trusted", "status": "unreachable"},
+					{"node_id": "node_stale", "trust_state": "trusted", "status": "stale"},
+					{"node_id": "node_disabled", "trust_state": "disabled", "status": "registered", "disabled_reason": "maintenance"},
+					{"node_id": "node_untrusted", "trust_state": "untrusted", "status": "registered"},
+				},
+				"next_cursor": nil,
+			})
+		default:
+			t.Fatalf("request = %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	args := append(coreURLArgs(server.URL),
+		"-node-registry-url", server.URL,
+		"-component-token", "component-token",
+		"alerts",
+		"-node-registry",
+	)
+	var stdout, stderr bytes.Buffer
+	code := run(args, &stdout, &stderr, server.Client())
+	if code != 1 {
+		t.Fatalf("code=%d stderr=%s stdout=%s", code, stderr.String(), stdout.String())
+	}
+	output := stdout.String()
+	for _, expected := range []string{
+		`"code": "node_unreachable"`,
+		`"code": "node_stale"`,
+		`"code": "node_disabled"`,
+		`"code": "node_untrusted"`,
+	} {
+		if !strings.Contains(output, expected) {
+			t.Fatalf("stdout missing %q:\n%s", expected, output)
+		}
+	}
+	var report alertsReport
+	if err := json.Unmarshal(stdout.Bytes(), &report); err != nil {
+		t.Fatalf("decode alerts: %v\n%s", err, output)
+	}
+	if report.OK || report.Data.Summary.Errors == 0 || report.Data.Summary.Warnings < 3 {
+		t.Fatalf("report = %#v", report)
+	}
+}
+
 func TestCatalogRouteCommandUsesComponentToken(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet || r.URL.Path != "/v1/catalog/capabilities/cap_1/route" {

@@ -415,7 +415,7 @@ go run ./cmd/pacp-admin -node-url http://localhost:18087 -node-token token_agent
 go run ./cmd/pacp-admin -node-urls node_linux_gpu=http://localhost:18087 -node-token token_agent_smoke health -providers
 go run ./cmd/pacp-admin -runner-url http://localhost:18089 health
 go run ./cmd/pacp-admin -node-urls node_linux_gpu=http://localhost:18087 -node-token token_agent_smoke -runner-url http://localhost:18089 metrics
-go run ./cmd/pacp-admin -node-urls node_linux_gpu=http://localhost:18087 -node-token token_agent_smoke -runner-url http://localhost:18089 alerts -providers -queue-depth-threshold 1 -runner-heartbeat-stale-after 5m
+go run ./cmd/pacp-admin -node-urls node_linux_gpu=http://localhost:18087 -node-token token_agent_smoke -runner-url http://localhost:18089 alerts -providers -node-registry -queue-depth-threshold 1 -runner-heartbeat-stale-after 5m
 go run ./cmd/pacp-admin catalog route cap_image_generate_gpu
 go run ./cmd/pacp-admin -node-url http://localhost:18087 -node-token token_agent_smoke node services
 go run ./cmd/pacp-admin -node-url http://localhost:18087 -node-token token_runner_smoke node start svc_comfyui_gpu -idempotency-key start-comfy-1
@@ -438,6 +438,8 @@ Gateway health includes per-downstream dependency status for catalog, policy,
 jobs, leases, and artifacts. Gateway metrics expose configured and reachable
 samples for those downstreams, and `pacp-admin alerts` reports configured
 gateway dependencies that are missing or not healthy.
+`pacp-admin alerts -node-registry` reads the public node registry API and
+reports disabled, untrusted, unreachable, and stale nodes.
 Runner operational logs are JSON records with request id, job id when present,
 and configured credentials redacted.
 Gateway and runner requests propagate `X-Request-ID` to downstream component,
