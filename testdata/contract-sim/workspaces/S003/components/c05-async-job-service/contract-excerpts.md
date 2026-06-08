@@ -1507,7 +1507,7 @@ HTTP status: `401`.
 }
 ```
 
-Missing or invalid gateway credential:
+Missing or invalid component credential:
 
 HTTP status: `401`.
 
@@ -1516,7 +1516,7 @@ HTTP status: `401`.
   "ok": false,
   "error": {
     "code": "unauthorized",
-    "message": "job component operation requires a valid gateway credential",
+    "message": "job component operation requires a valid component credential",
     "retryable": false
   },
   "links": {},

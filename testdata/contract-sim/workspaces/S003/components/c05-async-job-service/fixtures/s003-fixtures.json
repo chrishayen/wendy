@@ -1260,7 +1260,7 @@
         "status": 401,
         "body": {
           "ok": false,
-          "error": {"code": "unauthorized", "message": "job component operation requires a valid gateway credential", "retryable": false},
+          "error": {"code": "unauthorized", "message": "job component operation requires a valid component credential", "retryable": false},
           "links": {},
           "meta": {"request_id": "req_s003_job_gateway_unauthorized", "schema_version": "v1"}
         }
