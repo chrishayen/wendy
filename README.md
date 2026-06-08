@@ -22,7 +22,7 @@ Contract simulation data is kept as test input, not as product behavior.
   file-backed durable storage, health, and HTTP handlers.
 - `internal/components/leases`: resource registry, FIFO lease queue, heartbeat,
   release, expiration, and inspection service with in-memory or file-backed
-  durable storage, health, and HTTP handlers.
+  durable storage, startup resource seeding, health, and HTTP handlers.
 - `internal/components/artifacts`: upload-session, blob storage, durable
   metadata snapshots, policy context, guarded local registration, and retrieval
   service with health and a local filesystem root.
@@ -77,7 +77,7 @@ The services can also be run separately for distributed testing:
 go run ./cmd/pacp-fake-provider -addr localhost:18088
 go run ./cmd/pacp-catalog -addr localhost:18081 -manifest testdata/manifests/s003-comfyui-gpu.json -state-file /tmp/pacp-catalog-state.json
 go run ./cmd/pacp-jobs -addr localhost:18082 -state-file /tmp/pacp-jobs-state.json
-go run ./cmd/pacp-leases -addr localhost:18083 -state-file /tmp/pacp-leases-state.json
+go run ./cmd/pacp-leases -addr localhost:18083 -state-file /tmp/pacp-leases-state.json -resources testdata/leases/linux-gpu-resources.json
 go run ./cmd/pacp-artifacts -addr localhost:18084 -root /tmp/pacp-artifacts -state-file /tmp/pacp-artifacts-state.json
 go run ./cmd/pacp-policy -addr localhost:18085 -state-file /tmp/pacp-policy-state.json
 go run ./cmd/pacp-gateway -addr localhost:18086 -catalog-url http://localhost:18081 -jobs-url http://localhost:18082 -artifacts-url http://localhost:18084 -policy-url http://localhost:18085 -idempotency-state-file /tmp/pacp-gateway-idempotency-state.json
