@@ -199,6 +199,176 @@ func TestFakeComponentHandlerRejectsUnknownBehavior(t *testing.T) {
 	}
 }
 
+func TestFakeJobsHandlerExposesRequiredStates(t *testing.T) {
+	handler, err := NewFakeJobsHandler(FakeJobsConfig{Now: fixedFakeClock})
+	if err != nil {
+		t.Fatalf("new fake jobs: %v", err)
+	}
+	server := httptest.NewServer(handler)
+	defer server.Close()
+
+	envelope := doFakeJobsEnvelope(t, server, http.MethodGet, "/v1/jobs", nil, nil, http.StatusOK)
+	var list struct {
+		Items []contracts.Job `json:"items"`
+	}
+	decodeEnvelopeData(t, envelope, &list)
+	states := map[contracts.JobState]bool{}
+	for _, job := range list.Items {
+		states[job.State] = true
+	}
+	for _, want := range []contracts.JobState{
+		contracts.JobQueued,
+		contracts.JobClaimed,
+		contracts.JobRunning,
+		contracts.JobSucceeded,
+		contracts.JobFailed,
+		contracts.JobCanceled,
+		contracts.JobExpired,
+	} {
+		if !states[want] {
+			t.Fatalf("state %q missing from %#v", want, list.Items)
+		}
+	}
+
+	expiredEnvelope := doFakeJobsEnvelope(t, server, http.MethodGet, "/v1/jobs?state=expired", nil, nil, http.StatusOK)
+	decodeEnvelopeData(t, expiredEnvelope, &list)
+	if len(list.Items) != 1 || list.Items[0].State != contracts.JobExpired {
+		t.Fatalf("expired list = %#v", list.Items)
+	}
+}
+
+func TestFakeJobsHandlerRunsLifecycle(t *testing.T) {
+	handler, err := NewFakeJobsHandler(FakeJobsConfig{Now: fixedFakeClock})
+	if err != nil {
+		t.Fatalf("new fake jobs: %v", err)
+	}
+	server := httptest.NewServer(handler)
+	defer server.Close()
+
+	claimed := doFakeJobsEnvelope(t, server, http.MethodPost, "/v1/jobs/job_fake_queued/claim", nil, contracts.JobClaimRequest{
+		WorkerID:     "runner_test",
+		LeaseSeconds: 30,
+	}, http.StatusOK)
+	var job contracts.Job
+	decodeEnvelopeData(t, claimed, &job)
+	if job.State != contracts.JobClaimed || job.Claim == nil || job.Claim.WorkerID != "runner_test" {
+		t.Fatalf("claimed job = %#v", job)
+	}
+
+	running := doFakeJobsEnvelope(t, server, http.MethodPost, "/v1/jobs/job_fake_queued/heartbeat", nil, contracts.JobHeartbeatRequest{
+		WorkerID:      "runner_test",
+		TransitionTo:  "running",
+		StatusMessage: "fake running",
+	}, http.StatusOK)
+	decodeEnvelopeData(t, running, &job)
+	if job.State != contracts.JobRunning || job.StatusMessage != "fake running" {
+		t.Fatalf("running job = %#v", job)
+	}
+
+	logs := doFakeJobsEnvelope(t, server, http.MethodPost, "/v1/jobs/job_fake_queued/logs", nil, contracts.AppendJobLogRequest{
+		WorkerID: "runner_test",
+		Entries: []contracts.JobLogEntry{{
+			Timestamp: "2026-06-08T00:02:00Z",
+			Level:     "info",
+			Message:   "progress",
+			Fields:    map[string]any{},
+		}},
+	}, http.StatusOK)
+	var logList struct {
+		Items []contracts.JobLogEntry `json:"items"`
+	}
+	decodeEnvelopeData(t, logs, &logList)
+	if len(logList.Items) < 2 {
+		t.Fatalf("logs = %#v", logList.Items)
+	}
+
+	completed := doFakeJobsEnvelope(t, server, http.MethodPost, "/v1/jobs/job_fake_queued/complete", nil, contracts.JobCompleteRequest{
+		WorkerID:     "runner_test",
+		ArtifactRefs: []string{"art_test"},
+	}, http.StatusOK)
+	decodeEnvelopeData(t, completed, &job)
+	if job.State != contracts.JobSucceeded || len(job.ArtifactRefs) != 1 || job.ArtifactRefs[0] != "art_test" {
+		t.Fatalf("completed job = %#v", job)
+	}
+}
+
+func TestFakeJobsHandlerCreatesAndCancelsWithIdempotency(t *testing.T) {
+	handler, err := NewFakeJobsHandler(FakeJobsConfig{Now: fixedFakeClock})
+	if err != nil {
+		t.Fatalf("new fake jobs: %v", err)
+	}
+	server := httptest.NewServer(handler)
+	defer server.Close()
+
+	missingCreateKey := doFakeJobsEnvelope(t, server, http.MethodPost, "/v1/jobs", nil, contracts.CreateJobRequest{RequesterID: "sub_test"}, http.StatusBadRequest)
+	if missingCreateKey.OK || missingCreateKey.Error.Code != "missing_idempotency_key" {
+		t.Fatalf("missing create key = %#v", missingCreateKey)
+	}
+
+	created := doFakeJobsEnvelope(t, server, http.MethodPost, "/v1/jobs", map[string]string{"Idempotency-Key": "create-1"}, contracts.CreateJobRequest{
+		RequesterID:  "sub_test",
+		CapabilityID: "cap_test",
+		InputSummary: map[string]any{"prompt": "hello"},
+	}, http.StatusCreated)
+	var job contracts.Job
+	decodeEnvelopeData(t, created, &job)
+	if job.State != contracts.JobQueued || job.JobID == "" {
+		t.Fatalf("created job = %#v", job)
+	}
+
+	replayed := doFakeJobsEnvelope(t, server, http.MethodPost, "/v1/jobs", map[string]string{"Idempotency-Key": "create-1"}, contracts.CreateJobRequest{
+		RequesterID:  "sub_test",
+		CapabilityID: "cap_test",
+		InputSummary: map[string]any{"prompt": "hello"},
+	}, http.StatusOK)
+	var replayedJob contracts.Job
+	decodeEnvelopeData(t, replayed, &replayedJob)
+	if replayedJob.JobID != job.JobID {
+		t.Fatalf("replayed job = %#v, created = %#v", replayedJob, job)
+	}
+
+	createConflict := doFakeJobsEnvelope(t, server, http.MethodPost, "/v1/jobs", map[string]string{"Idempotency-Key": "create-1"}, contracts.CreateJobRequest{
+		RequesterID:  "sub_test",
+		CapabilityID: "cap_other",
+	}, http.StatusConflict)
+	if createConflict.OK || createConflict.Error.Code != "idempotency_conflict" {
+		t.Fatalf("create conflict = %#v", createConflict)
+	}
+
+	missingCancelKey := doFakeJobsEnvelope(t, server, http.MethodPost, "/v1/jobs/job_fake_cancelable/cancel", nil, contracts.CancelRequest{Reason: "stop"}, http.StatusBadRequest)
+	if missingCancelKey.OK || missingCancelKey.Error.Code != "missing_idempotency_key" {
+		t.Fatalf("missing cancel key = %#v", missingCancelKey)
+	}
+
+	canceled := doFakeJobsEnvelope(t, server, http.MethodPost, "/v1/jobs/job_fake_cancelable/cancel", map[string]string{"Idempotency-Key": "cancel-1"}, contracts.CancelRequest{Reason: "stop"}, http.StatusOK)
+	decodeEnvelopeData(t, canceled, &job)
+	if job.State != contracts.JobCanceled || job.StatusMessage != "stop" {
+		t.Fatalf("canceled job = %#v", job)
+	}
+
+	conflict := doFakeJobsEnvelope(t, server, http.MethodPost, "/v1/jobs/job_fake_cancelable/cancel", map[string]string{"Idempotency-Key": "cancel-1"}, contracts.CancelRequest{Reason: "different"}, http.StatusConflict)
+	if conflict.OK || conflict.Error.Code != "idempotency_conflict" {
+		t.Fatalf("conflict = %#v", conflict)
+	}
+}
+
+func TestFakeJobsHandlerSupportsUnavailableBehavior(t *testing.T) {
+	handler, err := NewFakeJobsHandler(FakeJobsConfig{
+		Behavior: FakeComponentUnavailable,
+		Now:      fixedFakeClock,
+	})
+	if err != nil {
+		t.Fatalf("new fake jobs: %v", err)
+	}
+	server := httptest.NewServer(handler)
+	defer server.Close()
+
+	envelope := doFakeJobsEnvelope(t, server, http.MethodGet, "/v1/jobs/health", nil, nil, http.StatusServiceUnavailable)
+	if envelope.OK || envelope.Error.Code != "component_unavailable" || !envelope.Error.Retryable {
+		t.Fatalf("envelope = %#v", envelope)
+	}
+}
+
 func TestFakePolicyHandlerSupportsAuthAllowAndDeny(t *testing.T) {
 	handler := NewFakePolicyHandler(FakePolicyConfig{
 		ValidCredential: "token_policy",
@@ -588,6 +758,44 @@ func doFakeNodeEnvelope(t *testing.T, server *httptest.Server, method, path stri
 		t.Fatalf("new request: %v", err)
 	}
 	req.Header.Set("X-Request-ID", "req_fake_node")
+	for key, value := range headers {
+		req.Header.Set(key, value)
+	}
+	resp, err := server.Client().Do(req)
+	if err != nil {
+		t.Fatalf("%s %s: %v", method, path, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != wantStatus {
+		t.Fatalf("%s %s status = %d, want %d", method, path, resp.StatusCode, wantStatus)
+	}
+	var envelope fakePolicyEnvelope
+	if err := json.NewDecoder(resp.Body).Decode(&envelope); err != nil {
+		t.Fatalf("decode envelope: %v", err)
+	}
+	return envelope
+}
+
+func doFakeJobsEnvelope(t *testing.T, server *httptest.Server, method, path string, headers map[string]string, body any, wantStatus int) fakePolicyEnvelope {
+	t.Helper()
+	var req *http.Request
+	var err error
+	if body != nil {
+		raw, err := json.Marshal(body)
+		if err != nil {
+			t.Fatalf("marshal body: %v", err)
+		}
+		req, err = http.NewRequest(method, server.URL+path, bytes.NewReader(raw))
+	} else {
+		req, err = http.NewRequest(method, server.URL+path, nil)
+	}
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	req.Header.Set("X-Request-ID", "req_fake_jobs")
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
 	for key, value := range headers {
 		req.Header.Set(key, value)
 	}

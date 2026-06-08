@@ -151,6 +151,8 @@ func runFakePublicAPISmoke(timeout time.Duration, stdout, stderr io.Writer) int 
 		}
 	}
 
+	appendFakeJobsChecks(ctx, &checks)
+
 	handler, err := testkit.NewFakeProviderHandler(testkit.FakeProviderConfig{Endpoint: "http://provider.fake"})
 	if err != nil {
 		checks = append(checks, fakePublicAPICheck{Name: "fake.provider.create", Error: err.Error()})
@@ -222,6 +224,237 @@ type fakePolicyEnvelope struct {
 	OK    bool                  `json:"ok"`
 	Data  json.RawMessage       `json:"data"`
 	Error contracts.ErrorObject `json:"error"`
+}
+
+func appendFakeJobsChecks(ctx context.Context, checks *[]fakePublicAPICheck) {
+	handler, err := testkit.NewFakeJobsHandler(testkit.FakeJobsConfig{})
+	if err != nil {
+		*checks = append(*checks, fakePublicAPICheck{Name: "fake.jobs.create", Error: err.Error()})
+		return
+	}
+	server := httptest.NewServer(handler)
+	defer server.Close()
+	*checks = append(*checks,
+		checkFakeJobsStates(ctx, server.Client(), server.URL),
+		checkFakeJobsCreateIdempotency(ctx, server.Client(), server.URL),
+		checkFakeJobsLifecycle(ctx, server.Client(), server.URL),
+		checkFakeJobsCancel(ctx, server.Client(), server.URL),
+		requestFakeJobsExpectedError(ctx, server.Client(), server.URL, http.MethodGet, "/v1/jobs/job_fake_missing", "fake.jobs.missing.not_found", http.StatusNotFound, "not_found", nil, nil),
+	)
+
+	unavailable, err := testkit.NewFakeJobsHandler(testkit.FakeJobsConfig{Behavior: testkit.FakeComponentUnavailable})
+	if err != nil {
+		*checks = append(*checks, fakePublicAPICheck{Name: "fake.jobs.unavailable.create", Error: err.Error()})
+		return
+	}
+	unavailableServer := httptest.NewServer(unavailable)
+	defer unavailableServer.Close()
+	*checks = append(*checks, requestFakeJobsExpectedError(ctx, unavailableServer.Client(), unavailableServer.URL, http.MethodGet, "/v1/jobs/health", "fake.jobs.unavailable.component_unavailable", http.StatusServiceUnavailable, "component_unavailable", nil, nil))
+}
+
+func checkFakeJobsStates(ctx context.Context, client *http.Client, baseURL string) fakePublicAPICheck {
+	var list struct {
+		Items []contracts.Job `json:"items"`
+	}
+	check := requestFakeJobsJSON(ctx, client, baseURL, http.MethodGet, "/v1/jobs", "fake.jobs.states", nil, nil, &list)
+	if !check.OK {
+		return check
+	}
+	states := map[contracts.JobState]bool{}
+	for _, job := range list.Items {
+		states[job.State] = true
+	}
+	for _, want := range []contracts.JobState{
+		contracts.JobQueued,
+		contracts.JobClaimed,
+		contracts.JobRunning,
+		contracts.JobSucceeded,
+		contracts.JobFailed,
+		contracts.JobCanceled,
+		contracts.JobExpired,
+	} {
+		if !states[want] {
+			check.OK = false
+			check.Error = "job state missing: " + string(want)
+			return check
+		}
+	}
+	return check
+}
+
+func checkFakeJobsCreateIdempotency(ctx context.Context, client *http.Client, baseURL string) fakePublicAPICheck {
+	request := contracts.CreateJobRequest{RequesterID: "sub_fake_agent", CapabilityID: "cap_fake"}
+	var created contracts.Job
+	check := requestFakeJobsJSON(ctx, client, baseURL, http.MethodPost, "/v1/jobs", "fake.jobs.create_idempotency", map[string]string{
+		"Idempotency-Key": "fake-jobs-create",
+	}, request, &created)
+	if !check.OK {
+		return check
+	}
+	var replayed contracts.Job
+	replay := requestFakeJobsJSON(ctx, client, baseURL, http.MethodPost, "/v1/jobs", "fake.jobs.create_idempotency", map[string]string{
+		"Idempotency-Key": "fake-jobs-create",
+	}, request, &replayed)
+	if !replay.OK {
+		return replay
+	}
+	if created.JobID == "" || replayed.JobID != created.JobID {
+		check.OK = false
+		check.Error = fmt.Sprintf("created job %q replayed as %q", created.JobID, replayed.JobID)
+		return check
+	}
+	return check
+}
+
+func checkFakeJobsLifecycle(ctx context.Context, client *http.Client, baseURL string) fakePublicAPICheck {
+	var job contracts.Job
+	check := requestFakeJobsJSON(ctx, client, baseURL, http.MethodPost, "/v1/jobs/job_fake_queued/claim", "fake.jobs.lifecycle.succeed", nil, contracts.JobClaimRequest{
+		WorkerID:     "runner_fake_smoke",
+		LeaseSeconds: 30,
+	}, &job)
+	if !check.OK {
+		return check
+	}
+	if job.State != contracts.JobClaimed {
+		check.OK = false
+		check.Error = "claim did not set claimed state"
+		return check
+	}
+	check = requestFakeJobsJSON(ctx, client, baseURL, http.MethodPost, "/v1/jobs/job_fake_queued/heartbeat", "fake.jobs.lifecycle.succeed", nil, contracts.JobHeartbeatRequest{
+		WorkerID:     "runner_fake_smoke",
+		TransitionTo: string(contracts.JobRunning),
+	}, &job)
+	if !check.OK {
+		return check
+	}
+	if job.State != contracts.JobRunning {
+		check.OK = false
+		check.Error = "heartbeat did not set running state"
+		return check
+	}
+	check = requestFakeJobsJSON(ctx, client, baseURL, http.MethodPost, "/v1/jobs/job_fake_queued/complete", "fake.jobs.lifecycle.succeed", nil, contracts.JobCompleteRequest{
+		WorkerID:     "runner_fake_smoke",
+		ArtifactRefs: []string{"art_fake_smoke"},
+	}, &job)
+	if !check.OK {
+		return check
+	}
+	if job.State != contracts.JobSucceeded || len(job.ArtifactRefs) != 1 {
+		check.OK = false
+		check.Error = "complete did not set succeeded state and artifact refs"
+	}
+	return check
+}
+
+func checkFakeJobsCancel(ctx context.Context, client *http.Client, baseURL string) fakePublicAPICheck {
+	var job contracts.Job
+	check := requestFakeJobsJSON(ctx, client, baseURL, http.MethodPost, "/v1/jobs/job_fake_cancelable/cancel", "fake.jobs.cancel", map[string]string{
+		"Idempotency-Key": "fake-jobs-cancel",
+	}, contracts.CancelRequest{Reason: "stop fake job"}, &job)
+	if !check.OK {
+		return check
+	}
+	if job.State != contracts.JobCanceled || job.StatusMessage != "stop fake job" {
+		check.OK = false
+		check.Error = fmt.Sprintf("canceled job = %#v", job)
+		return check
+	}
+	var replayed contracts.Job
+	replay := requestFakeJobsJSON(ctx, client, baseURL, http.MethodPost, "/v1/jobs/job_fake_cancelable/cancel", "fake.jobs.cancel", map[string]string{
+		"Idempotency-Key": "fake-jobs-cancel",
+	}, contracts.CancelRequest{Reason: "stop fake job"}, &replayed)
+	if !replay.OK {
+		return replay
+	}
+	if replayed.State != contracts.JobCanceled {
+		check.OK = false
+		check.Error = "cancel replay did not return canceled job"
+	}
+	return check
+}
+
+func requestFakeJobsJSON(ctx context.Context, client *http.Client, baseURL, method, path, name string, headers map[string]string, body any, out any) fakePublicAPICheck {
+	req, err := newFakeJSONRequest(ctx, method, baseURL+path, body)
+	if err != nil {
+		return fakePublicAPICheck{Name: name, Error: err.Error()}
+	}
+	req.Header.Set("X-Request-ID", "req_contract_fake_jobs")
+	for key, value := range headers {
+		req.Header.Set(key, value)
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return fakePublicAPICheck{Name: name, Error: err.Error()}
+	}
+	defer resp.Body.Close()
+	check := fakePublicAPICheck{Name: name, HTTPStatus: resp.StatusCode}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		check.Error = fmt.Sprintf("HTTP %d", resp.StatusCode)
+		return check
+	}
+	var envelope fakePolicyEnvelope
+	if err := json.NewDecoder(resp.Body).Decode(&envelope); err != nil {
+		check.Error = err.Error()
+		return check
+	}
+	if !envelope.OK {
+		check.Error = envelope.Error.Message
+		return check
+	}
+	if err := json.Unmarshal(envelope.Data, out); err != nil {
+		check.Error = err.Error()
+		return check
+	}
+	check.OK = true
+	return check
+}
+
+func requestFakeJobsExpectedError(ctx context.Context, client *http.Client, baseURL, method, path, name string, wantStatus int, wantCode string, headers map[string]string, body any) fakePublicAPICheck {
+	req, err := newFakeJSONRequest(ctx, method, baseURL+path, body)
+	if err != nil {
+		return fakePublicAPICheck{Name: name, Error: err.Error()}
+	}
+	req.Header.Set("X-Request-ID", "req_contract_fake_jobs")
+	for key, value := range headers {
+		req.Header.Set(key, value)
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return fakePublicAPICheck{Name: name, Error: err.Error()}
+	}
+	defer resp.Body.Close()
+	check := fakePublicAPICheck{Name: name, HTTPStatus: resp.StatusCode}
+	var envelope fakePolicyEnvelope
+	if err := json.NewDecoder(resp.Body).Decode(&envelope); err != nil {
+		check.Error = err.Error()
+		return check
+	}
+	if resp.StatusCode != wantStatus {
+		check.Error = fmt.Sprintf("HTTP %d, want %d", resp.StatusCode, wantStatus)
+		return check
+	}
+	if envelope.OK || envelope.Error.Code != wantCode {
+		check.Error = fmt.Sprintf("error code = %q, want %q", envelope.Error.Code, wantCode)
+		return check
+	}
+	check.OK = true
+	return check
+}
+
+func newFakeJSONRequest(ctx context.Context, method, endpoint string, body any) (*http.Request, error) {
+	if body == nil {
+		return http.NewRequestWithContext(ctx, method, endpoint, nil)
+	}
+	raw, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	req, err := http.NewRequestWithContext(ctx, method, endpoint, bytes.NewReader(raw))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	return req, nil
 }
 
 func appendFakeNodeChecks(ctx context.Context, checks *[]fakePublicAPICheck) {

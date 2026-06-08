@@ -63,6 +63,16 @@ type FakeNodeConfig struct {
 	Samples      []contracts.MetricSample
 }
 
+type FakeJobsConfig struct {
+	Credential   string
+	Behavior     FakeComponentBehavior
+	HealthStatus string
+	Jobs         []contracts.Job
+	Logs         map[string][]contracts.JobLogEntry
+	Now          func() time.Time
+	Samples      []contracts.MetricSample
+}
+
 func NewFakeComponentHandler(cfg FakeComponentConfig) (http.Handler, error) {
 	contract, ok := componentContractFor(strings.TrimSpace(cfg.Kind))
 	if !ok {
@@ -210,6 +220,32 @@ func NewFakeNodeHandler(cfg FakeNodeConfig) (http.Handler, error) {
 	return handler, nil
 }
 
+func NewFakeJobsHandler(cfg FakeJobsConfig) (http.Handler, error) {
+	if cfg.Now == nil {
+		cfg.Now = time.Now
+	}
+	if cfg.HealthStatus == "" {
+		cfg.HealthStatus = "healthy"
+	}
+	if cfg.Behavior == "" {
+		cfg.Behavior = FakeComponentSuccess
+	}
+	switch cfg.Behavior {
+	case FakeComponentSuccess, FakeComponentDenied, FakeComponentUnavailable:
+	default:
+		return nil, errors.New("unsupported fake jobs behavior: " + string(cfg.Behavior))
+	}
+	jobs := cfg.Jobs
+	if jobs == nil {
+		jobs = fakeJobs()
+	}
+	handler := newFakeJobsHandler(cfg, jobs)
+	if cfg.Credential != "" {
+		return requireFakeCredential(cfg.Credential, handler), nil
+	}
+	return handler, nil
+}
+
 type fakeComponentHandler struct {
 	cfg      FakeComponentConfig
 	contract componentContract
@@ -233,6 +269,22 @@ type fakeNodeLifecycle struct {
 	serviceID string
 }
 
+type fakeJobsHandler struct {
+	mu          sync.Mutex
+	cfg         FakeJobsConfig
+	jobs        map[string]contracts.Job
+	jobOrder    []string
+	logs        map[string][]contracts.JobLogEntry
+	idempotency map[string]fakeJobIdempotency
+	nextID      int
+}
+
+type fakeJobIdempotency struct {
+	operation   string
+	jobID       string
+	fingerprint string
+}
+
 func newFakeNodeHandler(cfg FakeNodeConfig, resources []contracts.NodeResource, services []contracts.NodeService) *fakeNodeHandler {
 	serviceMap := make(map[string]contracts.NodeService, len(services))
 	serviceOrder := make([]string, 0, len(services))
@@ -253,6 +305,38 @@ func newFakeNodeHandler(cfg FakeNodeConfig, resources []contracts.NodeResource, 
 		services:     serviceMap,
 		serviceOrder: serviceOrder,
 		idempotency:  map[string]fakeNodeLifecycle{},
+	}
+}
+
+func newFakeJobsHandler(cfg FakeJobsConfig, jobs []contracts.Job) *fakeJobsHandler {
+	jobMap := make(map[string]contracts.Job, len(jobs))
+	jobOrder := make([]string, 0, len(jobs))
+	for _, job := range jobs {
+		job = cloneFakeJob(job)
+		if job.JobID == "" {
+			continue
+		}
+		jobMap[job.JobID] = job
+		jobOrder = append(jobOrder, job.JobID)
+	}
+	logs := map[string][]contracts.JobLogEntry{}
+	if cfg.Logs != nil {
+		for jobID, entries := range cfg.Logs {
+			logs[jobID] = append([]contracts.JobLogEntry(nil), entries...)
+		}
+	}
+	for _, jobID := range jobOrder {
+		if _, ok := logs[jobID]; !ok {
+			logs[jobID] = fakeJobLogs(jobID)
+		}
+	}
+	return &fakeJobsHandler{
+		cfg:         cfg,
+		jobs:        jobMap,
+		jobOrder:    jobOrder,
+		logs:        logs,
+		idempotency: map[string]fakeJobIdempotency{},
+		nextID:      len(jobOrder) + 1,
 	}
 }
 
@@ -521,6 +605,422 @@ func (h *fakeNodeHandler) writeBlocked(w http.ResponseWriter, r *http.Request) b
 	}
 }
 
+func (h *fakeJobsHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if h.writeBlocked(w, r) {
+		return
+	}
+	path := strings.TrimSuffix(r.URL.Path, "/")
+	switch {
+	case r.Method == http.MethodGet && path == "/v1/jobs/health":
+		health := contracts.NewComponentHealth("jobs", map[string]any{"fake": true})
+		health.Status = h.cfg.HealthStatus
+		health.CheckedAt = h.cfg.Now().UTC().Format(time.RFC3339)
+		writeFakeSuccess(w, r, http.StatusOK, health)
+	case r.Method == http.MethodGet && path == "/v1/jobs/metrics":
+		samples := h.cfg.Samples
+		if samples == nil {
+			samples = h.metricsSamples()
+		}
+		metrics := contracts.NewComponentMetrics("jobs", samples)
+		metrics.CollectedAt = h.cfg.Now().UTC().Format(time.RFC3339)
+		writeFakeSuccess(w, r, http.StatusOK, metrics)
+	case r.Method == http.MethodGet && path == "/v1/jobs":
+		writeFakeSuccess(w, r, http.StatusOK, map[string]any{"items": h.listJobs(contracts.JobState(r.URL.Query().Get("state"))), "next_cursor": nil})
+	case r.Method == http.MethodPost && path == "/v1/jobs":
+		h.createJob(w, r)
+	case strings.HasPrefix(path, "/v1/jobs/"):
+		h.jobRoute(w, r, strings.TrimPrefix(path, "/v1/jobs/"))
+	default:
+		writeFakeError(w, r, http.StatusNotFound, "not_found", "fake jobs route not found", false)
+	}
+}
+
+func (h *fakeJobsHandler) jobRoute(w http.ResponseWriter, r *http.Request, tail string) {
+	parts := strings.Split(tail, "/")
+	if len(parts) == 0 || parts[0] == "" {
+		writeFakeError(w, r, http.StatusNotFound, "not_found", "fake job route not found", false)
+		return
+	}
+	jobID, err := url.PathUnescape(parts[0])
+	if err != nil {
+		writeFakeError(w, r, http.StatusBadRequest, "validation_failed", "job_id is invalid", false)
+		return
+	}
+	if len(parts) == 1 && r.Method == http.MethodGet {
+		job, ok := h.getJob(jobID)
+		if !ok {
+			writeFakeError(w, r, http.StatusNotFound, "not_found", "fake job not found", false)
+			return
+		}
+		writeFakeSuccess(w, r, http.StatusOK, job)
+		return
+	}
+	if len(parts) != 2 {
+		writeFakeError(w, r, http.StatusNotFound, "not_found", "fake job route not found", false)
+		return
+	}
+	switch parts[1] {
+	case "policy-context":
+		if r.Method != http.MethodGet {
+			writeFakeError(w, r, http.StatusMethodNotAllowed, "method_not_allowed", "method not allowed", false)
+			return
+		}
+		h.writePolicyContext(w, r, jobID)
+	case "agent-projection":
+		if r.Method != http.MethodGet {
+			writeFakeError(w, r, http.StatusMethodNotAllowed, "method_not_allowed", "method not allowed", false)
+			return
+		}
+		h.writeAgentProjection(w, r, jobID)
+	case "claim":
+		h.claimJob(w, r, jobID)
+	case "heartbeat":
+		h.heartbeatJob(w, r, jobID)
+	case "complete":
+		h.completeJob(w, r, jobID)
+	case "fail":
+		h.failJob(w, r, jobID)
+	case "cancel":
+		h.cancelJob(w, r, jobID)
+	case "logs":
+		if r.Method == http.MethodGet {
+			h.readLogs(w, r, jobID)
+			return
+		}
+		h.appendLogs(w, r, jobID)
+	default:
+		writeFakeError(w, r, http.StatusNotFound, "not_found", "fake job route not found", false)
+	}
+}
+
+func (h *fakeJobsHandler) createJob(w http.ResponseWriter, r *http.Request) {
+	idempotencyKey := strings.TrimSpace(r.Header.Get("Idempotency-Key"))
+	if idempotencyKey == "" {
+		writeFakeError(w, r, http.StatusBadRequest, "missing_idempotency_key", "Idempotency-Key header is required for this job operation", false)
+		return
+	}
+	var req contracts.CreateJobRequest
+	if !decodeFakeBody(w, r, &req) {
+		return
+	}
+	fingerprint := fakeJSONFingerprint("create", req)
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if existing, ok := h.idempotency[idempotencyKey]; ok {
+		if existing.operation != "create" || existing.fingerprint != fingerprint {
+			writeFakeError(w, r, http.StatusConflict, "idempotency_conflict", "idempotency key was reused with different request content", false)
+			return
+		}
+		job := h.jobs[existing.jobID]
+		writeFakeSuccess(w, r, http.StatusOK, cloneFakeJob(job))
+		return
+	}
+	now := h.cfg.Now().UTC().Format(time.RFC3339)
+	jobID := fmt.Sprintf("job_fake_created_%03d", h.nextID)
+	h.nextID++
+	job := contracts.Job{
+		JobID:        jobID,
+		State:        contracts.JobQueued,
+		CreatedAt:    now,
+		UpdatedAt:    now,
+		InputSummary: req.InputSummary,
+		Metadata:     req.Metadata,
+		ArtifactRefs: []string{},
+		Links:        fakeJobLinks(jobID),
+	}
+	h.jobs[jobID] = job
+	h.jobOrder = append(h.jobOrder, jobID)
+	h.logs[jobID] = []contracts.JobLogEntry{}
+	h.idempotency[idempotencyKey] = fakeJobIdempotency{operation: "create", jobID: jobID, fingerprint: fingerprint}
+	writeFakeSuccess(w, r, http.StatusCreated, cloneFakeJob(job))
+}
+
+func (h *fakeJobsHandler) claimJob(w http.ResponseWriter, r *http.Request, jobID string) {
+	var req contracts.JobClaimRequest
+	if !decodeFakeBody(w, r, &req) {
+		return
+	}
+	if strings.TrimSpace(req.WorkerID) == "" {
+		writeFakeError(w, r, http.StatusBadRequest, "validation_failed", "worker_id is required", false)
+		return
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	job, ok := h.jobs[jobID]
+	if !ok {
+		writeFakeError(w, r, http.StatusNotFound, "not_found", "fake job not found", false)
+		return
+	}
+	if isFakeJobTerminal(job.State) {
+		writeFakeError(w, r, http.StatusConflict, "job_terminal", "job is already terminal", false)
+		return
+	}
+	now := h.cfg.Now().UTC()
+	leaseSeconds := req.LeaseSeconds
+	if leaseSeconds <= 0 {
+		leaseSeconds = 60
+	}
+	job.State = contracts.JobClaimed
+	job.UpdatedAt = now.Format(time.RFC3339)
+	job.Claim = &contracts.JobClaim{
+		WorkerID:  req.WorkerID,
+		ClaimedAt: now.Format(time.RFC3339),
+		ExpiresAt: now.Add(time.Duration(leaseSeconds) * time.Second).Format(time.RFC3339),
+	}
+	h.jobs[jobID] = job
+	writeFakeSuccess(w, r, http.StatusOK, cloneFakeJob(job))
+}
+
+func (h *fakeJobsHandler) heartbeatJob(w http.ResponseWriter, r *http.Request, jobID string) {
+	var req contracts.JobHeartbeatRequest
+	if !decodeFakeBody(w, r, &req) {
+		return
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	job, ok := h.jobs[jobID]
+	if !ok {
+		writeFakeError(w, r, http.StatusNotFound, "not_found", "fake job not found", false)
+		return
+	}
+	if !fakeJobWorkerMatches(job, req.WorkerID) {
+		writeFakeError(w, r, http.StatusForbidden, "forbidden", "worker_id does not match the active job claim", false)
+		return
+	}
+	if req.TransitionTo != "" {
+		if req.TransitionTo != string(contracts.JobRunning) {
+			writeFakeError(w, r, http.StatusBadRequest, "validation_failed", "transition_to must be running when heartbeat changes state", false)
+			return
+		}
+		job.State = contracts.JobRunning
+	}
+	if req.StatusMessage != "" {
+		job.StatusMessage = req.StatusMessage
+	}
+	job.UpdatedAt = h.cfg.Now().UTC().Format(time.RFC3339)
+	h.jobs[jobID] = job
+	writeFakeSuccess(w, r, http.StatusOK, cloneFakeJob(job))
+}
+
+func (h *fakeJobsHandler) completeJob(w http.ResponseWriter, r *http.Request, jobID string) {
+	var req contracts.JobCompleteRequest
+	if !decodeFakeBody(w, r, &req) {
+		return
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	job, ok := h.jobs[jobID]
+	if !ok {
+		writeFakeError(w, r, http.StatusNotFound, "not_found", "fake job not found", false)
+		return
+	}
+	if !fakeJobWorkerMatches(job, req.WorkerID) {
+		writeFakeError(w, r, http.StatusForbidden, "forbidden", "worker_id does not match the active job claim", false)
+		return
+	}
+	job.State = contracts.JobSucceeded
+	job.ArtifactRefs = append([]string(nil), req.ArtifactRefs...)
+	job.UpdatedAt = h.cfg.Now().UTC().Format(time.RFC3339)
+	h.jobs[jobID] = job
+	writeFakeSuccess(w, r, http.StatusOK, cloneFakeJob(job))
+}
+
+func (h *fakeJobsHandler) failJob(w http.ResponseWriter, r *http.Request, jobID string) {
+	var req contracts.JobFailRequest
+	if !decodeFakeBody(w, r, &req) {
+		return
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	job, ok := h.jobs[jobID]
+	if !ok {
+		writeFakeError(w, r, http.StatusNotFound, "not_found", "fake job not found", false)
+		return
+	}
+	if !fakeJobWorkerMatches(job, req.WorkerID) {
+		writeFakeError(w, r, http.StatusForbidden, "forbidden", "worker_id does not match the active job claim", false)
+		return
+	}
+	job.State = contracts.JobFailed
+	job.TerminalError = &req.Error
+	job.UpdatedAt = h.cfg.Now().UTC().Format(time.RFC3339)
+	h.jobs[jobID] = job
+	writeFakeSuccess(w, r, http.StatusOK, cloneFakeJob(job))
+}
+
+func (h *fakeJobsHandler) cancelJob(w http.ResponseWriter, r *http.Request, jobID string) {
+	idempotencyKey := strings.TrimSpace(r.Header.Get("Idempotency-Key"))
+	if idempotencyKey == "" {
+		writeFakeError(w, r, http.StatusBadRequest, "missing_idempotency_key", "Idempotency-Key header is required for this job operation", false)
+		return
+	}
+	req := contracts.CancelRequest{}
+	if r.Body != nil {
+		defer r.Body.Close()
+		if r.Body != http.NoBody {
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				writeFakeError(w, r, http.StatusBadRequest, "validation_failed", "request body is invalid JSON", false)
+				return
+			}
+		}
+	}
+	fingerprint := fakeJSONFingerprint("cancel:"+jobID, req)
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if existing, ok := h.idempotency[idempotencyKey]; ok {
+		if existing.operation != "cancel" || existing.fingerprint != fingerprint {
+			writeFakeError(w, r, http.StatusConflict, "idempotency_conflict", "idempotency key was reused with different request content", false)
+			return
+		}
+		job := h.jobs[existing.jobID]
+		writeFakeSuccess(w, r, http.StatusOK, cloneFakeJob(job))
+		return
+	}
+	job, ok := h.jobs[jobID]
+	if !ok {
+		writeFakeError(w, r, http.StatusNotFound, "not_found", "fake job not found", false)
+		return
+	}
+	if isFakeJobTerminal(job.State) {
+		writeFakeError(w, r, http.StatusConflict, "job_terminal", "job is already terminal", false)
+		return
+	}
+	job.State = contracts.JobCanceled
+	if req.Reason != "" {
+		job.StatusMessage = req.Reason
+	}
+	job.UpdatedAt = h.cfg.Now().UTC().Format(time.RFC3339)
+	h.jobs[jobID] = job
+	h.idempotency[idempotencyKey] = fakeJobIdempotency{operation: "cancel", jobID: jobID, fingerprint: fingerprint}
+	writeFakeSuccess(w, r, http.StatusOK, cloneFakeJob(job))
+}
+
+func (h *fakeJobsHandler) writePolicyContext(w http.ResponseWriter, r *http.Request, jobID string) {
+	job, ok := h.getJob(jobID)
+	if !ok {
+		writeFakeError(w, r, http.StatusNotFound, "not_found", "fake job not found", false)
+		return
+	}
+	writeFakeSuccess(w, r, http.StatusOK, contracts.JobPolicyContext{
+		ResourceKind:   "job",
+		JobID:          job.JobID,
+		OwnerSubjectID: "sub_fake_agent",
+		RequesterID:    "sub_fake_agent",
+		JobState:       string(job.State),
+		PolicyState:    "active",
+	})
+}
+
+func (h *fakeJobsHandler) writeAgentProjection(w http.ResponseWriter, r *http.Request, jobID string) {
+	job, ok := h.getJob(jobID)
+	if !ok {
+		writeFakeError(w, r, http.StatusNotFound, "not_found", "fake job not found", false)
+		return
+	}
+	statusMessage := job.StatusMessage
+	projection := contracts.AgentJob{
+		JobID:         job.JobID,
+		State:         job.State,
+		CreatedAt:     job.CreatedAt,
+		UpdatedAt:     job.UpdatedAt,
+		InputSummary:  cloneMap(job.InputSummary),
+		ArtifactRefs:  append([]string(nil), job.ArtifactRefs...),
+		LogCursor:     cloneStringPointer(job.LogCursor),
+		TerminalError: cloneErrorPointer(job.TerminalError),
+		Links:         cloneMap(job.Links),
+	}
+	if statusMessage != "" {
+		projection.StatusMessage = &statusMessage
+	}
+	writeFakeSuccess(w, r, http.StatusOK, projection)
+}
+
+func (h *fakeJobsHandler) readLogs(w http.ResponseWriter, r *http.Request, jobID string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if _, ok := h.jobs[jobID]; !ok {
+		writeFakeError(w, r, http.StatusNotFound, "not_found", "fake job not found", false)
+		return
+	}
+	entries := append([]contracts.JobLogEntry(nil), h.logs[jobID]...)
+	writeFakeSuccess(w, r, http.StatusOK, map[string]any{"items": entries, "next_cursor": nil})
+}
+
+func (h *fakeJobsHandler) appendLogs(w http.ResponseWriter, r *http.Request, jobID string) {
+	var req contracts.AppendJobLogRequest
+	if !decodeFakeBody(w, r, &req) {
+		return
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	job, ok := h.jobs[jobID]
+	if !ok {
+		writeFakeError(w, r, http.StatusNotFound, "not_found", "fake job not found", false)
+		return
+	}
+	if !fakeJobWorkerMatches(job, req.WorkerID) {
+		writeFakeError(w, r, http.StatusForbidden, "forbidden", "worker_id does not match the active job claim", false)
+		return
+	}
+	h.logs[jobID] = append(h.logs[jobID], req.Entries...)
+	entries := append([]contracts.JobLogEntry(nil), h.logs[jobID]...)
+	writeFakeSuccess(w, r, http.StatusOK, map[string]any{"items": entries, "next_cursor": nil})
+}
+
+func (h *fakeJobsHandler) listJobs(state contracts.JobState) []contracts.Job {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	jobs := make([]contracts.Job, 0, len(h.jobOrder))
+	for _, jobID := range h.jobOrder {
+		job, ok := h.jobs[jobID]
+		if !ok {
+			continue
+		}
+		if state != "" && job.State != state {
+			continue
+		}
+		jobs = append(jobs, cloneFakeJob(job))
+	}
+	return jobs
+}
+
+func (h *fakeJobsHandler) getJob(jobID string) (contracts.Job, bool) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	job, ok := h.jobs[jobID]
+	if !ok {
+		return contracts.Job{}, false
+	}
+	return cloneFakeJob(job), true
+}
+
+func (h *fakeJobsHandler) metricsSamples() []contracts.MetricSample {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	counts := map[contracts.JobState]int{}
+	for _, job := range h.jobs {
+		counts[job.State]++
+	}
+	samples := []contracts.MetricSample{contracts.CountMetric("jobs_total", len(h.jobs), nil)}
+	for state, count := range counts {
+		samples = append(samples, contracts.CountMetric("jobs_by_state", count, map[string]string{"state": string(state)}))
+	}
+	return samples
+}
+
+func (h *fakeJobsHandler) writeBlocked(w http.ResponseWriter, r *http.Request) bool {
+	switch h.cfg.Behavior {
+	case FakeComponentDenied:
+		writeFakeError(w, r, http.StatusForbidden, "forbidden", "fake jobs access denied", false)
+		return true
+	case FakeComponentUnavailable:
+		writeFakeError(w, r, http.StatusServiceUnavailable, "component_unavailable", "fake jobs unavailable", true)
+		return true
+	default:
+		return false
+	}
+}
+
 func (h *fakeComponentHandler) writeBlocked(w http.ResponseWriter, r *http.Request) bool {
 	switch h.cfg.Behavior {
 	case FakeComponentDenied:
@@ -578,6 +1078,119 @@ func cloneFakeNodeService(service contracts.NodeService) contracts.NodeService {
 		service.Manifest = &manifest
 	}
 	return service
+}
+
+func fakeJobs() []contracts.Job {
+	now := "2026-06-08T00:00:00Z"
+	claimedAt := "2026-06-08T00:01:00Z"
+	expiresAt := "2026-06-08T00:06:00Z"
+	claim := &contracts.JobClaim{WorkerID: "runner_fake", ClaimedAt: claimedAt, ExpiresAt: expiresAt}
+	failedError := &contracts.ErrorObject{Code: "provider_unavailable", Message: "fake provider failed", Retryable: true}
+	return []contracts.Job{
+		fakeJob("job_fake_queued", contracts.JobQueued, now, nil, nil),
+		fakeJob("job_fake_cancelable", contracts.JobQueued, now, nil, nil),
+		fakeJob("job_fake_claimed", contracts.JobClaimed, now, claim, nil),
+		fakeJob("job_fake_running", contracts.JobRunning, now, claim, nil),
+		fakeJob("job_fake_succeeded", contracts.JobSucceeded, now, nil, nil),
+		fakeJob("job_fake_failed", contracts.JobFailed, now, nil, failedError),
+		fakeJob("job_fake_canceled", contracts.JobCanceled, now, nil, nil),
+		fakeJob("job_fake_expired", contracts.JobExpired, now, nil, nil),
+	}
+}
+
+func fakeJob(jobID string, state contracts.JobState, now string, claim *contracts.JobClaim, terminalError *contracts.ErrorObject) contracts.Job {
+	job := contracts.Job{
+		JobID:         jobID,
+		State:         state,
+		CreatedAt:     now,
+		UpdatedAt:     now,
+		InputSummary:  map[string]any{"capability_id": "cap_fake"},
+		Metadata:      map[string]any{"fake": true},
+		Claim:         cloneJobClaimPointer(claim),
+		ArtifactRefs:  []string{},
+		TerminalError: cloneErrorPointer(terminalError),
+		Links:         fakeJobLinks(jobID),
+	}
+	switch state {
+	case contracts.JobSucceeded:
+		job.ArtifactRefs = []string{"art_fake_001"}
+	case contracts.JobCanceled:
+		job.StatusMessage = "fake cancellation"
+	case contracts.JobExpired:
+		job.StatusMessage = "fake claim expired"
+	}
+	return job
+}
+
+func fakeJobLinks(jobID string) map[string]any {
+	return map[string]any{
+		"self": map[string]any{"method": "GET", "href": "/v1/jobs/" + jobID},
+		"logs": map[string]any{"method": "GET", "href": "/v1/jobs/" + jobID + "/logs"},
+	}
+}
+
+func fakeJobLogs(jobID string) []contracts.JobLogEntry {
+	return []contracts.JobLogEntry{{
+		Timestamp: "2026-06-08T00:00:00Z",
+		Level:     "info",
+		Message:   "fake job state available",
+		Fields:    map[string]any{"job_id": jobID},
+	}}
+}
+
+func isFakeJobTerminal(state contracts.JobState) bool {
+	switch state {
+	case contracts.JobSucceeded, contracts.JobFailed, contracts.JobCanceled, contracts.JobExpired:
+		return true
+	default:
+		return false
+	}
+}
+
+func fakeJobWorkerMatches(job contracts.Job, workerID string) bool {
+	if strings.TrimSpace(workerID) == "" {
+		return false
+	}
+	if job.Claim == nil {
+		return true
+	}
+	return job.Claim.WorkerID == workerID
+}
+
+func cloneFakeJob(job contracts.Job) contracts.Job {
+	job.InputSummary = cloneMap(job.InputSummary)
+	job.Metadata = cloneMap(job.Metadata)
+	job.Claim = cloneJobClaimPointer(job.Claim)
+	job.ResourceRefs = append([]string(nil), job.ResourceRefs...)
+	job.ArtifactRefs = append([]string(nil), job.ArtifactRefs...)
+	job.LogCursor = cloneStringPointer(job.LogCursor)
+	job.TerminalError = cloneErrorPointer(job.TerminalError)
+	job.Links = cloneMap(job.Links)
+	return job
+}
+
+func cloneJobClaimPointer(claim *contracts.JobClaim) *contracts.JobClaim {
+	if claim == nil {
+		return nil
+	}
+	cloned := *claim
+	return &cloned
+}
+
+func cloneStringPointer(value *string) *string {
+	if value == nil {
+		return nil
+	}
+	cloned := *value
+	return &cloned
+}
+
+func cloneErrorPointer(value *contracts.ErrorObject) *contracts.ErrorObject {
+	if value == nil {
+		return nil
+	}
+	cloned := *value
+	return &cloned
 }
 
 func cloneMap(in map[string]any) map[string]any {
@@ -641,14 +1254,12 @@ func fakeListItems(kind string) []any {
 			Service: fakeProviderManifest("http://provider.fake").Service,
 		}}
 	case "jobs":
-		return []any{contracts.Job{
-			JobID:        "job_fake_001",
-			State:        contracts.JobQueued,
-			CreatedAt:    now,
-			UpdatedAt:    now,
-			ArtifactRefs: []string{},
-			Links:        map[string]any{},
-		}}
+		jobs := fakeJobs()
+		items := make([]any, 0, len(jobs))
+		for _, job := range jobs {
+			items = append(items, job)
+		}
+		return items
 	case "leases":
 		return []any{contracts.ResourceRecord{
 			ResourceID: "res_fake_gpu",
@@ -778,6 +1389,14 @@ func fakeProviderManifest(endpoint string) contracts.ProviderManifest {
 func checksumString(body []byte) string {
 	sum := sha256.Sum256(body)
 	return fmt.Sprintf("sha256:%x", sum)
+}
+
+func fakeJSONFingerprint(prefix string, value any) string {
+	raw, err := json.Marshal(value)
+	if err != nil {
+		return prefix + ":unmarshalable"
+	}
+	return prefix + ":" + string(raw)
 }
 
 func requireFakeCredential(credential string, next http.Handler) http.Handler {
