@@ -52,6 +52,8 @@ Contract simulation data is kept as test input, not as product behavior.
   HTTP boundaries.
 - `openapi/public-gateway.v1.yaml`: OpenAPI contract for the agent-facing
   gateway.
+- `openapi/component-services.v1.yaml`: OpenAPI contract for distributed
+  component service APIs.
 - `testdata/contract-sim`: accepted role-play fixtures copied from the vault.
 - `testdata/manifests`: sample provider manifests used by tests and examples.
 

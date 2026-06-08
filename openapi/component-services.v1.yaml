@@ -1,0 +1,1394 @@
+openapi: 3.1.0
+info:
+  title: PACP Component Services API
+  version: v1
+  description: Internal distributed HTTP contracts between PACP components, runners, nodes, and operators.
+servers:
+  - url: http://localhost:18081
+    description: Catalog service
+  - url: http://localhost:18082
+    description: Jobs service
+  - url: http://localhost:18083
+    description: Leases service
+  - url: http://localhost:18084
+    description: Artifacts service
+  - url: http://localhost:18085
+    description: Policy service
+  - url: http://localhost:18087
+    description: Node service
+security:
+  - componentBearer: []
+tags:
+  - name: catalog
+  - name: jobs
+  - name: leases
+  - name: artifacts
+  - name: policy
+  - name: node
+paths:
+  /v1/catalog/health:
+    get:
+      tags: [catalog]
+      operationId: getCatalogHealth
+      responses:
+        "200":
+          $ref: "#/components/responses/Health"
+        default:
+          $ref: "#/components/responses/Error"
+  /v1/catalog/manifests:
+    post:
+      tags: [catalog]
+      operationId: registerProviderManifest
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ProviderManifest"
+      responses:
+        "201":
+          description: Manifest registered.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessEnvelope"
+        default:
+          $ref: "#/components/responses/Error"
+  /v1/catalog/services:
+    get:
+      tags: [catalog]
+      operationId: listCatalogServices
+      responses:
+        "200":
+          $ref: "#/components/responses/Success"
+        default:
+          $ref: "#/components/responses/Error"
+  /v1/catalog/services/{service_id}:
+    get:
+      tags: [catalog]
+      operationId: getCatalogService
+      parameters:
+        - $ref: "#/components/parameters/ServiceID"
+      responses:
+        "200":
+          $ref: "#/components/responses/Success"
+        default:
+          $ref: "#/components/responses/Error"
+  /v1/catalog/capabilities:
+    get:
+      tags: [catalog]
+      operationId: listCatalogCapabilities
+      parameters:
+        - name: capability_id
+          in: query
+          schema:
+            type: string
+        - name: service_id
+          in: query
+          schema:
+            type: string
+        - name: tag
+          in: query
+          schema:
+            type: string
+        - name: execution_mode
+          in: query
+          schema:
+            type: string
+        - name: resource_selector
+          in: query
+          schema:
+            type: string
+        - name: visible_capability_ids
+          in: query
+          schema:
+            type: array
+            items:
+              type: string
+        - $ref: "#/components/parameters/Cursor"
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          $ref: "#/components/responses/Success"
+        default:
+          $ref: "#/components/responses/Error"
+  /v1/catalog/capabilities/{capability_id}:
+    get:
+      tags: [catalog]
+      operationId: getCatalogCapability
+      parameters:
+        - $ref: "#/components/parameters/CapabilityID"
+      responses:
+        "200":
+          $ref: "#/components/responses/Success"
+        default:
+          $ref: "#/components/responses/Error"
+  /v1/catalog/capabilities/{capability_id}/route:
+    get:
+      tags: [catalog]
+      operationId: getCapabilityRoute
+      parameters:
+        - $ref: "#/components/parameters/CapabilityID"
+      responses:
+        "200":
+          $ref: "#/components/responses/Success"
+        default:
+          $ref: "#/components/responses/Error"
+  /v1/catalog/tags:
+    get:
+      tags: [catalog]
+      operationId: listCatalogTags
+      responses:
+        "200":
+          $ref: "#/components/responses/Success"
+        default:
+          $ref: "#/components/responses/Error"
+
+  /v1/jobs/health:
+    get:
+      tags: [jobs]
+      operationId: getJobsHealth
+      responses:
+        "200":
+          $ref: "#/components/responses/Health"
+        default:
+          $ref: "#/components/responses/Error"
+  /v1/jobs:
+    get:
+      tags: [jobs]
+      operationId: listJobs
+      parameters:
+        - name: state
+          in: query
+          schema:
+            $ref: "#/components/schemas/JobState"
+        - name: capability_id
+          in: query
+          schema:
+            type: string
+        - $ref: "#/components/parameters/Cursor"
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          $ref: "#/components/responses/Success"
+        default:
+          $ref: "#/components/responses/Error"
+    post:
+      tags: [jobs]
+      operationId: createJob
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKeyOptional"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateJobRequest"
+      responses:
+        "200":
+          $ref: "#/components/responses/Success"
+        "201":
+          $ref: "#/components/responses/Success"
+        default:
+          $ref: "#/components/responses/Error"
+  /v1/jobs/{job_id}:
+    get:
+      tags: [jobs]
+      operationId: getJob
+      parameters:
+        - $ref: "#/components/parameters/JobID"
+      responses:
+        "200":
+          $ref: "#/components/responses/Success"
+        default:
+          $ref: "#/components/responses/Error"
+  /v1/jobs/{job_id}/policy-context:
+    get:
+      tags: [jobs]
+      operationId: getJobPolicyContext
+      parameters:
+        - $ref: "#/components/parameters/JobID"
+      responses:
+        "200":
+          $ref: "#/components/responses/Success"
+        default:
+          $ref: "#/components/responses/Error"
+  /v1/jobs/{job_id}/agent-projection:
+    get:
+      tags: [jobs]
+      operationId: getJobAgentProjection
+      parameters:
+        - $ref: "#/components/parameters/JobID"
+      responses:
+        "200":
+          $ref: "#/components/responses/Success"
+        default:
+          $ref: "#/components/responses/Error"
+  /v1/jobs/{job_id}/claim:
+    post:
+      tags: [jobs]
+      operationId: claimJob
+      parameters:
+        - $ref: "#/components/parameters/JobID"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/JobClaimRequest"
+      responses:
+        "200":
+          $ref: "#/components/responses/Success"
+        default:
+          $ref: "#/components/responses/Error"
+  /v1/jobs/{job_id}/heartbeat:
+    post:
+      tags: [jobs]
+      operationId: heartbeatJob
+      parameters:
+        - $ref: "#/components/parameters/JobID"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/JobHeartbeatRequest"
+      responses:
+        "200":
+          $ref: "#/components/responses/Success"
+        default:
+          $ref: "#/components/responses/Error"
+  /v1/jobs/{job_id}/complete:
+    post:
+      tags: [jobs]
+      operationId: completeJob
+      parameters:
+        - $ref: "#/components/parameters/JobID"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/JobCompleteRequest"
+      responses:
+        "200":
+          $ref: "#/components/responses/Success"
+        default:
+          $ref: "#/components/responses/Error"
+  /v1/jobs/{job_id}/fail:
+    post:
+      tags: [jobs]
+      operationId: failJob
+      parameters:
+        - $ref: "#/components/parameters/JobID"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/JobFailRequest"
+      responses:
+        "200":
+          $ref: "#/components/responses/Success"
+        default:
+          $ref: "#/components/responses/Error"
+  /v1/jobs/{job_id}/cancel:
+    post:
+      tags: [jobs]
+      operationId: cancelJob
+      parameters:
+        - $ref: "#/components/parameters/JobID"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CancelRequest"
+      responses:
+        "200":
+          $ref: "#/components/responses/Success"
+        default:
+          $ref: "#/components/responses/Error"
+  /v1/jobs/{job_id}/logs:
+    get:
+      tags: [jobs]
+      operationId: getJobLogs
+      parameters:
+        - $ref: "#/components/parameters/JobID"
+        - $ref: "#/components/parameters/Cursor"
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          $ref: "#/components/responses/Success"
+        default:
+          $ref: "#/components/responses/Error"
+    post:
+      tags: [jobs]
+      operationId: appendJobLogs
+      parameters:
+        - $ref: "#/components/parameters/JobID"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AppendJobLogRequest"
+      responses:
+        "200":
+          $ref: "#/components/responses/Success"
+        default:
+          $ref: "#/components/responses/Error"
+
+  /v1/leases/health:
+    get:
+      tags: [leases]
+      operationId: getLeasesHealth
+      responses:
+        "200":
+          $ref: "#/components/responses/Health"
+        default:
+          $ref: "#/components/responses/Error"
+  /v1/resources:
+    get:
+      tags: [leases]
+      operationId: listResources
+      parameters:
+        - name: selector
+          in: query
+          schema:
+            type: string
+      responses:
+        "200":
+          $ref: "#/components/responses/Success"
+        default:
+          $ref: "#/components/responses/Error"
+    post:
+      tags: [leases]
+      operationId: registerResource
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RegisterResourceRequest"
+      responses:
+        "201":
+          $ref: "#/components/responses/Success"
+        default:
+          $ref: "#/components/responses/Error"
+  /v1/resources/{resource_id}:
+    get:
+      tags: [leases]
+      operationId: getResource
+      parameters:
+        - $ref: "#/components/parameters/ResourceID"
+      responses:
+        "200":
+          $ref: "#/components/responses/Success"
+        default:
+          $ref: "#/components/responses/Error"
+  /v1/resources/{resource_id}/inspection:
+    get:
+      tags: [leases]
+      operationId: inspectResource
+      parameters:
+        - $ref: "#/components/parameters/ResourceID"
+      responses:
+        "200":
+          $ref: "#/components/responses/Success"
+        default:
+          $ref: "#/components/responses/Error"
+  /v1/lease-requests:
+    post:
+      tags: [leases]
+      operationId: createLeaseRequest
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateLeaseRequest"
+      responses:
+        "201":
+          $ref: "#/components/responses/Success"
+        default:
+          $ref: "#/components/responses/Error"
+  /v1/lease-requests/{request_id}:
+    get:
+      tags: [leases]
+      operationId: getLeaseRequest
+      parameters:
+        - $ref: "#/components/parameters/RequestID"
+      responses:
+        "200":
+          $ref: "#/components/responses/Success"
+        default:
+          $ref: "#/components/responses/Error"
+  /v1/lease-requests/{request_id}/cancel:
+    post:
+      tags: [leases]
+      operationId: cancelLeaseRequest
+      parameters:
+        - $ref: "#/components/parameters/RequestID"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CancelRequest"
+      responses:
+        "200":
+          $ref: "#/components/responses/Success"
+        default:
+          $ref: "#/components/responses/Error"
+  /v1/leases/{lease_id}:
+    get:
+      tags: [leases]
+      operationId: getLease
+      parameters:
+        - $ref: "#/components/parameters/LeaseID"
+      responses:
+        "200":
+          $ref: "#/components/responses/Success"
+        default:
+          $ref: "#/components/responses/Error"
+  /v1/leases/{lease_id}/heartbeat:
+    post:
+      tags: [leases]
+      operationId: heartbeatLease
+      parameters:
+        - $ref: "#/components/parameters/LeaseID"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LeaseHeartbeatRequest"
+      responses:
+        "200":
+          $ref: "#/components/responses/Success"
+        default:
+          $ref: "#/components/responses/Error"
+  /v1/leases/{lease_id}/release:
+    post:
+      tags: [leases]
+      operationId: releaseLease
+      parameters:
+        - $ref: "#/components/parameters/LeaseID"
+        - $ref: "#/components/parameters/IdempotencyKeyOptional"
+        - $ref: "#/components/parameters/ActorSubjectID"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LeaseReleaseRequest"
+      responses:
+        "200":
+          $ref: "#/components/responses/Success"
+        default:
+          $ref: "#/components/responses/Error"
+
+  /v1/artifacts/health:
+    get:
+      tags: [artifacts]
+      operationId: getArtifactsHealth
+      responses:
+        "200":
+          $ref: "#/components/responses/Health"
+        default:
+          $ref: "#/components/responses/Error"
+  /v1/artifact-uploads:
+    post:
+      tags: [artifacts]
+      operationId: createArtifactUpload
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKeyRequired"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateArtifactUploadRequest"
+      responses:
+        "200":
+          $ref: "#/components/responses/Success"
+        "201":
+          $ref: "#/components/responses/Success"
+        default:
+          $ref: "#/components/responses/Error"
+  /v1/artifact-uploads/{upload_id}:
+    get:
+      tags: [artifacts]
+      operationId: getArtifactUpload
+      parameters:
+        - $ref: "#/components/parameters/UploadID"
+      responses:
+        "200":
+          $ref: "#/components/responses/Success"
+        default:
+          $ref: "#/components/responses/Error"
+  /v1/artifact-uploads/{upload_id}/content:
+    put:
+      tags: [artifacts]
+      operationId: putArtifactUploadContent
+      parameters:
+        - $ref: "#/components/parameters/UploadID"
+        - $ref: "#/components/parameters/IdempotencyKeyRequired"
+        - name: Content-Type
+          in: header
+          required: false
+          schema:
+            type: string
+        - name: Digest
+          in: header
+          required: false
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          "*/*":
+            schema:
+              type: string
+              format: binary
+      responses:
+        "200":
+          $ref: "#/components/responses/Success"
+        default:
+          $ref: "#/components/responses/Error"
+  /v1/artifact-uploads/{upload_id}/complete:
+    post:
+      tags: [artifacts]
+      operationId: completeArtifactUpload
+      parameters:
+        - $ref: "#/components/parameters/UploadID"
+        - $ref: "#/components/parameters/IdempotencyKeyRequired"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CompleteArtifactUploadRequest"
+      responses:
+        "200":
+          $ref: "#/components/responses/Success"
+        "201":
+          $ref: "#/components/responses/Success"
+        default:
+          $ref: "#/components/responses/Error"
+  /v1/artifacts:
+    get:
+      tags: [artifacts]
+      operationId: listArtifacts
+      parameters:
+        - name: producer_ref
+          in: query
+          schema:
+            type: string
+        - name: owner_subject_id
+          in: query
+          schema:
+            type: string
+      responses:
+        "200":
+          $ref: "#/components/responses/Success"
+        default:
+          $ref: "#/components/responses/Error"
+  /v1/artifacts/register-local:
+    post:
+      tags: [artifacts]
+      operationId: registerLocalArtifact
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RegisterLocalArtifactRequest"
+      responses:
+        "201":
+          $ref: "#/components/responses/Success"
+        default:
+          $ref: "#/components/responses/Error"
+  /v1/artifacts/{artifact_id}:
+    get:
+      tags: [artifacts]
+      operationId: getArtifact
+      parameters:
+        - $ref: "#/components/parameters/ArtifactID"
+      responses:
+        "200":
+          $ref: "#/components/responses/Success"
+        default:
+          $ref: "#/components/responses/Error"
+  /v1/artifacts/{artifact_id}/policy-context:
+    get:
+      tags: [artifacts]
+      operationId: getArtifactPolicyContext
+      parameters:
+        - $ref: "#/components/parameters/ArtifactID"
+      responses:
+        "200":
+          $ref: "#/components/responses/Success"
+        default:
+          $ref: "#/components/responses/Error"
+  /v1/artifacts/{artifact_id}/content:
+    get:
+      tags: [artifacts]
+      operationId: readArtifactContent
+      parameters:
+        - $ref: "#/components/parameters/ArtifactID"
+      responses:
+        "200":
+          description: Raw artifact content.
+          headers:
+            Digest:
+              schema:
+                type: string
+            Content-Length:
+              schema:
+                type: integer
+          content:
+            "*/*":
+              schema:
+                type: string
+                format: binary
+        default:
+          $ref: "#/components/responses/Error"
+
+  /v1/policy/health:
+    get:
+      tags: [policy]
+      operationId: getPolicyHealth
+      responses:
+        "200":
+          $ref: "#/components/responses/Health"
+        default:
+          $ref: "#/components/responses/Error"
+  /v1/api-keys:
+    post:
+      tags: [policy]
+      operationId: createAPIKey
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateAPIKeyRequest"
+      responses:
+        "201":
+          $ref: "#/components/responses/Success"
+        default:
+          $ref: "#/components/responses/Error"
+  /v1/api-keys/{key_id}/revoke:
+    post:
+      tags: [policy]
+      operationId: revokeAPIKey
+      parameters:
+        - $ref: "#/components/parameters/KeyID"
+      responses:
+        "200":
+          $ref: "#/components/responses/Success"
+        default:
+          $ref: "#/components/responses/Error"
+  /v1/auth/verify:
+    post:
+      tags: [policy]
+      operationId: verifyCredential
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/VerifyCredentialRequest"
+      responses:
+        "200":
+          $ref: "#/components/responses/Success"
+        default:
+          $ref: "#/components/responses/Error"
+  /v1/policy/check:
+    post:
+      tags: [policy]
+      operationId: checkPolicy
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PolicyCheckRequest"
+      responses:
+        "200":
+          $ref: "#/components/responses/Success"
+        default:
+          $ref: "#/components/responses/Error"
+  /v1/policy/rules:
+    post:
+      tags: [policy]
+      operationId: createPolicyRule
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreatePolicyRuleRequest"
+      responses:
+        "201":
+          $ref: "#/components/responses/Success"
+        default:
+          $ref: "#/components/responses/Error"
+  /v1/secrets:
+    post:
+      tags: [policy]
+      operationId: createSecret
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateSecretRequest"
+      responses:
+        "201":
+          $ref: "#/components/responses/Success"
+        default:
+          $ref: "#/components/responses/Error"
+  /v1/secrets/resolve:
+    post:
+      tags: [policy]
+      operationId: resolveSecret
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ResolveSecretRequest"
+      responses:
+        "200":
+          $ref: "#/components/responses/Success"
+        default:
+          $ref: "#/components/responses/Error"
+  /v1/redact:
+    post:
+      tags: [policy]
+      operationId: redactText
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RedactRequest"
+      responses:
+        "200":
+          $ref: "#/components/responses/Success"
+        default:
+          $ref: "#/components/responses/Error"
+
+  /v1/node/health:
+    get:
+      tags: [node]
+      operationId: getNodeHealth
+      security:
+        - nodeBearer: []
+      responses:
+        "200":
+          $ref: "#/components/responses/Success"
+        default:
+          $ref: "#/components/responses/Error"
+  /v1/node/resources:
+    get:
+      tags: [node]
+      operationId: listNodeResources
+      security:
+        - nodeBearer: []
+      responses:
+        "200":
+          $ref: "#/components/responses/Success"
+        default:
+          $ref: "#/components/responses/Error"
+  /v1/node/services:
+    get:
+      tags: [node]
+      operationId: listNodeServices
+      security:
+        - nodeBearer: []
+      responses:
+        "200":
+          $ref: "#/components/responses/Success"
+        default:
+          $ref: "#/components/responses/Error"
+  /v1/node/services/{service_id}:
+    get:
+      tags: [node]
+      operationId: getNodeService
+      security:
+        - nodeBearer: []
+      parameters:
+        - $ref: "#/components/parameters/ServiceID"
+      responses:
+        "200":
+          $ref: "#/components/responses/Success"
+        default:
+          $ref: "#/components/responses/Error"
+  /v1/node/services/{service_id}/start:
+    post:
+      tags: [node]
+      operationId: startNodeService
+      security:
+        - nodeBearer: []
+      parameters:
+        - $ref: "#/components/parameters/ServiceID"
+        - $ref: "#/components/parameters/IdempotencyKeyOptional"
+      responses:
+        "200":
+          $ref: "#/components/responses/Success"
+        "202":
+          $ref: "#/components/responses/Success"
+        default:
+          $ref: "#/components/responses/Error"
+  /v1/node/services/{service_id}/stop:
+    post:
+      tags: [node]
+      operationId: stopNodeService
+      security:
+        - nodeBearer: []
+      parameters:
+        - $ref: "#/components/parameters/ServiceID"
+      responses:
+        "202":
+          $ref: "#/components/responses/Success"
+        default:
+          $ref: "#/components/responses/Error"
+
+components:
+  securitySchemes:
+    componentBearer:
+      type: http
+      scheme: bearer
+      description: Optional transport guard used by component services when configured.
+    nodeBearer:
+      type: http
+      scheme: bearer
+      description: Node-local bearer credential configured in the node config file.
+  parameters:
+    ActorSubjectID:
+      name: X-Actor-Subject-ID
+      in: header
+      required: false
+      schema:
+        type: string
+    ArtifactID:
+      name: artifact_id
+      in: path
+      required: true
+      schema:
+        type: string
+    CapabilityID:
+      name: capability_id
+      in: path
+      required: true
+      schema:
+        type: string
+    Cursor:
+      name: cursor
+      in: query
+      required: false
+      schema:
+        type: string
+    IdempotencyKeyOptional:
+      name: Idempotency-Key
+      in: header
+      required: false
+      schema:
+        type: string
+    IdempotencyKeyRequired:
+      name: Idempotency-Key
+      in: header
+      required: true
+      schema:
+        type: string
+    JobID:
+      name: job_id
+      in: path
+      required: true
+      schema:
+        type: string
+    KeyID:
+      name: key_id
+      in: path
+      required: true
+      schema:
+        type: string
+    LeaseID:
+      name: lease_id
+      in: path
+      required: true
+      schema:
+        type: string
+    Limit:
+      name: limit
+      in: query
+      required: false
+      schema:
+        type: integer
+        minimum: 1
+    RequestID:
+      name: request_id
+      in: path
+      required: true
+      schema:
+        type: string
+    ResourceID:
+      name: resource_id
+      in: path
+      required: true
+      schema:
+        type: string
+    ServiceID:
+      name: service_id
+      in: path
+      required: true
+      schema:
+        type: string
+    UploadID:
+      name: upload_id
+      in: path
+      required: true
+      schema:
+        type: string
+  responses:
+    Error:
+      description: Error envelope.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorEnvelope"
+    Health:
+      description: Component health envelope.
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: "#/components/schemas/SuccessEnvelope"
+              - type: object
+                properties:
+                  data:
+                    $ref: "#/components/schemas/ComponentHealth"
+    Success:
+      description: Success envelope.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/SuccessEnvelope"
+  schemas:
+    AnyMap:
+      type: object
+      additionalProperties: true
+    Links:
+      type: object
+      additionalProperties: true
+    Meta:
+      type: object
+      required: [request_id, schema_version]
+      properties:
+        request_id:
+          type: string
+        schema_version:
+          type: string
+    SuccessEnvelope:
+      type: object
+      required: [ok, data, links, meta]
+      properties:
+        ok:
+          const: true
+        data: {}
+        links:
+          $ref: "#/components/schemas/Links"
+        meta:
+          $ref: "#/components/schemas/Meta"
+    ErrorEnvelope:
+      type: object
+      required: [ok, error, links, meta]
+      properties:
+        ok:
+          const: false
+        error:
+          $ref: "#/components/schemas/ErrorObject"
+        links:
+          $ref: "#/components/schemas/Links"
+        meta:
+          $ref: "#/components/schemas/Meta"
+    ErrorObject:
+      type: object
+      required: [code, message, retryable]
+      properties:
+        code:
+          type: string
+        message:
+          type: string
+        retryable:
+          type: boolean
+    ComponentHealth:
+      type: object
+      required: [status, version, checked_at]
+      properties:
+        status:
+          type: string
+        version:
+          type: string
+        checked_at:
+          type: string
+          format: date-time
+        details:
+          $ref: "#/components/schemas/AnyMap"
+
+    ProviderManifest:
+      type: object
+      required: [schema_version, service, provider, capabilities]
+      properties:
+        schema_version:
+          type: string
+        service:
+          $ref: "#/components/schemas/Service"
+        provider:
+          $ref: "#/components/schemas/Provider"
+        capabilities:
+          type: array
+          items:
+            $ref: "#/components/schemas/Capability"
+    Service:
+      type: object
+      required: [id, name, description, version, provider_kind]
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        description:
+          type: string
+        version:
+          type: string
+        provider_kind:
+          type: string
+        tags:
+          type: array
+          items:
+            type: string
+    Provider:
+      type: object
+      required: [endpoint]
+      properties:
+        endpoint:
+          type: string
+        node_id:
+          type: string
+        health_path:
+          type: string
+    Capability:
+      type: object
+      required: [id, name, description, execution_mode, input_schema, output_schema, examples, side_effects, resource_hints, artifact_hints, timeout_hint]
+      properties:
+        id:
+          type: string
+        service_id:
+          type: string
+        name:
+          type: string
+        description:
+          type: string
+        tags:
+          type: array
+          items:
+            type: string
+        execution_mode:
+          type: string
+          enum: [sync, async]
+        input_schema:
+          $ref: "#/components/schemas/AnyMap"
+        output_schema:
+          $ref: "#/components/schemas/AnyMap"
+        examples:
+          type: array
+          items:
+            $ref: "#/components/schemas/AnyMap"
+        side_effects:
+          type: string
+        resource_hints:
+          type: array
+          items:
+            $ref: "#/components/schemas/ResourceHint"
+        artifact_hints:
+          type: array
+          items:
+            $ref: "#/components/schemas/ArtifactHint"
+        timeout_hint:
+          type: string
+    ResourceHint:
+      type: object
+      required: [selector, required]
+      properties:
+        selector:
+          type: string
+        required:
+          type: boolean
+        quantity:
+          type: integer
+        notes:
+          type: string
+    ArtifactHint:
+      type: object
+      required: [media_type]
+      properties:
+        media_type:
+          type: string
+        count:
+          type: string
+        notes:
+          type: string
+
+    JobState:
+      type: string
+      enum: [queued, claimed, running, succeeded, failed, canceled, expired]
+    CreateJobRequest:
+      type: object
+      required: [requester_id]
+      properties:
+        requester_id:
+          type: string
+        capability_id:
+          type: string
+        input_summary:
+          $ref: "#/components/schemas/AnyMap"
+        metadata:
+          $ref: "#/components/schemas/AnyMap"
+    JobClaimRequest:
+      type: object
+      required: [worker_id]
+      properties:
+        worker_id:
+          type: string
+        lease_seconds:
+          type: integer
+    JobHeartbeatRequest:
+      type: object
+      required: [worker_id]
+      properties:
+        worker_id:
+          type: string
+        transition_to:
+          type: string
+        status_message:
+          type: string
+    JobCompleteRequest:
+      type: object
+      required: [worker_id]
+      properties:
+        worker_id:
+          type: string
+        artifact_refs:
+          type: array
+          items:
+            type: string
+        output:
+          $ref: "#/components/schemas/AnyMap"
+    JobFailRequest:
+      type: object
+      required: [worker_id, error]
+      properties:
+        worker_id:
+          type: string
+        error:
+          $ref: "#/components/schemas/ErrorObject"
+    CancelRequest:
+      type: object
+      properties:
+        reason:
+          type: string
+    JobLogEntry:
+      type: object
+      required: [timestamp, level, message]
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        level:
+          type: string
+        message:
+          type: string
+        fields:
+          $ref: "#/components/schemas/AnyMap"
+    AppendJobLogRequest:
+      type: object
+      required: [worker_id, entries]
+      properties:
+        worker_id:
+          type: string
+        entries:
+          type: array
+          items:
+            $ref: "#/components/schemas/JobLogEntry"
+
+    ResourceStatus:
+      type: string
+      enum: [available, unavailable]
+    RegisterResourceRequest:
+      type: object
+      required: [selector]
+      properties:
+        resource_id:
+          type: string
+        selector:
+          type: string
+        display_name:
+          type: string
+        status:
+          $ref: "#/components/schemas/ResourceStatus"
+        node_id:
+          type: string
+        tags:
+          type: array
+          items:
+            type: string
+        metadata:
+          $ref: "#/components/schemas/AnyMap"
+    CreateLeaseRequest:
+      type: object
+      required: [requester_id, resource_selector]
+      properties:
+        requester_id:
+          type: string
+        resource_selector:
+          type: string
+        priority:
+          type: integer
+        heartbeat_timeout_seconds:
+          type: integer
+    LeaseHeartbeatRequest:
+      type: object
+      required: [holder_id]
+      properties:
+        holder_id:
+          type: string
+    LeaseReleaseRequest:
+      type: object
+      required: [holder_id]
+      properties:
+        holder_id:
+          type: string
+        reason:
+          type: string
+
+    CreateArtifactUploadRequest:
+      type: object
+      required: [name, media_type, owner_subject_id]
+      properties:
+        name:
+          type: string
+        media_type:
+          type: string
+        producer_ref:
+          type: string
+        owner_subject_id:
+          type: string
+        expected_size:
+          type: integer
+          format: int64
+        expected_checksum:
+          type: string
+        metadata:
+          $ref: "#/components/schemas/AnyMap"
+    CompleteArtifactUploadRequest:
+      type: object
+      required: [checksum, size]
+      properties:
+        checksum:
+          type: string
+        size:
+          type: integer
+          format: int64
+    RegisterLocalArtifactRequest:
+      type: object
+      required: [path, media_type, owner_subject_id]
+      properties:
+        path:
+          type: string
+        name:
+          type: string
+        media_type:
+          type: string
+        producer_ref:
+          type: string
+        owner_subject_id:
+          type: string
+        metadata:
+          $ref: "#/components/schemas/AnyMap"
+
+    CreateAPIKeyRequest:
+      type: object
+      required: [subject_id, scopes]
+      properties:
+        subject_id:
+          type: string
+        scopes:
+          type: array
+          items:
+            type: string
+        token:
+          type: string
+    VerifyCredentialRequest:
+      type: object
+      required: [credential]
+      properties:
+        credential:
+          type: string
+        context:
+          $ref: "#/components/schemas/AnyMap"
+    PolicyCheckRequest:
+      type: object
+      required: [subject_id, action, resource]
+      properties:
+        subject_id:
+          type: string
+        action:
+          type: string
+        resource:
+          type: string
+        context:
+          $ref: "#/components/schemas/AnyMap"
+    CreatePolicyRuleRequest:
+      type: object
+      required: [action, resource, effect]
+      properties:
+        subject_id:
+          type: string
+        scope:
+          type: string
+        action:
+          type: string
+        resource:
+          type: string
+        effect:
+          type: string
+          enum: [allow, deny]
+        reason:
+          type: string
+    CreateSecretRequest:
+      type: object
+      required: [name, value]
+      properties:
+        name:
+          type: string
+        value:
+          type: string
+    ResolveSecretRequest:
+      type: object
+      required: [secret_ref, subject_id]
+      properties:
+        secret_ref:
+          type: string
+        subject_id:
+          type: string
+    RedactRequest:
+      type: object
+      required: [text]
+      properties:
+        text:
+          type: string
