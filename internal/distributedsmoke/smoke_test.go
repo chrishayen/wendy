@@ -20,6 +20,11 @@ func TestRunDistributedSmokePassesPrimaryPlusNodeFlow(t *testing.T) {
 	for _, name := range []string{
 		"auth.worker_forbidden_component_route",
 		"auth.component_forbidden_worker_route",
+		"component.catalog.surface.capabilities",
+		"component.jobs.surface.list",
+		"component.leases.surface.resources",
+		"component.artifacts.surface.list",
+		"component.node.surface.resources",
 		"gateway.invoke",
 		"runner.run_once",
 		"jobs.succeeded",

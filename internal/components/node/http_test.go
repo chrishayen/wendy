@@ -72,6 +72,9 @@ func TestHandlerNodeLifecycle(t *testing.T) {
 	if health["status"] != "healthy" {
 		t.Fatalf("health = %#v", health)
 	}
+	if details, ok := health["details"].(map[string]any); !ok || details["component"] != "node" {
+		t.Fatalf("health details = %#v", health["details"])
+	}
 	resources := doJSON(t, handler, http.MethodGet, "/v1/node/resources", headers, http.StatusOK)
 	if len(resources["items"].([]any)) != 1 {
 		t.Fatalf("resources = %#v", resources)

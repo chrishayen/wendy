@@ -139,7 +139,7 @@ func (s *Store) Health() contracts.NodeHealth {
 		Status:    "healthy",
 		Version:   "v1",
 		CheckedAt: s.formatNow(),
-		Details:   map[string]any{"node_id": s.config.NodeID},
+		Details:   map[string]any{"component": "node", "node_id": s.config.NodeID},
 	}
 }
 

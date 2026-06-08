@@ -28,6 +28,7 @@ import (
 	"pacp/internal/provider"
 	"pacp/internal/routeauth"
 	"pacp/internal/runner"
+	"pacp/internal/testkit"
 	"pacp/internal/transportauth"
 )
 
@@ -221,6 +222,16 @@ func Run(ctx context.Context) DistributedSmokeReport {
 	}))
 	defer gatewayHTTP.Close()
 
+	checkLiveComponentContracts(ctx, client, []liveComponentContract{
+		{Kind: "policy", URL: policyHTTP.URL, Credential: policyCredential},
+		{Kind: "catalog", URL: catalogHTTP.URL, Credential: policyCredential},
+		{Kind: "jobs", URL: jobsHTTP.URL, Credential: policyCredential},
+		{Kind: "leases", URL: leasesHTTP.URL, Credential: policyCredential},
+		{Kind: "artifacts", URL: artifactsHTTP.URL, Credential: policyCredential},
+		{Kind: "node", URL: nodeHTTP.URL, Credential: "Bearer " + runnerToken},
+		{Kind: "gateway", URL: gatewayHTTP.URL},
+	}, &report)
+
 	jobID := invokeDistributedTool(ctx, client, gatewayHTTP.URL, agentToken, capability, &report)
 	if jobID == "" {
 		return report
@@ -281,6 +292,38 @@ func Run(ctx context.Context) DistributedSmokeReport {
 		report.add(DistributedSmokeCheck{Name: "provider.invoked", OK: true})
 	}
 	return report
+}
+
+type liveComponentContract struct {
+	Kind       string
+	URL        string
+	Credential string
+}
+
+func checkLiveComponentContracts(ctx context.Context, client *http.Client, components []liveComponentContract, report *DistributedSmokeReport) {
+	for _, component := range components {
+		componentReport := testkit.CheckComponent(ctx, client, testkit.ComponentCheckOptions{
+			BaseURL:    component.URL,
+			Kind:       component.Kind,
+			Credential: component.Credential,
+		})
+		for _, result := range componentReport.Checks {
+			report.add(DistributedSmokeCheck{
+				Name:       distributedComponentCheckName(component.Kind, result.Name),
+				OK:         result.OK,
+				HTTPStatus: result.HTTPStatus,
+				Error:      result.Error,
+			})
+		}
+	}
+}
+
+func distributedComponentCheckName(kind, name string) string {
+	surfacePrefix := "component.surface." + kind + "."
+	if strings.HasPrefix(name, surfacePrefix) {
+		return "component." + kind + ".surface." + strings.TrimPrefix(name, surfacePrefix)
+	}
+	return "component." + kind + "." + strings.TrimPrefix(name, "component.")
 }
 
 func checkLeaseReleaseAudit(store *leases.Store, runnerID, jobID string, report *DistributedSmokeReport) {

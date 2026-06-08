@@ -217,6 +217,8 @@ func TestRunDistributedSmokePasses(t *testing.T) {
 		t.Fatalf("code=%d stderr=%s stdout=%s", code, stderr.String(), stdout.String())
 	}
 	for _, expected := range []string{
+		"check=component.catalog.surface.capabilities status=pass",
+		"check=component.node.surface.resources status=pass",
 		"check=gateway.invoke status=pass",
 		"check=runner.run_once status=pass",
 		"check=node.service_running status=pass",
