@@ -7,9 +7,12 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"reflect"
+	"strings"
 	"testing"
 
 	"pacp/internal/components/artifacts"
@@ -18,6 +21,7 @@ import (
 	"pacp/internal/components/policy"
 	"pacp/internal/contracts"
 	"pacp/internal/provider"
+	"pacp/internal/testkit"
 )
 
 func TestGatewayHealthDoesNotRequireDownstreamServices(t *testing.T) {
@@ -98,7 +102,7 @@ func TestGatewayDiscoveryInvokeAndJobProjection(t *testing.T) {
 			"height": 1024,
 		},
 		"preferred_mode": "async",
-	}, map[string]string{"Authorization": "Bearer token_agent", "Idempotency-Key": "invoke-1"}, http.StatusCreated)
+	}, map[string]string{"Authorization": "Bearer token_agent", "Idempotency-Key": "invoke-1"}, http.StatusAccepted)
 	if invoke["mode"] != "async" || invoke["job_id"] != "job_000001" {
 		t.Fatalf("invoke = %#v", invoke)
 	}
@@ -110,7 +114,7 @@ func TestGatewayDiscoveryInvokeAndJobProjection(t *testing.T) {
 			"height": 1024,
 		},
 		"preferred_mode": "async",
-	}, map[string]string{"Authorization": "Bearer token_agent", "Idempotency-Key": "invoke-1"}, http.StatusOK)
+	}, map[string]string{"Authorization": "Bearer token_agent", "Idempotency-Key": "invoke-1"}, http.StatusAccepted)
 	if replay["job_id"] != "job_000001" {
 		t.Fatalf("invoke replay = %#v", replay)
 	}
@@ -122,6 +126,33 @@ func TestGatewayDiscoveryInvokeAndJobProjection(t *testing.T) {
 	status := env.doJSON(http.MethodGet, "/v1/agent/jobs/job_000001", nil, map[string]string{"Authorization": "Bearer token_agent"}, http.StatusOK)
 	if status["job_id"] != "job_000001" || status["metadata"] != nil || status["claim"] != nil {
 		t.Fatalf("job status leaked private fields = %#v", status)
+	}
+}
+
+func TestGatewayReplaysS003PublicDiscoveryAndInvokeFixtures(t *testing.T) {
+	pkg := loadS003GatewayFixturePackage(t)
+	deps := newS003GatewayFixtureDependencies(t, pkg)
+	defer deps.server.Close()
+
+	handler := NewHandler(Config{
+		CatalogURL:        deps.server.URL,
+		PolicyURL:         deps.server.URL,
+		JobsURL:           deps.server.URL,
+		ArtifactsURL:      deps.server.URL,
+		GatewayCredential: "Bearer token_s003_gateway",
+		Client:            deps.server.Client(),
+	})
+
+	for _, fixtureID := range []string{
+		"public_tools_list_ok",
+		"public_tool_detail_ok",
+		"public_invoke_async_ok",
+		"public_invoke_idempotency_replay",
+		"public_invoke_idempotency_conflict",
+	} {
+		if _, err := testkit.ReplayHTTPFixture(handler, pkg, fixtureID); err != nil {
+			t.Fatalf("replay %s: %v", fixtureID, err)
+		}
 	}
 }
 
@@ -198,6 +229,182 @@ func writeGatewayTestEnvelope(t *testing.T, w http.ResponseWriter, status int, d
 	}
 }
 
+type s003GatewayFixtureDependencies struct {
+	t      *testing.T
+	pkg    testkit.FixturePackage
+	server *httptest.Server
+}
+
+func newS003GatewayFixtureDependencies(t *testing.T, pkg testkit.FixturePackage) *s003GatewayFixtureDependencies {
+	t.Helper()
+	deps := &s003GatewayFixtureDependencies{t: t, pkg: pkg}
+	deps.server = httptest.NewServer(http.HandlerFunc(deps.serveHTTP))
+	return deps
+}
+
+func (d *s003GatewayFixtureDependencies) serveHTTP(w http.ResponseWriter, r *http.Request) {
+	raw, err := io.ReadAll(r.Body)
+	if err != nil {
+		d.fail(w, "read downstream request body: %v", err)
+		return
+	}
+	fixtureID, ok := d.fixtureIDFor(r, raw)
+	if !ok {
+		d.fail(w, "unexpected downstream request: %s %s?%s body=%s", r.Method, r.URL.Path, r.URL.RawQuery, string(raw))
+		return
+	}
+	fixture, ok := s003FixtureByID(d.pkg, fixtureID)
+	if !ok {
+		d.fail(w, "fixture %s not found", fixtureID)
+		return
+	}
+	if !d.assertDownstreamRequest(w, fixtureID, fixture, r, raw) {
+		return
+	}
+	writeS003FixtureResponse(d.t, w, fixtureID, fixture)
+}
+
+func (d *s003GatewayFixtureDependencies) fixtureIDFor(r *http.Request, raw []byte) (string, bool) {
+	path := strings.TrimSuffix(r.URL.Path, "/")
+	switch {
+	case r.Method == http.MethodPost && path == "/v1/auth/verify":
+		return "c08_auth_agent_ok", true
+	case r.Method == http.MethodPost && path == "/v1/policy/check":
+		var body map[string]any
+		if len(raw) > 0 {
+			if err := json.Unmarshal(raw, &body); err != nil {
+				return "", false
+			}
+		}
+		action, _ := body["action"].(string)
+		resource, _ := body["resource"].(string)
+		switch {
+		case action == "tool.discover" && resource == "tools":
+			return "c08_policy_tool_discover_allow", true
+		case action == "tool.discover" && resource == "cap_image_generate_gpu":
+			return "c08_policy_tool_discover_capability_allow", true
+		case action == "tool.invoke" && resource == "cap_image_generate_gpu":
+			return "c08_policy_tool_invoke_allow", true
+		default:
+			return "", false
+		}
+	case r.Method == http.MethodGet && path == "/v1/catalog/capabilities" && r.URL.Query().Get("limit") == "50":
+		return "c03_catalog_list_ok", true
+	case r.Method == http.MethodGet && path == "/v1/catalog/capabilities" && r.URL.Query().Get("capability_id") == "cap_image_generate_gpu":
+		return "c03_catalog_detail_lookup_ok", true
+	case r.Method == http.MethodGet && path == "/v1/catalog/capabilities/cap_image_generate_gpu/route":
+		return "c03_catalog_route_ok", true
+	case r.Method == http.MethodPost && path == "/v1/jobs":
+		return "c05_create_job_ok", true
+	default:
+		return "", false
+	}
+}
+
+func (d *s003GatewayFixtureDependencies) assertDownstreamRequest(w http.ResponseWriter, fixtureID string, fixture contracts.Fixture, r *http.Request, raw []byte) bool {
+	if fixture.Request == nil {
+		d.fail(w, "%s has no request", fixtureID)
+		return false
+	}
+	if r.Method != fixture.Request.Method || r.URL.Path != fixture.Request.Path {
+		d.fail(w, "%s request = %s %s, want %s %s", fixtureID, r.Method, r.URL.Path, fixture.Request.Method, fixture.Request.Path)
+		return false
+	}
+	for key, want := range fixture.Request.Headers {
+		if strings.EqualFold(key, "Idempotency-Key") {
+			continue
+		}
+		if got := r.Header.Get(key); got != want {
+			d.fail(w, "%s header %s = %q, want %q", fixtureID, key, got, want)
+			return false
+		}
+	}
+	for key, rawWant := range fixture.Request.Query {
+		want := queryValues(rawWant)
+		got := r.URL.Query()[key]
+		if !reflect.DeepEqual(got, want) {
+			d.fail(w, "%s query %s = %#v, want %#v", fixtureID, key, got, want)
+			return false
+		}
+	}
+	if fixture.Request.Body != nil {
+		var got any
+		if err := json.Unmarshal(raw, &got); err != nil {
+			d.fail(w, "%s decode request body: %v", fixtureID, err)
+			return false
+		}
+		if !reflect.DeepEqual(got, fixture.Request.Body) {
+			d.fail(w, "%s request body = %#v, want %#v", fixtureID, got, fixture.Request.Body)
+			return false
+		}
+	}
+	return true
+}
+
+func (d *s003GatewayFixtureDependencies) fail(w http.ResponseWriter, format string, args ...any) {
+	d.t.Helper()
+	d.t.Errorf(format, args...)
+	writeGatewayTestEnvelope(d.t, w, http.StatusInternalServerError, map[string]any{"fixture_error": true})
+}
+
+func loadS003GatewayFixturePackage(t *testing.T) testkit.FixturePackage {
+	t.Helper()
+	scenario, err := testkit.LoadScenario(filepath.Join("..", "..", "..", "testdata", "contract-sim"), filepath.Join("fixtures", "S003", "manifest.json"))
+	if err != nil {
+		t.Fatalf("load S003 fixtures: %v", err)
+	}
+	pkg, ok := testkit.FindPackage(scenario, "c04-agent-tool-gateway")
+	if !ok {
+		t.Fatal("c04-agent-tool-gateway fixture package not found")
+	}
+	return pkg
+}
+
+func s003FixtureByID(pkg testkit.FixturePackage, id string) (contracts.Fixture, bool) {
+	for _, fixture := range pkg.File.Fixtures {
+		if fixture.ID == id {
+			return fixture, true
+		}
+	}
+	return contracts.Fixture{}, false
+}
+
+func writeS003FixtureResponse(t *testing.T, w http.ResponseWriter, fixtureID string, fixture contracts.Fixture) {
+	t.Helper()
+	if fixture.Response == nil || fixture.Response.Status == nil {
+		t.Fatalf("%s has no response status", fixtureID)
+	}
+	for key, value := range fixture.Response.Headers {
+		w.Header().Set(key, value)
+	}
+	if fixture.Response.Body != nil && w.Header().Get("Content-Type") == "" {
+		w.Header().Set("Content-Type", "application/json")
+	}
+	w.WriteHeader(*fixture.Response.Status)
+	if fixture.Response.Body != nil {
+		if err := json.NewEncoder(w).Encode(fixture.Response.Body); err != nil {
+			t.Fatalf("encode %s fixture response: %v", fixtureID, err)
+		}
+	}
+}
+
+func queryValues(raw any) []string {
+	switch value := raw.(type) {
+	case string:
+		return []string{value}
+	case []any:
+		out := make([]string, 0, len(value))
+		for _, item := range value {
+			if text, ok := item.(string); ok {
+				out = append(out, text)
+			}
+		}
+		return out
+	default:
+		return nil
+	}
+}
+
 func labelsMatch(raw any, want map[string]string) bool {
 	if len(want) == 0 {
 		return raw == nil
@@ -218,7 +425,7 @@ func TestGatewayCancelArtifactsAndContent(t *testing.T) {
 	env := newGatewayTestEnv(t)
 	invoke := env.doJSON(http.MethodPost, "/v1/tools/cap_image_generate_gpu/invoke", map[string]any{
 		"input": map[string]any{"prompt": "red mug"},
-	}, map[string]string{"Authorization": "Bearer token_agent", "Idempotency-Key": "invoke-2"}, http.StatusCreated)
+	}, map[string]string{"Authorization": "Bearer token_agent", "Idempotency-Key": "invoke-2"}, http.StatusAccepted)
 	jobID := invoke["job_id"].(string)
 
 	canceled := env.doJSON(http.MethodPost, "/v1/agent/jobs/"+jobID+"/cancel", map[string]any{"reason": "canceled by requester"}, map[string]string{
@@ -255,7 +462,7 @@ func TestGatewayRejectsRunningJobCancellation(t *testing.T) {
 	env := newGatewayTestEnv(t)
 	invoke := env.doJSON(http.MethodPost, "/v1/tools/cap_image_generate_gpu/invoke", map[string]any{
 		"input": map[string]any{"prompt": "red mug"},
-	}, map[string]string{"Authorization": "Bearer token_agent", "Idempotency-Key": "invoke-running-cancel"}, http.StatusCreated)
+	}, map[string]string{"Authorization": "Bearer token_agent", "Idempotency-Key": "invoke-running-cancel"}, http.StatusAccepted)
 	jobID := invoke["job_id"].(string)
 	if _, err := env.jobStore.Claim(jobID, contracts.JobClaimRequest{WorkerID: "runner_1", LeaseSeconds: 60}); err != nil {
 		t.Fatalf("claim job: %v", err)

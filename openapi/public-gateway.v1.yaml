@@ -80,13 +80,13 @@ paths:
               $ref: "#/components/schemas/InvokeToolRequest"
       responses:
         "200":
-          description: Synchronous result or idempotent replay.
+          description: Synchronous result or synchronous idempotent replay.
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/InvokeToolEnvelope"
-        "201":
-          description: Async job created.
+        "202":
+          description: Async job accepted or async idempotent replay.
           content:
             application/json:
               schema:

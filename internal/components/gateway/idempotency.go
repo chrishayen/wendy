@@ -23,6 +23,7 @@ type idempotencySnapshotFile struct {
 
 type idempotencySnapshotRecord struct {
 	Fingerprint string                       `json:"fingerprint"`
+	Status      int                          `json:"status,omitempty"`
 	Response    contracts.InvokeToolResponse `json:"response"`
 	Links       map[string]any               `json:"links"`
 }
@@ -73,10 +74,10 @@ func (s *idempotencyStore) hasConflict(key, fingerprint string) bool {
 	return ok && record.fingerprint != fingerprint
 }
 
-func (s *idempotencyStore) store(key, fingerprint string, response contracts.InvokeToolResponse, links map[string]any) error {
+func (s *idempotencyStore) store(key, fingerprint string, status int, response contracts.InvokeToolResponse, links map[string]any) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.records[key] = invokeRecord{fingerprint: fingerprint, response: response, links: cloneLinks(links)}
+	s.records[key] = invokeRecord{fingerprint: fingerprint, status: status, response: response, links: cloneLinks(links)}
 	return s.saveLocked()
 }
 
@@ -98,6 +99,7 @@ func (s *idempotencyStore) loadSnapshot(path string) error {
 	for key, record := range snapshot.Records {
 		s.records[key] = invokeRecord{
 			fingerprint: record.Fingerprint,
+			status:      record.Status,
 			response:    record.Response,
 			links:       cloneLinks(record.Links),
 		}
@@ -113,6 +115,7 @@ func (s *idempotencyStore) saveLocked() error {
 	for key, record := range s.records {
 		records[key] = idempotencySnapshotRecord{
 			Fingerprint: record.fingerprint,
+			Status:      replayStatus(record),
 			Response:    record.response,
 			Links:       cloneLinks(record.links),
 		}

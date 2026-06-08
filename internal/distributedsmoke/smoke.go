@@ -310,7 +310,7 @@ func invokeDistributedTool(ctx context.Context, client *http.Client, gatewayURL,
 		report.add(check)
 		return ""
 	}
-	if status != http.StatusCreated || !envelope.OK {
+	if status != http.StatusAccepted || !envelope.OK {
 		check.Error = fmt.Sprintf("HTTP %d ok=%t", status, envelope.OK)
 		report.add(check)
 		return ""

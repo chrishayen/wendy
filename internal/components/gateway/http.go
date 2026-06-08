@@ -45,6 +45,7 @@ type Handler struct {
 
 type invokeRecord struct {
 	fingerprint string
+	status      int
 	response    contracts.InvokeToolResponse
 	links       map[string]any
 }
@@ -218,13 +219,13 @@ func (h *Handler) listTools(w http.ResponseWriter, r *http.Request) {
 		Items      []contracts.CatalogCapabilityRecord `json:"items"`
 		NextCursor *string                             `json:"next_cursor"`
 	}
-	if err := h.getJSON(r.Context(), h.cfg.CatalogURL+"/v1/catalog/capabilities", &data); err != nil {
+	if err := h.getJSON(r.Context(), h.cfg.CatalogURL+"/v1/catalog/capabilities?limit=50", &data); err != nil {
 		h.writeGatewayError(w, r, err)
 		return
 	}
 	tools := make([]contracts.Tool, 0, len(data.Items))
 	for _, item := range data.Items {
-		decision, err := h.checkPolicy(r.Context(), sub.ID, "tool.discover", item.Capability.ID, nil)
+		decision, err := h.checkPolicy(r.Context(), sub.ID, "tool.discover", item.Capability.ID, map[string]any{"capability_id": item.Capability.ID})
 		if err != nil {
 			h.writeGatewayError(w, r, err)
 			return
@@ -241,7 +242,7 @@ func (h *Handler) getTool(w http.ResponseWriter, r *http.Request, capabilityID s
 	if !ok {
 		return
 	}
-	if !h.requirePolicy(w, r, sub.ID, "tool.discover", capabilityID, nil, "tool discovery denied") {
+	if !h.requirePolicy(w, r, sub.ID, "tool.discover", capabilityID, map[string]any{"capability_id": capabilityID}, "tool discovery denied") {
 		return
 	}
 	record, err := h.getCapability(r.Context(), capabilityID)
@@ -268,14 +269,27 @@ func (h *Handler) invokeTool(w http.ResponseWriter, r *http.Request, capabilityI
 	}
 	fp := invokeFingerprint(sub.ID, capabilityID, req)
 	if replay, ok := h.idempotencyReplay(idempotencyKey, fp); ok {
-		writeJSON(w, http.StatusOK, contracts.SuccessEnvelope{OK: true, Data: replay.response, Links: replay.links, Meta: meta(r)})
+		writeJSON(w, replayStatus(replay), contracts.SuccessEnvelope{OK: true, Data: replay.response, Links: replay.links, Meta: meta(r)})
 		return
 	}
 	if h.idempotencyConflict(idempotencyKey, fp) {
 		writeError(w, r, http.StatusConflict, "idempotency_conflict", "idempotency key was reused with different request content", false)
 		return
 	}
-	if !h.requirePolicy(w, r, sub.ID, "tool.invoke", capabilityID, nil, "tool invocation denied") {
+	if !h.requirePolicy(w, r, sub.ID, "tool.invoke", capabilityID, map[string]any{"capability_id": capabilityID}, "tool invocation denied") {
+		return
+	}
+	if req.PreferredMode == "async" {
+		route, err := h.getCapabilityRoute(r.Context(), capabilityID)
+		if err != nil {
+			h.writeGatewayError(w, r, err)
+			return
+		}
+		record := contracts.CatalogCapabilityRecord{
+			Capability: contracts.Capability{ID: capabilityID},
+			Route:      route,
+		}
+		h.invokeAsyncJob(w, r, sub, record, req, idempotencyKey, fp)
 		return
 	}
 	record, err := h.getCapability(r.Context(), capabilityID)
@@ -287,6 +301,10 @@ func (h *Handler) invokeTool(w http.ResponseWriter, r *http.Request, capabilityI
 		h.invokeSyncProvider(w, r, sub, record.Route, req, idempotencyKey, fp)
 		return
 	}
+	h.invokeAsyncJob(w, r, sub, record, req, idempotencyKey, fp)
+}
+
+func (h *Handler) invokeAsyncJob(w http.ResponseWriter, r *http.Request, sub subject, record contracts.CatalogCapabilityRecord, req contracts.InvokeToolRequest, idempotencyKey, fingerprint string) {
 	job, err := h.createJob(r.Context(), sub.ID, record, req, idempotencyKey)
 	if err != nil {
 		h.writeGatewayError(w, r, err)
@@ -294,11 +312,11 @@ func (h *Handler) invokeTool(w http.ResponseWriter, r *http.Request, capabilityI
 	}
 	response := contracts.InvokeToolResponse{Mode: "async", JobID: job.JobID}
 	links := asyncJobLinks(job.JobID, true)
-	if err := h.storeIdempotency(idempotencyKey, fp, response, links); err != nil {
+	if err := h.storeIdempotency(idempotencyKey, fingerprint, http.StatusAccepted, response, links); err != nil {
 		writeError(w, r, http.StatusInternalServerError, "internal_error", "gateway idempotency record could not be stored", true)
 		return
 	}
-	writeJSON(w, http.StatusCreated, contracts.SuccessEnvelope{OK: true, Data: response, Links: links, Meta: meta(r)})
+	writeJSON(w, http.StatusAccepted, contracts.SuccessEnvelope{OK: true, Data: response, Links: links, Meta: meta(r)})
 }
 
 func (h *Handler) getAgentJob(w http.ResponseWriter, r *http.Request, jobID string) {
@@ -522,9 +540,23 @@ func (h *Handler) jobPolicyContext(w http.ResponseWriter, r *http.Request, jobID
 }
 
 func (h *Handler) getCapability(ctx context.Context, capabilityID string) (contracts.CatalogCapabilityRecord, error) {
-	var record contracts.CatalogCapabilityRecord
-	err := h.getJSON(ctx, h.cfg.CatalogURL+"/v1/catalog/capabilities/"+url.PathEscape(capabilityID), &record)
-	return record, err
+	var data struct {
+		Items []contracts.CatalogCapabilityRecord `json:"items"`
+	}
+	target := h.cfg.CatalogURL + "/v1/catalog/capabilities?capability_id=" + url.QueryEscape(capabilityID)
+	if err := h.getJSON(ctx, target, &data); err != nil {
+		return contracts.CatalogCapabilityRecord{}, err
+	}
+	if len(data.Items) == 0 {
+		return contracts.CatalogCapabilityRecord{}, downstreamError{status: http.StatusNotFound, code: "not_found", message: "capability not found"}
+	}
+	return data.Items[0], nil
+}
+
+func (h *Handler) getCapabilityRoute(ctx context.Context, capabilityID string) (contracts.CapabilityRoute, error) {
+	var route contracts.CapabilityRoute
+	err := h.getJSON(ctx, h.cfg.CatalogURL+"/v1/catalog/capabilities/"+url.PathEscape(capabilityID)+"/route", &route)
+	return route, err
 }
 
 func (h *Handler) createJob(ctx context.Context, subjectID string, record contracts.CatalogCapabilityRecord, req contracts.InvokeToolRequest, publicKey string) (contracts.Job, error) {
@@ -568,7 +600,7 @@ func (h *Handler) invokeSyncProvider(w http.ResponseWriter, r *http.Request, sub
 		return
 	}
 	response := contracts.InvokeToolResponse{Mode: "sync", Output: provider.Output, Artifacts: provider.Artifacts}
-	if err := h.storeIdempotency(idempotencyKey, fingerprint, response, map[string]any{}); err != nil {
+	if err := h.storeIdempotency(idempotencyKey, fingerprint, http.StatusOK, response, map[string]any{}); err != nil {
 		writeError(w, r, http.StatusInternalServerError, "internal_error", "gateway idempotency record could not be stored", true)
 		return
 	}
@@ -686,8 +718,18 @@ func (h *Handler) idempotencyConflict(key, fp string) bool {
 	return h.idempotency.hasConflict(key, fp)
 }
 
-func (h *Handler) storeIdempotency(key, fp string, response contracts.InvokeToolResponse, links map[string]any) error {
-	return h.idempotency.store(key, fp, response, links)
+func replayStatus(record invokeRecord) int {
+	if record.status != 0 {
+		return record.status
+	}
+	if record.response.Mode == "async" && record.response.JobID != "" {
+		return http.StatusAccepted
+	}
+	return http.StatusOK
+}
+
+func (h *Handler) storeIdempotency(key, fp string, status int, response contracts.InvokeToolResponse, links map[string]any) error {
+	return h.idempotency.store(key, fp, status, response, links)
 }
 
 func projectTool(capability contracts.Capability) contracts.Tool {
