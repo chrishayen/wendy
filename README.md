@@ -170,11 +170,12 @@ Node resource declarations can be converted into lease resource seed files:
 go run ./cmd/pacp-node -config testdata/node/linux-gpu-fake.json -export-lease-resources
 ```
 
-Node service start and stop are side-effecting operations and require an
-`Idempotency-Key`; `pacp-admin node start` and `pacp-admin node stop` expose an
-`-idempotency-key` flag, and runner start operations set this header for you.
-Lease release also requires an `Idempotency-Key`; `pacp-admin leases release`
-and runner release operations set this header.
+Direct C05 job creation, node service start/stop, and lease release are
+side-effecting operations and require an `Idempotency-Key`. C04 sets the C05
+job creation header for public invocations, `pacp-admin node start` and
+`pacp-admin node stop` expose an `-idempotency-key` flag, and runner start
+operations set the node lifecycle header for you. `pacp-admin leases release`
+and runner release operations set the lease release header.
 
 For distributed deployments, set `PACP_COMPONENT_TOKEN` or `-component-token`
 on catalog, jobs, leases, artifacts, and policy services. `pacp-gateway` and

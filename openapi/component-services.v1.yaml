@@ -201,7 +201,7 @@ paths:
       tags: [jobs]
       operationId: createJob
       parameters:
-        - $ref: "#/components/parameters/IdempotencyKeyOptional"
+        - $ref: "#/components/parameters/IdempotencyKeyRequired"
       requestBody:
         required: true
         content:
@@ -1055,12 +1055,6 @@ components:
     Cursor:
       name: cursor
       in: query
-      required: false
-      schema:
-        type: string
-    IdempotencyKeyOptional:
-      name: Idempotency-Key
-      in: header
       required: false
       schema:
         type: string

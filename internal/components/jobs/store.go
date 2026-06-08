@@ -16,6 +16,7 @@ import (
 var (
 	ErrNotFound            = errors.New("job not found")
 	ErrValidation          = errors.New("validation failed")
+	ErrMissingIdempotency  = errors.New("missing idempotency key")
 	ErrIdempotencyConflict = errors.New("idempotency conflict")
 	ErrWorkerMismatch      = errors.New("worker mismatch")
 	ErrClaimConflict       = errors.New("job is claimed by another worker")
@@ -200,6 +201,9 @@ func (s *Store) SetClock(now func() time.Time) {
 }
 
 func (s *Store) Create(req contracts.CreateJobRequest, idempotencyKey string) (contracts.Job, bool, error) {
+	if idempotencyKey == "" {
+		return contracts.Job{}, false, ErrMissingIdempotency
+	}
 	if req.RequesterID == "" {
 		return contracts.Job{}, false, fmt.Errorf("%w: requester_id is required", ErrValidation)
 	}
@@ -211,13 +215,11 @@ func (s *Store) Create(req contracts.CreateJobRequest, idempotencyKey string) (c
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if idempotencyKey != "" {
-		if existing, ok := s.idempotency[idempotencyKey]; ok {
-			if existing.fingerprint != fingerprint {
-				return contracts.Job{}, false, ErrIdempotencyConflict
-			}
-			return cloneJob(s.jobs[existing.jobID].job), false, nil
+	if existing, ok := s.idempotency[idempotencyKey]; ok {
+		if existing.fingerprint != fingerprint {
+			return contracts.Job{}, false, ErrIdempotencyConflict
 		}
+		return cloneJob(s.jobs[existing.jobID].job), false, nil
 	}
 
 	now := s.formatNow()
@@ -243,9 +245,7 @@ func (s *Store) Create(req contracts.CreateJobRequest, idempotencyKey string) (c
 		claimLease:     time.Minute,
 	}
 	s.jobs[jobID] = rec
-	if idempotencyKey != "" {
-		s.idempotency[idempotencyKey] = idempotentCreate{fingerprint: fingerprint, jobID: jobID}
-	}
+	s.idempotency[idempotencyKey] = idempotentCreate{fingerprint: fingerprint, jobID: jobID}
 	if err := s.saveLocked(); err != nil {
 		return contracts.Job{}, false, err
 	}

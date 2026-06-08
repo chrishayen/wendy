@@ -14,7 +14,7 @@ import (
 func TestHTTPJobLifecycle(t *testing.T) {
 	handler := NewHandler(NewStore())
 
-	createResp := requestJSON(t, handler, http.MethodPost, "/v1/jobs", createRequest())
+	createResp := requestJSON(t, handler, http.MethodPost, "/v1/jobs", createRequest(), map[string]string{"Idempotency-Key": "create-http-1"})
 	if createResp.Code != http.StatusCreated {
 		t.Fatalf("create status=%d body=%s", createResp.Code, createResp.Body.String())
 	}
@@ -59,6 +59,14 @@ func TestHTTPJobLifecycle(t *testing.T) {
 
 func TestHTTPErrors(t *testing.T) {
 	handler := NewHandler(NewStore())
+	createResp := requestJSON(t, handler, http.MethodPost, "/v1/jobs", createRequest())
+	if createResp.Code != http.StatusBadRequest {
+		t.Fatalf("create without idempotency status=%d body=%s", createResp.Code, createResp.Body.String())
+	}
+	if code := responseErrorCode(t, createResp); code != "missing_idempotency_key" {
+		t.Fatalf("create without idempotency code=%s", code)
+	}
+
 	resp := requestJSON(t, handler, http.MethodGet, "/v1/jobs/job_missing", nil)
 	if resp.Code != http.StatusNotFound {
 		t.Fatalf("status=%d body=%s", resp.Code, resp.Body.String())
@@ -86,7 +94,7 @@ func TestHTTPHealth(t *testing.T) {
 
 func TestHTTPMetrics(t *testing.T) {
 	handler := NewHandler(NewStore())
-	createResp := requestJSON(t, handler, http.MethodPost, "/v1/jobs", createRequest())
+	createResp := requestJSON(t, handler, http.MethodPost, "/v1/jobs", createRequest(), map[string]string{"Idempotency-Key": "create-http-metrics"})
 	if createResp.Code != http.StatusCreated {
 		t.Fatalf("create status=%d body=%s", createResp.Code, createResp.Body.String())
 	}
@@ -108,7 +116,7 @@ func TestHTTPMetricsReportsExpiredClaims(t *testing.T) {
 	store.SetClock(func() time.Time { return now })
 	handler := NewHandler(store)
 
-	createResp := requestJSON(t, handler, http.MethodPost, "/v1/jobs", createRequest())
+	createResp := requestJSON(t, handler, http.MethodPost, "/v1/jobs", createRequest(), map[string]string{"Idempotency-Key": "create-http-expired-claims"})
 	if createResp.Code != http.StatusCreated {
 		t.Fatalf("create status=%d body=%s", createResp.Code, createResp.Body.String())
 	}
@@ -129,7 +137,7 @@ func TestHTTPMetricsReportsExpiredClaims(t *testing.T) {
 	assertMetric(t, data, "jobs_expired_claims", nil, 1)
 }
 
-func requestJSON(t *testing.T, handler http.Handler, method, path string, body any) *httptest.ResponseRecorder {
+func requestJSON(t *testing.T, handler http.Handler, method, path string, body any, headers ...map[string]string) *httptest.ResponseRecorder {
 	t.Helper()
 	var reader *bytes.Reader
 	if body == nil {
@@ -144,6 +152,11 @@ func requestJSON(t *testing.T, handler http.Handler, method, path string, body a
 	req := httptest.NewRequest(method, path, reader)
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
+	}
+	for _, group := range headers {
+		for name, value := range group {
+			req.Header.Set(name, value)
+		}
 	}
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
@@ -161,6 +174,20 @@ func responseData(t *testing.T, rec *httptest.ResponseRecorder) map[string]any {
 		t.Fatalf("data missing from envelope: %+v", envelope)
 	}
 	return data
+}
+
+func responseErrorCode(t *testing.T, rec *httptest.ResponseRecorder) string {
+	t.Helper()
+	var envelope map[string]any
+	if err := json.NewDecoder(rec.Body).Decode(&envelope); err != nil {
+		t.Fatalf("decode error envelope: %v", err)
+	}
+	errObj, ok := envelope["error"].(map[string]any)
+	if !ok {
+		t.Fatalf("error missing from envelope: %+v", envelope)
+	}
+	code, _ := errObj["code"].(string)
+	return code
 }
 
 func assertMetric(t *testing.T, data map[string]any, name string, labels map[string]string, value float64) {

@@ -264,6 +264,8 @@ func writeStoreError(w http.ResponseWriter, r *http.Request, err error) {
 		writeError(w, r, http.StatusNotFound, "not_found", "job not found", false)
 	case errors.Is(err, ErrValidation):
 		writeError(w, r, http.StatusBadRequest, "validation_failed", err.Error(), false)
+	case errors.Is(err, ErrMissingIdempotency):
+		writeError(w, r, http.StatusBadRequest, "missing_idempotency_key", "Idempotency-Key header is required for job creation", false)
 	case errors.Is(err, ErrIdempotencyConflict):
 		writeError(w, r, http.StatusConflict, "idempotency_conflict", "idempotency key was reused with different request content", false)
 	case errors.Is(err, ErrWorkerMismatch):

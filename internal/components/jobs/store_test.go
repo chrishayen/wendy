@@ -13,6 +13,10 @@ func TestJobLifecycle(t *testing.T) {
 	store := NewStore()
 	store.SetClock(fixedClock("2026-06-05T20:00:00Z"))
 
+	if _, _, err := store.Create(createRequest(), ""); !errors.Is(err, ErrMissingIdempotency) {
+		t.Fatalf("expected missing idempotency, got %v", err)
+	}
+
 	job, created, err := store.Create(createRequest(), "idem_create_1")
 	if err != nil {
 		t.Fatalf("create: %v", err)
@@ -79,7 +83,7 @@ func TestClaimConflictAndExpiry(t *testing.T) {
 	now := mustTime("2026-06-05T20:00:00Z")
 	store := NewStore()
 	store.SetClock(func() time.Time { return now })
-	job, _, err := store.Create(createRequest(), "")
+	job, _, err := store.Create(createRequest(), "idem_claim_conflict")
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
@@ -101,7 +105,7 @@ func TestClaimConflictAndExpiry(t *testing.T) {
 
 func TestCancelRunningJobMakesItTerminal(t *testing.T) {
 	store := NewStore()
-	job, _, err := store.Create(createRequest(), "")
+	job, _, err := store.Create(createRequest(), "idem_cancel_running")
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
@@ -132,7 +136,7 @@ func TestCancelRunningJobMakesItTerminal(t *testing.T) {
 
 func TestPolicyAndAgentProjectionHideMetadata(t *testing.T) {
 	store := NewStore()
-	job, _, err := store.Create(createRequest(), "")
+	job, _, err := store.Create(createRequest(), "idem_policy_projection")
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
