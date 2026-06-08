@@ -188,6 +188,14 @@ func (s *Store) CreateAPIKey(req contracts.CreateAPIKeyRequest) (contracts.APIKe
 	stored := &apiKeyRecord{record: record, token: token}
 	s.keysByID[keyID] = stored
 	s.keysByToken[token] = stored
+	s.appendAuditLocked(contracts.PolicyAuditEvent{
+		EventType: "api_key.created",
+		SubjectID: req.SubjectID,
+		Action:    "policy.api_key.create",
+		Resource:  keyID,
+		Allowed:   true,
+		Reason:    "created",
+	})
 	if err := s.saveLocked(); err != nil {
 		return contracts.APIKeyRecord{}, err
 	}
@@ -197,20 +205,30 @@ func (s *Store) CreateAPIKey(req contracts.CreateAPIKeyRequest) (contracts.APIKe
 func (s *Store) VerifyCredential(req contracts.VerifyCredentialRequest) (contracts.CredentialVerification, error) {
 	token, err := parseBearer(req.Credential)
 	if err != nil {
+		s.recordAuthVerification("", false, "malformed_credential")
 		return contracts.CredentialVerification{}, err
 	}
 
 	s.mu.RLock()
-	defer s.mu.RUnlock()
 	record, ok := s.keysByToken[token]
-	if !ok || record.revoked {
+	if !ok {
+		s.mu.RUnlock()
+		s.recordAuthVerification("", false, "invalid_credential")
 		return contracts.CredentialVerification{Valid: false, SubjectID: nil, Scopes: []string{}}, nil
 	}
 	subjectID := record.record.SubjectID
+	scopes := append([]string(nil), record.record.Scopes...)
+	revoked := record.revoked
+	s.mu.RUnlock()
+	if revoked {
+		s.recordAuthVerification(subjectID, false, "revoked_credential")
+		return contracts.CredentialVerification{Valid: false, SubjectID: nil, Scopes: []string{}}, nil
+	}
+	s.recordAuthVerification(subjectID, true, "verified")
 	return contracts.CredentialVerification{
 		Valid:     true,
 		SubjectID: &subjectID,
-		Scopes:    append([]string(nil), record.record.Scopes...),
+		Scopes:    scopes,
 	}, nil
 }
 
@@ -228,6 +246,14 @@ func (s *Store) RevokeAPIKey(keyID string) (contracts.APIKeyRecord, error) {
 	}
 	record.revoked = true
 	record.record.RevokedAt = s.formatNow()
+	s.appendAuditLocked(contracts.PolicyAuditEvent{
+		EventType: "api_key.revoked",
+		SubjectID: record.record.SubjectID,
+		Action:    "policy.api_key.revoke",
+		Resource:  keyID,
+		Allowed:   true,
+		Reason:    "revoked",
+	})
 	if err := s.saveLocked(); err != nil {
 		return contracts.APIKeyRecord{}, err
 	}
@@ -265,6 +291,14 @@ func (s *Store) RotateAPIKey(keyID string, req contracts.RotateAPIKeyRequest) (c
 	record.record.Token = token
 	record.record.RotatedAt = s.formatNow()
 	s.keysByToken[token] = record
+	s.appendAuditLocked(contracts.PolicyAuditEvent{
+		EventType: "api_key.rotated",
+		SubjectID: record.record.SubjectID,
+		Action:    "policy.api_key.rotate",
+		Resource:  keyID,
+		Allowed:   true,
+		Reason:    "rotated",
+	})
 	if err := s.saveLocked(); err != nil {
 		return contracts.APIKeyRecord{}, err
 	}
@@ -457,14 +491,13 @@ func (s *Store) scopesForSubjectLocked(subjectID string) []string {
 func (s *Store) recordDecision(req contracts.PolicyCheckRequest, decision contracts.PolicyDecision) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.audit = append(s.audit, contracts.PolicyAuditEvent{
-		EventType:  "policy.decision",
-		SubjectID:  req.SubjectID,
-		Action:     req.Action,
-		Resource:   req.Resource,
-		Allowed:    decision.Allowed,
-		Reason:     decision.Reason,
-		OccurredAt: s.formatNow(),
+	s.appendAuditLocked(contracts.PolicyAuditEvent{
+		EventType: "policy.decision",
+		SubjectID: req.SubjectID,
+		Action:    req.Action,
+		Resource:  req.Resource,
+		Allowed:   decision.Allowed,
+		Reason:    decision.Reason,
 	})
 	_ = s.saveLocked()
 }
@@ -472,16 +505,34 @@ func (s *Store) recordDecision(req contracts.PolicyCheckRequest, decision contra
 func (s *Store) recordSecretAccess(req contracts.ResolveSecretRequest, allowed bool, reason string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.audit = append(s.audit, contracts.PolicyAuditEvent{
-		EventType:  "secret.resolve",
-		SubjectID:  req.SubjectID,
-		Action:     "secret.resolve",
-		Resource:   req.SecretRef,
-		Allowed:    allowed,
-		Reason:     reason,
-		OccurredAt: s.formatNow(),
+	s.appendAuditLocked(contracts.PolicyAuditEvent{
+		EventType: "secret.resolve",
+		SubjectID: req.SubjectID,
+		Action:    "secret.resolve",
+		Resource:  req.SecretRef,
+		Allowed:   allowed,
+		Reason:    reason,
 	})
 	_ = s.saveLocked()
+}
+
+func (s *Store) recordAuthVerification(subjectID string, allowed bool, reason string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.appendAuditLocked(contracts.PolicyAuditEvent{
+		EventType: "auth.verify",
+		SubjectID: subjectID,
+		Action:    "auth.verify",
+		Resource:  "credential",
+		Allowed:   allowed,
+		Reason:    reason,
+	})
+	_ = s.saveLocked()
+}
+
+func (s *Store) appendAuditLocked(event contracts.PolicyAuditEvent) {
+	event.OccurredAt = s.formatNow()
+	s.audit = append(s.audit, event)
 }
 
 func (s *Store) formatNow() string {

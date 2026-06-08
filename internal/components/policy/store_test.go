@@ -85,6 +85,46 @@ func TestStoreCreatesVerifiesAndRevokesAPIKeys(t *testing.T) {
 	}
 }
 
+func TestStoreAuditsAPIKeyLifecycleAndAuthVerification(t *testing.T) {
+	store := NewStore()
+	key, err := store.CreateAPIKey(contracts.CreateAPIKeyRequest{SubjectID: "sub_agent", Scopes: []string{"agent"}, Token: "token_agent"})
+	if err != nil {
+		t.Fatalf("create key: %v", err)
+	}
+	if _, err := store.VerifyCredential(contracts.VerifyCredentialRequest{Credential: "Bearer token_agent"}); err != nil {
+		t.Fatalf("verify valid credential: %v", err)
+	}
+	if _, err := store.VerifyCredential(contracts.VerifyCredentialRequest{Credential: "Bearer token_missing"}); err != nil {
+		t.Fatalf("verify missing credential: %v", err)
+	}
+	if _, err := store.VerifyCredential(contracts.VerifyCredentialRequest{Credential: "bearer token_agent"}); !errors.Is(err, ErrMalformedCredential) {
+		t.Fatalf("expected malformed credential, got %v", err)
+	}
+	if _, err := store.RotateAPIKey(key.KeyID, contracts.RotateAPIKeyRequest{Token: "token_rotated"}); err != nil {
+		t.Fatalf("rotate key: %v", err)
+	}
+	if _, err := store.RevokeAPIKey(key.KeyID); err != nil {
+		t.Fatalf("revoke key: %v", err)
+	}
+	if _, err := store.VerifyCredential(contracts.VerifyCredentialRequest{Credential: "Bearer token_rotated"}); err != nil {
+		t.Fatalf("verify revoked credential: %v", err)
+	}
+
+	events := store.AuditEvents()
+	assertAuditEvent(t, events, "api_key.created", "sub_agent", "policy.api_key.create", key.KeyID, true, "created")
+	assertAuditEvent(t, events, "auth.verify", "sub_agent", "auth.verify", "credential", true, "verified")
+	assertAuditEvent(t, events, "auth.verify", "", "auth.verify", "credential", false, "invalid_credential")
+	assertAuditEvent(t, events, "auth.verify", "", "auth.verify", "credential", false, "malformed_credential")
+	assertAuditEvent(t, events, "api_key.rotated", "sub_agent", "policy.api_key.rotate", key.KeyID, true, "rotated")
+	assertAuditEvent(t, events, "api_key.revoked", "sub_agent", "policy.api_key.revoke", key.KeyID, true, "revoked")
+	assertAuditEvent(t, events, "auth.verify", "sub_agent", "auth.verify", "credential", false, "revoked_credential")
+	for _, event := range events {
+		if event.Resource == "token_agent" || event.Resource == "token_rotated" || event.Reason == "token_agent" || event.Reason == "token_rotated" {
+			t.Fatalf("token leaked into audit event: %#v", event)
+		}
+	}
+}
+
 func TestStorePolicyOwnerContextAndJobState(t *testing.T) {
 	store := NewStore()
 	_, err := store.CreateAPIKey(contracts.CreateAPIKeyRequest{SubjectID: "sub_agent", Scopes: []string{"agent"}, Token: "token_agent"})
@@ -284,25 +324,26 @@ func TestStoreSecretsAndRedaction(t *testing.T) {
 		t.Fatalf("expected forbidden secret resolution, got %v", err)
 	}
 	events := store.AuditEvents()
-	if len(events) != 2 {
+	secretEvents := auditEventsByType(events, "secret.resolve")
+	if len(secretEvents) != 2 {
 		t.Fatalf("secret audit events = %#v", events)
 	}
-	if events[0].EventType != "secret.resolve" ||
-		events[0].SubjectID != "sub_component" ||
-		events[0].Action != "secret.resolve" ||
-		events[0].Resource != secret.SecretRef ||
-		!events[0].Allowed ||
-		events[0].Reason != "allowed_by_scope" {
-		t.Fatalf("allowed secret audit = %#v", events[0])
+	if secretEvents[0].EventType != "secret.resolve" ||
+		secretEvents[0].SubjectID != "sub_component" ||
+		secretEvents[0].Action != "secret.resolve" ||
+		secretEvents[0].Resource != secret.SecretRef ||
+		!secretEvents[0].Allowed ||
+		secretEvents[0].Reason != "allowed_by_scope" {
+		t.Fatalf("allowed secret audit = %#v", secretEvents[0])
 	}
-	if events[1].EventType != "secret.resolve" ||
-		events[1].SubjectID != "sub_agent" ||
-		events[1].Resource != secret.SecretRef ||
-		events[1].Allowed ||
-		events[1].Reason != "forbidden" {
-		t.Fatalf("denied secret audit = %#v", events[1])
+	if secretEvents[1].EventType != "secret.resolve" ||
+		secretEvents[1].SubjectID != "sub_agent" ||
+		secretEvents[1].Resource != secret.SecretRef ||
+		secretEvents[1].Allowed ||
+		secretEvents[1].Reason != "forbidden" {
+		t.Fatalf("denied secret audit = %#v", secretEvents[1])
 	}
-	if events[0].Resource == "super-secret" || events[1].Resource == "super-secret" {
+	if secretEvents[0].Resource == "super-secret" || secretEvents[1].Resource == "super-secret" {
 		t.Fatalf("secret value leaked into audit events = %#v", events)
 	}
 	redacted := store.Redact(contracts.RedactRequest{Text: "token is super-secret"})
@@ -382,7 +423,33 @@ func TestPersistentStoreReloadsKeysRulesSecretsAndAudit(t *testing.T) {
 	if redacted.Text != "token is [REDACTED]" {
 		t.Fatalf("redacted = %#v", redacted)
 	}
-	if events := reloaded.AuditEvents(); len(events) != 3 || events[2].EventType != "secret.resolve" {
+	if events := reloaded.AuditEvents(); len(auditEventsByType(events, "policy.decision")) != 2 || len(auditEventsByType(events, "secret.resolve")) != 1 {
 		t.Fatalf("audit events = %#v", events)
 	}
+}
+
+func assertAuditEvent(t *testing.T, events []contracts.PolicyAuditEvent, eventType, subjectID, action, resource string, allowed bool, reason string) {
+	t.Helper()
+	for _, event := range events {
+		if event.EventType == eventType &&
+			event.SubjectID == subjectID &&
+			event.Action == action &&
+			event.Resource == resource &&
+			event.Allowed == allowed &&
+			event.Reason == reason &&
+			event.OccurredAt != "" {
+			return
+		}
+	}
+	t.Fatalf("audit event not found type=%s subject=%s action=%s resource=%s allowed=%v reason=%s events=%#v", eventType, subjectID, action, resource, allowed, reason, events)
+}
+
+func auditEventsByType(events []contracts.PolicyAuditEvent, eventType string) []contracts.PolicyAuditEvent {
+	out := []contracts.PolicyAuditEvent{}
+	for _, event := range events {
+		if event.EventType == eventType {
+			out = append(out, event)
+		}
+	}
+	return out
 }

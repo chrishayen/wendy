@@ -30,9 +30,10 @@ Contract simulation data is kept as test input, not as product behavior.
 - `internal/components/artifacts`: upload-session, blob storage, durable
   metadata snapshots, policy context, guarded local registration, retention
   sweep, and retrieval service with health and a local filesystem root.
-- `internal/components/policy`: API key verification, policy decision, secret
-  reference, secret-access audit, redaction, startup policy seeding, health,
-  and durable sensitive state snapshots.
+- `internal/components/policy`: API key verification, API key lifecycle and
+  auth-failure audit, policy decision, secret reference, secret-access audit,
+  redaction, startup policy seeding, health, and durable sensitive state
+  snapshots.
 - `internal/components/node`: runtime node agent with local auth, resource
   advertisement, fake, process, and Docker service lifecycle adapters, idle
   shutdown accounting, lifecycle event log, health, lease resource export, and
