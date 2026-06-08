@@ -63,6 +63,7 @@ func Run(ctx context.Context) DistributedSmokeReport {
 		nodeID      = "node_linux_gpu"
 		serviceID   = "svc_distributed_gpu"
 		capability  = "cap_distributed_artifact"
+		routeURL    = "http://node_linux_gpu:8188"
 	)
 
 	var providerInvocations atomic.Int32
@@ -90,7 +91,7 @@ func Run(ctx context.Context) DistributedSmokeReport {
 	providerHTTP := httptest.NewServer(providerServer)
 	defer providerHTTP.Close()
 
-	manifest := distributedProviderManifest(serviceID, capability, providerHTTP.URL)
+	manifest := distributedProviderManifest(serviceID, capability, routeURL)
 	manifest.Provider.NodeID = nodeID
 
 	catalogStore := catalog.NewStore()
