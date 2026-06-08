@@ -16,6 +16,9 @@ func TestRequireVerifiedScopesAllowsMatchingScope(t *testing.T) {
 	called := false
 	handler := RequireVerifiedScopes(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		called = true
+		if got := r.Header.Get("X-Actor-Subject-ID"); got != "sub_test" {
+			t.Fatalf("actor subject = %q, want sub_test", got)
+		}
 		w.WriteHeader(http.StatusNoContent)
 	}), ScopeConfig{
 		PolicyURL: policy.URL,

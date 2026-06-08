@@ -230,17 +230,17 @@ func writeStoreError(w http.ResponseWriter, r *http.Request, err error) {
 	case errors.Is(err, ErrNotFound):
 		writeError(w, r, http.StatusNotFound, "not_found", "lease resource not found", false)
 	case errors.Is(err, ErrValidation):
-		writeError(w, r, http.StatusBadRequest, "validation_failed", err.Error(), false)
+		writeError(w, r, http.StatusBadRequest, "validation_failed", validationMessage(err), false)
 	case errors.Is(err, ErrResourceConflict):
 		writeError(w, r, http.StatusConflict, "resource_conflict", "resource already exists", false)
 	case errors.Is(err, ErrResourceUnavailable):
-		writeError(w, r, http.StatusConflict, "resource_unavailable", "resource selector is unknown", true)
+		writeError(w, r, http.StatusConflict, "resource_unavailable", "resource selector is unavailable", true)
 	case errors.Is(err, ErrNoCapacity):
-		writeError(w, r, http.StatusServiceUnavailable, "resource_unavailable", "resource selector has no leasing capacity", true)
+		writeError(w, r, http.StatusServiceUnavailable, "resource_unavailable", "resource selector has no available leasing capacity", true)
 	case errors.Is(err, ErrHolderMismatch):
 		writeError(w, r, http.StatusForbidden, "forbidden", "holder mismatch", false)
 	case errors.Is(err, ErrLeaseExpired):
-		writeError(w, r, http.StatusConflict, "lease_expired", "lease has expired", false)
+		writeError(w, r, http.StatusConflict, "lease_expired", leaseExpiredMessage(r), false)
 	case errors.Is(err, ErrInvalidTransition):
 		writeError(w, r, http.StatusConflict, "invalid_transition", "lease request cannot transition from its current state", false)
 	case errors.Is(err, ErrMissingIdempotency):
@@ -250,6 +250,21 @@ func writeStoreError(w http.ResponseWriter, r *http.Request, err error) {
 	default:
 		writeError(w, r, http.StatusInternalServerError, "internal_error", "lease operation failed", false)
 	}
+}
+
+func validationMessage(err error) string {
+	return strings.TrimPrefix(err.Error(), ErrValidation.Error()+": ")
+}
+
+func leaseExpiredMessage(r *http.Request) string {
+	path := strings.TrimSuffix(r.URL.Path, "/")
+	if strings.HasSuffix(path, "/heartbeat") {
+		return "lease heartbeat rejected because lease has expired"
+	}
+	if strings.HasSuffix(path, "/release") {
+		return "lease release rejected because lease has expired"
+	}
+	return "lease has expired"
 }
 
 func writeSuccess(w http.ResponseWriter, r *http.Request, status int, data any) {

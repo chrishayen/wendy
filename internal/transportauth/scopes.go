@@ -61,6 +61,9 @@ func RequireVerifiedScopes(next http.Handler, cfg ScopeConfig) http.Handler {
 			writeAuthError(w, r, http.StatusForbidden, "forbidden", forbiddenMessage(rule), false)
 			return
 		}
+		if r.Header.Get("X-Actor-Subject-ID") == "" {
+			r.Header.Set("X-Actor-Subject-ID", *verification.SubjectID)
+		}
 		next.ServeHTTP(w, r)
 	})
 }

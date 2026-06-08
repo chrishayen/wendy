@@ -526,6 +526,7 @@ func (s *Store) Release(leaseID string, req contracts.LeaseReleaseRequest, idemp
 
 	now := s.formatNow()
 	rec.state = leaseReleased
+	rec.lease.ExpiresAt = now
 	rec.lease.ReleasedAt = now
 	rec.lease.ReleasedBy = actorSubjectID
 	rec.lease.ReleaseReason = req.Reason
@@ -538,9 +539,12 @@ func (s *Store) Release(leaseID string, req contracts.LeaseReleaseRequest, idemp
 	s.audit = append(s.audit, contracts.LeaseAuditEvent{
 		EventType:      "lease.released",
 		LeaseID:        leaseID,
+		ResourceID:     rec.lease.ResourceID,
 		HolderID:       rec.lease.HolderID,
 		ActorSubjectID: actorSubjectID,
+		ReleaseReason:  req.Reason,
 		OccurredAt:     now,
+		IdempotencyKey: idempotencyKey,
 	})
 	s.releaseIdempotency[idempotencyKey] = idempotentRelease{fingerprint: fingerprint, leaseID: leaseID, response: cloneLease(rec.lease)}
 

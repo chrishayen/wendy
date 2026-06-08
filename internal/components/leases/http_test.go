@@ -5,7 +5,12 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"testing"
+	"time"
+
+	"pacp/internal/contracts"
+	"pacp/internal/testkit"
 )
 
 func TestHandlerLeaseLifecycle(t *testing.T) {
@@ -128,6 +133,56 @@ func TestHandlerMetricsReportsQueueDepth(t *testing.T) {
 	assertMetric(t, data, "http_requests_total", map[string]string{"method": "POST", "route_group": "/v1/lease-requests", "status_class": "2xx"}, 2)
 }
 
+func TestHandlerReplaysS003LeaseFixtures(t *testing.T) {
+	scenario, err := testkit.LoadScenario(filepath.Join("..", "..", "..", "testdata", "contract-sim"), filepath.Join("fixtures", "S003", "manifest.json"))
+	if err != nil {
+		t.Fatalf("load scenario: %v", err)
+	}
+	pkg, ok := testkit.FindPackage(scenario, "c06-resource-lease-service")
+	if !ok {
+		t.Fatalf("c06 fixture package not found")
+	}
+
+	tests := []struct {
+		fixtureID string
+		now       string
+		seed      func(*testing.T, *Store)
+		audit     *s003LeaseAuditExpectation
+	}{
+		{"lease_heartbeat_ok", "2026-06-05T20:00:32Z", seedS003ActiveLease("2026-06-05T20:01:02Z"), nil},
+		{"lease_release_ok", "2026-06-05T20:00:46Z", seedS003ActiveLease("2026-06-05T20:01:02Z"), &s003LeaseAuditExpectation{Reason: "job completed", OccurredAt: "2026-06-05T20:00:46Z", IdempotencyKey: "idem_s003_lease_release"}},
+		{"lease_release_replay", "2026-06-05T20:00:47Z", seedS003ReleaseReplay("job completed", "2026-06-05T20:00:46Z", "idem_s003_lease_release"), &s003LeaseAuditExpectation{Reason: "job completed", OccurredAt: "2026-06-05T20:00:46Z", IdempotencyKey: "idem_s003_lease_release"}},
+		{"lease_release_provider_failure", "2026-06-05T20:00:08Z", seedS003ActiveLease("2026-06-05T20:01:02Z"), &s003LeaseAuditExpectation{Reason: "provider failed", OccurredAt: "2026-06-05T20:00:08Z", IdempotencyKey: "idem_s003_lease_release_provider_failure"}},
+		{"lease_pending_cancel", "2026-06-05T20:00:10Z", seedS003PendingRequest, nil},
+		{"lease_pending_cancel_replay", "2026-06-05T20:00:11Z", seedS003CanceledRequest, nil},
+		{"lease_holder_mismatch", "2026-06-05T20:00:05Z", seedS003ActiveLease("2026-06-05T20:01:02Z"), nil},
+		{"lease_heartbeat_expired", "2026-06-05T20:01:03Z", seedS003ActiveLease("2026-06-05T20:01:02Z"), nil},
+		{"lease_release_expired", "2026-06-05T20:01:03Z", seedS003ActiveLease("2026-06-05T20:01:02Z"), nil},
+		{"lease_request_status_pending", "2026-06-05T20:00:04Z", seedS003PendingRequest, nil},
+		{"lease_release_idempotency_conflict", "2026-06-05T20:00:47Z", seedS003ReleaseReplay("job completed", "2026-06-05T20:00:46Z", "idem_s003_lease_release"), nil},
+		{"lease_unknown_selector", "2026-06-05T20:00:04Z", nil, nil},
+		{"lease_resource_unavailable", "2026-06-05T20:00:04Z", seedS003UnavailableResource, nil},
+		{"lease_release_provider_timeout", "2026-06-05T20:15:08Z", seedS003ActiveLease("2026-06-05T20:15:37Z"), &s003LeaseAuditExpectation{Reason: "provider timed out", OccurredAt: "2026-06-05T20:15:08Z", IdempotencyKey: "idem_s003_lease_release_provider_timeout"}},
+		{"lease_release_replay_audit_dedupe", "2026-06-05T20:15:09Z", seedS003ReleaseReplay("provider timed out", "2026-06-05T20:15:08Z", "idem_s003_lease_release_provider_timeout"), &s003LeaseAuditExpectation{Reason: "provider timed out", OccurredAt: "2026-06-05T20:15:08Z", IdempotencyKey: "idem_s003_lease_release_provider_timeout"}},
+	}
+
+	for _, test := range tests {
+		t.Run(test.fixtureID, func(t *testing.T) {
+			store := NewStore()
+			store.SetClock(fixedS003LeaseTime(test.now))
+			if test.seed != nil {
+				test.seed(t, store)
+			}
+			if _, err := testkit.ReplayHTTPFixture(s003LeaseFixtureHandler(store), pkg, test.fixtureID); err != nil {
+				t.Fatalf("replay %s: %v", test.fixtureID, err)
+			}
+			if test.audit != nil {
+				assertS003LeaseAudit(t, store, *test.audit)
+			}
+		})
+	}
+}
+
 func doJSON(t *testing.T, handler http.Handler, method, path string, body any, headers map[string]string) map[string]any {
 	t.Helper()
 	envelope := doJSONStatus(t, handler, method, path, body, headers, successStatus(method, path))
@@ -203,4 +258,214 @@ func labelsMatch(raw any, want map[string]string) bool {
 		}
 	}
 	return true
+}
+
+const (
+	s003LeaseID        = "lease_s003_0001"
+	s003LeaseRequestID = "lease_req_s003_0001"
+	s003PendingID      = "lease_req_s003_0002"
+	s003ResourceID     = "res_gpu_0"
+	s003LeaseHolder    = "job_s003_0001"
+	s003RunnerSubject  = "sub_runner_s003"
+)
+
+type s003LeaseAuditExpectation struct {
+	Reason         string
+	OccurredAt     string
+	IdempotencyKey string
+}
+
+func s003LeaseFixtureHandler(store *Store) http.Handler {
+	next := NewHandler(store)
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") == "Bearer token_s003_runner" && r.Header.Get("X-Actor-Subject-ID") == "" {
+			r.Header.Set("X-Actor-Subject-ID", s003RunnerSubject)
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+func seedS003ActiveLease(expiresAt string) func(*testing.T, *Store) {
+	return func(t *testing.T, store *Store) {
+		t.Helper()
+		store.mu.Lock()
+		defer store.mu.Unlock()
+		store.resources[s003ResourceID] = &resourceRecord{resource: s003Resource(contracts.ResourceAvailable)}
+		store.requests[s003LeaseRequestID] = &leaseRequestRecord{
+			request:          s003GrantedLeaseRequest(expiresAt),
+			requesterID:      s003LeaseHolder,
+			priority:         0,
+			sequence:         1,
+			heartbeatTimeout: time.Minute,
+			leaseID:          s003LeaseID,
+		}
+		store.leases[s003LeaseID] = &leaseRecord{
+			lease:     s003ActiveLease(expiresAt),
+			requestID: s003LeaseRequestID,
+			timeout:   time.Minute,
+			state:     leaseActive,
+		}
+	}
+}
+
+func seedS003PendingRequest(t *testing.T, store *Store) {
+	t.Helper()
+	position := 1
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	store.resources[s003ResourceID] = &resourceRecord{resource: s003Resource(contracts.ResourceAvailable)}
+	store.requests[s003PendingID] = &leaseRequestRecord{
+		request: contracts.LeaseRequest{
+			RequestID:        s003PendingID,
+			State:            contracts.LeaseRequestPending,
+			RequesterID:      "job_s003_0002",
+			ResourceSelector: "gpu",
+			QueuePosition:    &position,
+			Lease:            nil,
+			CreatedAt:        "2026-06-05T20:00:03Z",
+			UpdatedAt:        "2026-06-05T20:00:03Z",
+			Links:            pendingRequestLinks(s003PendingID),
+		},
+		requesterID:      "job_s003_0002",
+		priority:         0,
+		sequence:         2,
+		heartbeatTimeout: time.Minute,
+	}
+	store.queues["gpu"] = []string{s003PendingID}
+}
+
+func seedS003CanceledRequest(t *testing.T, store *Store) {
+	t.Helper()
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	store.requests[s003PendingID] = &leaseRequestRecord{
+		request: contracts.LeaseRequest{
+			RequestID:        s003PendingID,
+			State:            contracts.LeaseRequestCanceled,
+			RequesterID:      "job_s003_0002",
+			ResourceSelector: "gpu",
+			QueuePosition:    nil,
+			Lease:            nil,
+			CreatedAt:        "2026-06-05T20:00:03Z",
+			UpdatedAt:        "2026-06-05T20:00:10Z",
+			Links:            map[string]any{},
+		},
+		requesterID:      "job_s003_0002",
+		priority:         0,
+		sequence:         2,
+		heartbeatTimeout: time.Minute,
+	}
+}
+
+func seedS003UnavailableResource(t *testing.T, store *Store) {
+	t.Helper()
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	store.resources[s003ResourceID] = &resourceRecord{resource: s003Resource(contracts.ResourceUnavailable)}
+}
+
+func seedS003ReleaseReplay(reason, occurredAt, idempotencyKey string) func(*testing.T, *Store) {
+	return func(t *testing.T, store *Store) {
+		t.Helper()
+		fp := mustS003LeaseFingerprint(t, contracts.LeaseReleaseRequest{HolderID: s003LeaseHolder, Reason: reason})
+		released := s003ReleasedLease(occurredAt, reason)
+		store.mu.Lock()
+		defer store.mu.Unlock()
+		store.releaseIdempotency[idempotencyKey] = idempotentRelease{
+			fingerprint: fp,
+			leaseID:     s003LeaseID,
+			response:    released,
+		}
+		store.audit = append(store.audit, contracts.LeaseAuditEvent{
+			EventType:      "lease.released",
+			LeaseID:        s003LeaseID,
+			ResourceID:     s003ResourceID,
+			HolderID:       s003LeaseHolder,
+			ActorSubjectID: s003RunnerSubject,
+			ReleaseReason:  reason,
+			OccurredAt:     occurredAt,
+			IdempotencyKey: idempotencyKey,
+		})
+	}
+}
+
+func s003Resource(status contracts.ResourceStatus) contracts.ResourceRecord {
+	return contracts.ResourceRecord{
+		ResourceID:  s003ResourceID,
+		Selector:    "gpu",
+		DisplayName: "Linux GPU",
+		Status:      status,
+		Links:       resourceLinks(s003ResourceID),
+	}
+}
+
+func s003GrantedLeaseRequest(expiresAt string) contracts.LeaseRequest {
+	return contracts.LeaseRequest{
+		RequestID:        s003LeaseRequestID,
+		State:            contracts.LeaseRequestGranted,
+		RequesterID:      s003LeaseHolder,
+		ResourceSelector: "gpu",
+		QueuePosition:    nil,
+		Lease:            leasePtr(s003ActiveLease(expiresAt)),
+		CreatedAt:        "2026-06-05T20:00:02Z",
+		UpdatedAt:        "2026-06-05T20:00:02Z",
+		Links:            grantedRequestLinks(s003LeaseRequestID),
+	}
+}
+
+func s003ActiveLease(expiresAt string) contracts.Lease {
+	return contracts.Lease{
+		LeaseID:    s003LeaseID,
+		ResourceID: s003ResourceID,
+		HolderID:   s003LeaseHolder,
+		ExpiresAt:  expiresAt,
+		Links:      leaseLinks(s003LeaseID),
+	}
+}
+
+func s003ReleasedLease(occurredAt, reason string) contracts.Lease {
+	lease := s003ActiveLease(occurredAt)
+	lease.ReleasedAt = occurredAt
+	lease.ReleasedBy = s003RunnerSubject
+	lease.ReleaseReason = reason
+	lease.Links = map[string]any{}
+	return lease
+}
+
+func assertS003LeaseAudit(t *testing.T, store *Store, want s003LeaseAuditExpectation) {
+	t.Helper()
+	events := store.AuditEvents()
+	if len(events) != 1 {
+		t.Fatalf("audit events = %#v", events)
+	}
+	event := events[0]
+	if event.EventType != "lease.released" ||
+		event.LeaseID != s003LeaseID ||
+		event.ResourceID != s003ResourceID ||
+		event.HolderID != s003LeaseHolder ||
+		event.ActorSubjectID != s003RunnerSubject ||
+		event.ReleaseReason != want.Reason ||
+		event.OccurredAt != want.OccurredAt ||
+		event.IdempotencyKey != want.IdempotencyKey {
+		t.Fatalf("audit event = %#v, want reason=%q occurred_at=%q idempotency=%q", event, want.Reason, want.OccurredAt, want.IdempotencyKey)
+	}
+}
+
+func fixedS003LeaseTime(value string) func() time.Time {
+	return func() time.Time {
+		parsed, err := time.Parse(time.RFC3339, value)
+		if err != nil {
+			panic(err)
+		}
+		return parsed
+	}
+}
+
+func mustS003LeaseFingerprint(t *testing.T, value any) string {
+	t.Helper()
+	fp, err := fingerprint(value)
+	if err != nil {
+		t.Fatalf("fingerprint: %v", err)
+	}
+	return fp
 }

@@ -93,7 +93,10 @@ type LeaseQueueRecord struct {
 type LeaseAuditEvent struct {
 	EventType      string `json:"event_type"`
 	LeaseID        string `json:"lease_id"`
+	ResourceID     string `json:"resource_id,omitempty"`
 	HolderID       string `json:"holder_id"`
 	ActorSubjectID string `json:"actor_subject_id"`
+	ReleaseReason  string `json:"release_reason,omitempty"`
 	OccurredAt     string `json:"occurred_at"`
+	IdempotencyKey string `json:"idempotency_key,omitempty"`
 }
