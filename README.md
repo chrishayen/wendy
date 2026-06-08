@@ -176,7 +176,8 @@ component list surfaces, gateway invocation, runner execution, artifact
 retrieval, node service lifecycle, lease release audit, and provider invocation.
 The process-distributed smoke command starts real `pacp-primary`, `pacp-node`,
 `pacp-fake-provider`, and `pacp-runner` child processes on temporary local ports
-and verifies an async gateway-to-runner-to-node-to-provider artifact flow.
+and verifies node self-registration, registry trust promotion, and an async
+gateway-to-runner-to-node-to-provider artifact flow.
 The single-component smoke mode checks health and metrics for every component
 kind, and also checks read-only list surfaces for artifacts, catalog, jobs,
 leases, and node components.

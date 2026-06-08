@@ -269,6 +269,8 @@ func TestRunProcessDistributedSmokeChecksRealProcesses(t *testing.T) {
 		"check=process.start.provider status=pass",
 		"check=process.start.node status=pass",
 		"check=process.start.primary status=pass",
+		"check=node_registry.self_register status=pass",
+		"check=node_registry.trust status=pass",
 		"check=gateway.invoke status=pass",
 		"check=runner.once status=pass",
 		"check=gateway.job.succeeded status=pass",

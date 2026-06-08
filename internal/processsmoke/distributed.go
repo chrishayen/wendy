@@ -141,12 +141,6 @@ func RunDistributed(ctx context.Context, cfg Config) Report {
 	if !waitHealth(runCtx, providerURL+"/v1/provider/health", "", "provider.health", &report) {
 		return report
 	}
-	if !start("node", "run", "./cmd/pacp-node", "-addr", p.node, "-config", files.nodeConfig) {
-		return report
-	}
-	if !waitHealth(runCtx, nodeURL+"/v1/node/health", "Bearer "+processRunnerToken, "node.health", &report) {
-		return report
-	}
 	if !start("primary", "run", "./cmd/pacp-primary",
 		"-catalog-addr", p.catalog,
 		"-jobs-addr", p.jobs,
@@ -162,7 +156,6 @@ func RunDistributed(ctx context.Context, cfg Config) Report {
 		"-policy-seed", files.policySeed,
 		"-component-token", processComponentToken,
 		"-gateway-credential", processComponentToken,
-		"-node-urls", processNodeID+"="+nodeURL,
 		"-disable-runner",
 		"-route-aware-component-auth",
 	) {
@@ -172,6 +165,26 @@ func RunDistributed(ctx context.Context, cfg Config) Report {
 		return report
 	}
 	if !waitHealth(runCtx, primaryURLs.nodeRegistry+"/v1/node-registry/health", "Bearer "+processComponentToken, "node_registry.health", &report) {
+		return report
+	}
+	if !start("node", "run", "./cmd/pacp-node",
+		"-addr", p.node,
+		"-config", files.nodeConfig,
+		"-node-registry-url", primaryURLs.nodeRegistry,
+		"-node-registry-credential", processComponentToken,
+		"-node-public-url", nodeURL,
+		"-node-registry-register",
+		"-node-registry-heartbeat", "250ms",
+	) {
+		return report
+	}
+	if !waitHealth(runCtx, nodeURL+"/v1/node/health", "Bearer "+processRunnerToken, "node.health", &report) {
+		return report
+	}
+	if !waitNodeRegistered(runCtx, primaryURLs.nodeRegistry, nodeURL, &report) {
+		return report
+	}
+	if !trustNode(runCtx, primaryURLs.nodeRegistry, &report) {
 		return report
 	}
 
@@ -445,6 +458,65 @@ func waitHealth(ctx context.Context, target, credential, name string, report *Re
 		return false
 	}
 	report.add(Check{Name: name, OK: true, HTTPStatus: status})
+	return true
+}
+
+func waitNodeRegistered(ctx context.Context, registryURL, nodeURL string, report *Report) bool {
+	target := registryURL + "/v1/node-registry/nodes/" + processNodeID
+	deadline, ok := ctx.Deadline()
+	if !ok {
+		deadline = time.Now().Add(10 * time.Second)
+	}
+	var lastErr error
+	var lastStatus int
+	for time.Now().Before(deadline) {
+		var record contracts.NodeRecord
+		status, err := requestJSON(ctx, http.MethodGet, target, "Bearer "+processComponentToken, "", nil, &record)
+		lastStatus = status
+		if err == nil {
+			switch {
+			case record.NodeID != processNodeID:
+				lastErr = fmt.Errorf("node_id=%q", record.NodeID)
+			case strings.TrimRight(record.URL, "/") != strings.TrimRight(nodeURL, "/"):
+				lastErr = fmt.Errorf("url=%q", record.URL)
+			case record.TrustState != contracts.NodeTrustUntrusted:
+				lastErr = fmt.Errorf("trust_state=%q", record.TrustState)
+			default:
+				report.add(Check{Name: "node_registry.self_register", OK: true, HTTPStatus: status})
+				return true
+			}
+		} else {
+			lastErr = err
+		}
+		select {
+		case <-ctx.Done():
+			report.add(Check{Name: "node_registry.self_register", HTTPStatus: lastStatus, Error: ctx.Err().Error()})
+			return false
+		case <-time.After(100 * time.Millisecond):
+		}
+	}
+	if lastErr == nil {
+		lastErr = errors.New("timed out")
+	}
+	report.add(Check{Name: "node_registry.self_register", HTTPStatus: lastStatus, Error: lastErr.Error()})
+	return false
+}
+
+func trustNode(ctx context.Context, registryURL string, report *Report) bool {
+	var record contracts.NodeRecord
+	status, err := requestJSON(ctx, http.MethodPost, registryURL+"/v1/node-registry/nodes/"+processNodeID+"/trust", "Bearer "+processComponentToken, "", contracts.UpdateNodeTrustRequest{
+		TrustState: contracts.NodeTrustTrusted,
+		Reason:     "process smoke trust promotion",
+	}, &record)
+	if err != nil {
+		report.add(Check{Name: "node_registry.trust", HTTPStatus: status, Error: err.Error()})
+		return false
+	}
+	if record.TrustState != contracts.NodeTrustTrusted {
+		report.add(Check{Name: "node_registry.trust", HTTPStatus: status, Error: fmt.Sprintf("trust_state=%q", record.TrustState)})
+		return false
+	}
+	report.add(Check{Name: "node_registry.trust", OK: true, HTTPStatus: status})
 	return true
 }
 
