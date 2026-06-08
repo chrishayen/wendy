@@ -1,0 +1,500 @@
+openapi: 3.1.0
+info:
+  title: PACP Agent Gateway API
+  version: v1
+  description: Agent-facing public API for tool discovery, invocation, job status, logs, artifacts, and artifact content.
+servers:
+  - url: http://localhost:18086
+    description: Local development gateway
+security:
+  - bearerAuth: []
+paths:
+  /v1/tools:
+    get:
+      operationId: listTools
+      summary: List tools visible to the authenticated agent.
+      responses:
+        "200":
+          description: Visible tools.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ToolListEnvelope"
+        default:
+          $ref: "#/components/responses/Error"
+  /v1/tools/{capability_id}:
+    get:
+      operationId: getTool
+      summary: Read one tool definition.
+      parameters:
+        - $ref: "#/components/parameters/CapabilityID"
+      responses:
+        "200":
+          description: Tool details.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ToolEnvelope"
+        default:
+          $ref: "#/components/responses/Error"
+  /v1/tools/{capability_id}/invoke:
+    post:
+      operationId: invokeTool
+      summary: Invoke a tool synchronously or enqueue an async job.
+      parameters:
+        - $ref: "#/components/parameters/CapabilityID"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/InvokeToolRequest"
+      responses:
+        "200":
+          description: Synchronous result or idempotent replay.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/InvokeToolEnvelope"
+        "201":
+          description: Async job created.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/InvokeToolEnvelope"
+        default:
+          $ref: "#/components/responses/Error"
+  /v1/agent/jobs/{job_id}:
+    get:
+      operationId: getAgentJob
+      summary: Read an agent-safe job projection.
+      parameters:
+        - $ref: "#/components/parameters/JobID"
+      responses:
+        "200":
+          description: Agent-safe job state.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AgentJobEnvelope"
+        default:
+          $ref: "#/components/responses/Error"
+  /v1/agent/jobs/{job_id}/cancel:
+    post:
+      operationId: cancelAgentJob
+      summary: Cancel a queued job owned by the authenticated agent.
+      parameters:
+        - $ref: "#/components/parameters/JobID"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CancelRequest"
+      responses:
+        "200":
+          description: Canceled job projection.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AgentJobEnvelope"
+        default:
+          $ref: "#/components/responses/Error"
+  /v1/agent/jobs/{job_id}/logs:
+    get:
+      operationId: getAgentJobLogs
+      summary: Read public job logs.
+      parameters:
+        - $ref: "#/components/parameters/JobID"
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 50
+        - name: cursor
+          in: query
+          required: false
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Public job log entries.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/JobLogListEnvelope"
+        default:
+          $ref: "#/components/responses/Error"
+  /v1/agent/jobs/{job_id}/artifacts:
+    get:
+      operationId: listAgentJobArtifacts
+      summary: List artifacts produced by a job.
+      parameters:
+        - $ref: "#/components/parameters/JobID"
+      responses:
+        "200":
+          description: Public artifact metadata.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AgentArtifactListEnvelope"
+        default:
+          $ref: "#/components/responses/Error"
+  /v1/artifacts/{artifact_id}/content:
+    get:
+      operationId: readArtifactContent
+      summary: Read artifact bytes through the gateway.
+      parameters:
+        - $ref: "#/components/parameters/ArtifactID"
+      responses:
+        "200":
+          description: Artifact bytes.
+          headers:
+            Digest:
+              schema:
+                type: string
+            Content-Length:
+              schema:
+                type: integer
+          content:
+            "*/*":
+              schema:
+                type: string
+                format: binary
+        default:
+          $ref: "#/components/responses/Error"
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+  parameters:
+    CapabilityID:
+      name: capability_id
+      in: path
+      required: true
+      schema:
+        type: string
+    JobID:
+      name: job_id
+      in: path
+      required: true
+      schema:
+        type: string
+    ArtifactID:
+      name: artifact_id
+      in: path
+      required: true
+      schema:
+        type: string
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      schema:
+        type: string
+      description: Required for side-effecting requests. Reuse only with identical request content.
+  responses:
+    Error:
+      description: Error envelope.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorEnvelope"
+  schemas:
+    ToolListEnvelope:
+      type: object
+      required: [ok, data, links, meta]
+      properties:
+        ok:
+          const: true
+        data:
+          type: object
+          required: [items]
+          properties:
+            items:
+              type: array
+              items:
+                $ref: "#/components/schemas/Tool"
+            next_cursor:
+              type: [string, "null"]
+        links:
+          $ref: "#/components/schemas/Links"
+        meta:
+          $ref: "#/components/schemas/Meta"
+    ToolEnvelope:
+      type: object
+      required: [ok, data, links, meta]
+      properties:
+        ok:
+          const: true
+        data:
+          $ref: "#/components/schemas/Tool"
+        links:
+          $ref: "#/components/schemas/Links"
+        meta:
+          $ref: "#/components/schemas/Meta"
+    InvokeToolEnvelope:
+      type: object
+      required: [ok, data, links, meta]
+      properties:
+        ok:
+          const: true
+        data:
+          $ref: "#/components/schemas/InvokeToolResponse"
+        links:
+          $ref: "#/components/schemas/Links"
+        meta:
+          $ref: "#/components/schemas/Meta"
+    AgentJobEnvelope:
+      type: object
+      required: [ok, data, links, meta]
+      properties:
+        ok:
+          const: true
+        data:
+          $ref: "#/components/schemas/AgentJob"
+        links:
+          $ref: "#/components/schemas/Links"
+        meta:
+          $ref: "#/components/schemas/Meta"
+    JobLogListEnvelope:
+      type: object
+      required: [ok, data, links, meta]
+      properties:
+        ok:
+          const: true
+        data:
+          type: object
+          required: [items]
+          properties:
+            items:
+              type: array
+              items:
+                $ref: "#/components/schemas/JobLogEntry"
+            next_cursor:
+              type: [string, "null"]
+        links:
+          $ref: "#/components/schemas/Links"
+        meta:
+          $ref: "#/components/schemas/Meta"
+    AgentArtifactListEnvelope:
+      type: object
+      required: [ok, data, links, meta]
+      properties:
+        ok:
+          const: true
+        data:
+          type: object
+          required: [items]
+          properties:
+            items:
+              type: array
+              items:
+                $ref: "#/components/schemas/AgentArtifact"
+            next_cursor:
+              type: [string, "null"]
+        links:
+          $ref: "#/components/schemas/Links"
+        meta:
+          $ref: "#/components/schemas/Meta"
+    ErrorEnvelope:
+      type: object
+      required: [ok, error, links, meta]
+      properties:
+        ok:
+          const: false
+        error:
+          $ref: "#/components/schemas/ErrorObject"
+        links:
+          $ref: "#/components/schemas/Links"
+        meta:
+          $ref: "#/components/schemas/Meta"
+    ErrorObject:
+      type: object
+      required: [code, message, retryable]
+      properties:
+        code:
+          type: string
+        message:
+          type: string
+        retryable:
+          type: boolean
+    Tool:
+      type: object
+      required: [id, name, description, execution_mode, input_schema, output_schema, side_effects, resource_hints, artifact_hints, examples, links]
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        description:
+          type: string
+        tags:
+          type: array
+          items:
+            type: string
+        execution_mode:
+          type: string
+          enum: [sync, async]
+        input_schema:
+          type: object
+          additionalProperties: true
+        output_schema:
+          type: object
+          additionalProperties: true
+        side_effects:
+          type: string
+        resource_hints:
+          type: array
+          items:
+            $ref: "#/components/schemas/ResourceHint"
+        artifact_hints:
+          type: array
+          items:
+            $ref: "#/components/schemas/ArtifactHint"
+        examples:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+        links:
+          $ref: "#/components/schemas/Links"
+    ResourceHint:
+      type: object
+      required: [selector, required]
+      properties:
+        selector:
+          type: string
+        required:
+          type: boolean
+        quantity:
+          type: integer
+        notes:
+          type: string
+    ArtifactHint:
+      type: object
+      required: [media_type]
+      properties:
+        media_type:
+          type: string
+        count:
+          type: string
+        notes:
+          type: string
+    InvokeToolRequest:
+      type: object
+      required: [input]
+      properties:
+        input:
+          type: object
+          additionalProperties: true
+        dry_run:
+          type: boolean
+          default: false
+        preferred_mode:
+          type: string
+          enum: [sync, async]
+    InvokeToolResponse:
+      type: object
+      required: [mode]
+      properties:
+        mode:
+          type: string
+          enum: [sync, async]
+        job_id:
+          type: string
+        output:
+          type: object
+          additionalProperties: true
+        artifacts:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+    AgentJob:
+      type: object
+      required: [job_id, state, created_at, updated_at, input_summary, artifact_refs, terminal_error, links]
+      properties:
+        job_id:
+          type: string
+        state:
+          type: string
+          enum: [queued, running, succeeded, failed, canceled]
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+        status_message:
+          type: string
+        input_summary:
+          type: object
+          additionalProperties: true
+        artifact_refs:
+          type: array
+          items:
+            type: string
+        log_cursor:
+          type: [string, "null"]
+        terminal_error:
+          anyOf:
+            - $ref: "#/components/schemas/ErrorObject"
+            - type: "null"
+        links:
+          $ref: "#/components/schemas/Links"
+    JobLogEntry:
+      type: object
+      required: [timestamp, level, message]
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        level:
+          type: string
+        message:
+          type: string
+    AgentArtifact:
+      type: object
+      required: [artifact_id, name, media_type, size, checksum, created_at, links]
+      properties:
+        artifact_id:
+          type: string
+        name:
+          type: string
+        media_type:
+          type: string
+        size:
+          type: integer
+          format: int64
+        checksum:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        producer_ref:
+          type: string
+        links:
+          $ref: "#/components/schemas/Links"
+    CancelRequest:
+      type: object
+      properties:
+        reason:
+          type: string
+    Links:
+      type: object
+      additionalProperties: true
+    Meta:
+      type: object
+      required: [request_id, schema_version]
+      properties:
+        request_id:
+          type: string
+        schema_version:
+          type: string

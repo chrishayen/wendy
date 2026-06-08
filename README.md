@@ -46,6 +46,8 @@ Contract simulation data is kept as test input, not as product behavior.
 - `cmd/pacp-control`: JSON-first CLI for agent-facing gateway operations.
 - `cmd/pacp-dev`: one-command local development stack using the real service
   HTTP boundaries.
+- `openapi/public-gateway.v1.yaml`: OpenAPI contract for the agent-facing
+  gateway.
 - `testdata/contract-sim`: accepted role-play fixtures copied from the vault.
 - `testdata/manifests`: sample provider manifests used by tests and examples.
 
