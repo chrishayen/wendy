@@ -29,6 +29,39 @@ func TestSearchReturnsRankedIndexResults(t *testing.T) {
 	if first["url"] != "https://docs.local/artifacts" || first["title"] != "Artifact uploads" {
 		t.Fatalf("first result = %#v", first)
 	}
+	safety := output["safety"].(map[string]any)
+	if safety["filtered_count"].(float64) != 0 {
+		t.Fatalf("safety = %#v", safety)
+	}
+}
+
+func TestSearchHonorsSafetyOptions(t *testing.T) {
+	indexPath := writeSearchIndex(t, []SearchItem{
+		{Title: "Artifact uploads", URL: "https://docs.local/artifacts", Snippet: "Create upload sessions.", Tags: []string{"artifacts"}},
+		{Title: "Artifact mirror", URL: "https://mirror.local/artifacts", Snippet: "Mirrored artifact notes.", Tags: []string{"artifacts"}},
+		{Title: "Artifact HTTP", URL: "http://docs.local/artifacts", Snippet: "Insecure artifact notes.", Tags: []string{"artifacts"}},
+	})
+	server := newTestServer(t, Config{Endpoint: "http://provider.local", SearchIndexPath: indexPath})
+
+	data := invokeProvider(t, server, SearchCapabilityID, map[string]any{
+		"query":              "artifact",
+		"limit":              10,
+		"allowed_hosts":      []any{"docs.local"},
+		"allow_http_results": false,
+	}, http.StatusOK)
+	output := data["output"].(map[string]any)
+	if output["count"].(float64) != 1 {
+		t.Fatalf("output = %#v", output)
+	}
+	items := output["items"].([]any)
+	first := items[0].(map[string]any)
+	if first["url"] != "https://docs.local/artifacts" {
+		t.Fatalf("first = %#v", first)
+	}
+	safety := output["safety"].(map[string]any)
+	if safety["filtered_count"].(float64) != 2 {
+		t.Fatalf("safety = %#v", safety)
+	}
 }
 
 func TestFetchExtractsAllowedHTMLPage(t *testing.T) {

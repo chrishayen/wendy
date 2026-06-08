@@ -67,6 +67,12 @@ type searchResult struct {
 	score int
 }
 
+type searchSafety struct {
+	AllowedHosts     []string `json:"allowed_hosts"`
+	AllowHTTPResults bool     `json:"allow_http_results"`
+	Scoped           bool     `json:"-"`
+}
+
 func NewServer(cfg Config) (*provider.Server, error) {
 	normalized := normalizeConfig(cfg)
 	index, err := loadSearchIndex(normalized.SearchIndexPath)
@@ -144,9 +150,18 @@ func (p *browserSearchProvider) search(ctx context.Context, req contracts.Provid
 	if len(terms) == 0 {
 		return contracts.ProviderInvokeResponse{}, fmt.Errorf("%w: query must contain at least one search term", provider.ErrValidation)
 	}
+	safety, err := parseSearchSafety(req.Input)
+	if err != nil {
+		return contracts.ProviderInvokeResponse{}, err
+	}
 	limit := intInput(req.Input, "limit", 10, 50)
 	results := make([]searchResult, 0, len(p.index))
+	filteredCount := 0
 	for _, item := range p.index {
+		if !safety.allows(item.URL) {
+			filteredCount++
+			continue
+		}
 		score := scoreItem(item, terms)
 		if score > 0 {
 			results = append(results, searchResult{item: item, score: score})
@@ -176,6 +191,11 @@ func (p *browserSearchProvider) search(ctx context.Context, req contracts.Provid
 		"query": query,
 		"count": len(items),
 		"items": items,
+		"safety": map[string]any{
+			"allowed_hosts":      stringsSliceAsAny(safety.AllowedHosts),
+			"allow_http_results": safety.AllowHTTPResults,
+			"filtered_count":     filteredCount,
+		},
 	}}, nil
 }
 
@@ -271,7 +291,11 @@ func (p *browserSearchProvider) validateURL(rawURL string) error {
 }
 
 func (p *browserSearchProvider) hostAllowed(host string) bool {
-	for _, pattern := range p.allowedHosts {
+	return hostAllowed(host, p.allowedHosts)
+}
+
+func hostAllowed(host string, patterns []string) bool {
+	for _, pattern := range patterns {
 		switch {
 		case pattern == "*":
 			return true
@@ -285,6 +309,31 @@ func (p *browserSearchProvider) hostAllowed(host string) bool {
 		}
 	}
 	return false
+}
+
+func (s searchSafety) allows(rawURL string) bool {
+	if !s.Scoped {
+		return true
+	}
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		return false
+	}
+	scheme := strings.ToLower(parsed.Scheme)
+	if scheme != "http" && scheme != "https" {
+		return false
+	}
+	host := strings.ToLower(parsed.Hostname())
+	if host == "" {
+		return false
+	}
+	if len(s.AllowedHosts) > 0 && !hostAllowed(host, s.AllowedHosts) {
+		return false
+	}
+	if scheme == "http" && !s.AllowHTTPResults && !isLoopbackHost(host) {
+		return false
+	}
+	return true
 }
 
 func scoreItem(item SearchItem, terms []string) int {
@@ -462,6 +511,50 @@ func boolInput(input map[string]any, key string, fallback bool) bool {
 	return typed
 }
 
+func parseSearchSafety(input map[string]any) (searchSafety, error) {
+	allowedHosts, hasAllowedHosts, err := optionalStringSlice(input, "allowed_hosts")
+	if err != nil {
+		return searchSafety{}, err
+	}
+	_, hasHTTPPolicy := input["allow_http_results"]
+	return searchSafety{
+		AllowedHosts:     allowedHosts,
+		AllowHTTPResults: boolInput(input, "allow_http_results", false),
+		Scoped:           hasAllowedHosts || hasHTTPPolicy,
+	}, nil
+}
+
+func optionalStringSlice(input map[string]any, key string) ([]string, bool, error) {
+	raw, ok := input[key]
+	if !ok || raw == nil {
+		return nil, false, nil
+	}
+	values := []string{}
+	switch typed := raw.(type) {
+	case []string:
+		values = append(values, typed...)
+	case []any:
+		for _, item := range typed {
+			value, ok := item.(string)
+			if !ok {
+				return nil, true, fmt.Errorf("%w: %s must contain only strings", provider.ErrValidation, key)
+			}
+			values = append(values, value)
+		}
+	default:
+		return nil, true, fmt.Errorf("%w: %s must be an array of strings", provider.ErrValidation, key)
+	}
+	normalized := make([]string, 0, len(values))
+	for _, value := range values {
+		value = strings.ToLower(strings.TrimSpace(value))
+		if value == "" {
+			return nil, true, fmt.Errorf("%w: %s must not contain empty values", provider.ErrValidation, key)
+		}
+		normalized = append(normalized, value)
+	}
+	return normalized, true, nil
+}
+
 func browserAction(input map[string]any) (string, error) {
 	value, _ := input["action"].(string)
 	value = strings.TrimSpace(strings.ToLower(value))
@@ -515,20 +608,23 @@ func manifest(cfg Config) contracts.ProviderManifest {
 					"type":     "object",
 					"required": []any{"query"},
 					"properties": map[string]any{
-						"query": map[string]any{"type": "string"},
-						"limit": map[string]any{"type": "integer"},
+						"query":              map[string]any{"type": "string"},
+						"limit":              map[string]any{"type": "integer", "minimum": 1, "maximum": 50},
+						"allowed_hosts":      map[string]any{"type": "array"},
+						"allow_http_results": map[string]any{"type": "boolean"},
 					},
 				},
 				OutputSchema: map[string]any{
 					"type":     "object",
-					"required": []any{"query", "count", "items"},
+					"required": []any{"query", "count", "items", "safety"},
 					"properties": map[string]any{
-						"query": map[string]any{"type": "string"},
-						"count": map[string]any{"type": "integer"},
-						"items": map[string]any{"type": "array"},
+						"query":  map[string]any{"type": "string"},
+						"count":  map[string]any{"type": "integer"},
+						"items":  map[string]any{"type": "array"},
+						"safety": map[string]any{"type": "object"},
 					},
 				},
-				Examples:      []map[string]any{{"query": "artifact upload", "limit": 5}},
+				Examples:      []map[string]any{{"query": "artifact upload", "limit": 5, "allowed_hosts": []string{"docs.local"}}},
 				SideEffects:   "none",
 				ResourceHints: []contracts.ResourceHint{},
 				ArtifactHints: []contracts.ArtifactHint{},
