@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -315,6 +316,16 @@ func TestStoreRejectsInvalidDockerRuntimeConfig(t *testing.T) {
 	}}
 	if _, err := NewStore(cfg); !errors.Is(err, ErrValidation) {
 		t.Fatalf("expected validation error, got %v", err)
+	}
+}
+
+func TestStoreRejectsInvalidProviderEndpoint(t *testing.T) {
+	cfg := testConfig()
+	cfg.Services[0].ProviderEndpoint = "node-local:8188"
+
+	_, err := NewStore(cfg)
+	if !errors.Is(err, ErrValidation) || !strings.Contains(err.Error(), "provider_endpoint must be an absolute http or https URL") {
+		t.Fatalf("expected provider_endpoint validation error, got %v", err)
 	}
 }
 

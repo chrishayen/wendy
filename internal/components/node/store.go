@@ -112,6 +112,9 @@ func NewStore(cfg contracts.NodeConfig) (*Store, error) {
 		if service.ProviderEndpoint == "" {
 			return nil, fmt.Errorf("%w: provider_endpoint is required", ErrValidation)
 		}
+		if !contracts.ValidHTTPBaseURL(service.ProviderEndpoint) {
+			return nil, fmt.Errorf("%w: provider_endpoint must be an absolute http or https URL without query or fragment", ErrValidation)
+		}
 		status := service.InitialStatus
 		if status == "" {
 			status = "stopped"

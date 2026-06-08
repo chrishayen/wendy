@@ -28,10 +28,10 @@ func ValidateProviderManifest(manifest ProviderManifest) []string {
 	}
 	if manifest.Provider.Endpoint == "" {
 		errs = append(errs, "provider.endpoint is required")
-	} else if !validProviderEndpoint(manifest.Provider.Endpoint) {
+	} else if !ValidHTTPBaseURL(manifest.Provider.Endpoint) {
 		errs = append(errs, "provider.endpoint must be an absolute http or https URL without query or fragment")
 	}
-	if manifest.Provider.HealthPath != "" && !validProviderHealthPath(manifest.Provider.HealthPath) {
+	if manifest.Provider.HealthPath != "" && !ValidAbsolutePath(manifest.Provider.HealthPath) {
 		errs = append(errs, "provider.health_path must be an absolute path")
 	}
 	if len(manifest.Capabilities) == 0 {
@@ -104,7 +104,8 @@ func validExecutionMode(value string) bool {
 	}
 }
 
-func validProviderEndpoint(value string) bool {
+// ValidHTTPBaseURL reports whether value can be used as a service base URL.
+func ValidHTTPBaseURL(value string) bool {
 	parsed, err := url.Parse(value)
 	if err != nil {
 		return false
@@ -115,7 +116,8 @@ func validProviderEndpoint(value string) bool {
 	return parsed.Host != "" && parsed.RawQuery == "" && parsed.Fragment == ""
 }
 
-func validProviderHealthPath(value string) bool {
+// ValidAbsolutePath reports whether value is a local absolute URL path.
+func ValidAbsolutePath(value string) bool {
 	parsed, err := url.Parse(value)
 	if err != nil {
 		return false
