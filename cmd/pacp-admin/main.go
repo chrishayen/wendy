@@ -2012,6 +2012,18 @@ func addMetricFindings(report *alertsReport, item metricsItem, opts alertOptions
 				}
 				addAlertFinding(report, diagnosticFinding{Severity: "error", Code: "gateway_downstream_missing", Message: fmt.Sprintf("%s downstream %s is not configured", item.Name, downstream)})
 			}
+		case "gateway_downstream_reachable":
+			if sample.Value == 0 && sample.Labels["status"] != "missing" {
+				downstream := sample.Labels["downstream"]
+				if downstream == "" {
+					downstream = "unknown"
+				}
+				severity := "warning"
+				if sample.Labels["required"] == "true" {
+					severity = "error"
+				}
+				addAlertFinding(report, diagnosticFinding{Severity: severity, Code: "gateway_downstream_unreachable", Message: fmt.Sprintf("%s downstream %s is not healthy", item.Name, downstream)})
+			}
 		}
 	}
 	if isRunnerMetricsItem(item) && opts.RunnerHeartbeatStaleAfter > 0 && runnerActiveJobs > 0 {

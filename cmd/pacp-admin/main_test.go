@@ -460,6 +460,11 @@ func TestAlertsReportsHealthAndMetricFindings(t *testing.T) {
 			writeMetrics(t, w, http.StatusOK, "node", []map[string]any{
 				{"name": "node_services_by_status", "value": 1, "unit": "count", "labels": map[string]string{"status": "failed"}},
 			})
+		case "/v1/gateway/metrics":
+			writeMetrics(t, w, http.StatusOK, "gateway", []map[string]any{
+				{"name": "gateway_downstream_configured", "value": 1, "unit": "count", "labels": map[string]string{"downstream": "catalog", "required": "true", "status": "unreachable"}},
+				{"name": "gateway_downstream_reachable", "value": 0, "unit": "boolean", "labels": map[string]string{"downstream": "catalog", "required": "true", "status": "unreachable"}},
+			})
 		default:
 			writeMetrics(t, w, http.StatusOK, "component", []map[string]any{})
 		}
@@ -486,6 +491,7 @@ func TestAlertsReportsHealthAndMetricFindings(t *testing.T) {
 		`"code": "artifact_uploads_not_completed"`,
 		`"code": "policy_denies"`,
 		`"code": "node_services_failed"`,
+		`"code": "gateway_downstream_unreachable"`,
 	} {
 		if !strings.Contains(output, expected) {
 			t.Fatalf("stdout missing %q:\n%s", expected, output)
