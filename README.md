@@ -76,8 +76,8 @@ Contract simulation data is kept as test input, not as product behavior.
   speech-to-text provider with voice/format/generation-option validation and
   command-backed engine adapters.
 - `cmd/pacp-ai-toolkit-provider`: purpose-specific dataset registry, dataset
-  update, validated Z-Image-Turbo LoRA training, and LoRA output index provider
-  with a provider-owned workspace and dry-run mode.
+  upload/update, validated Z-Image-Turbo LoRA training, and LoRA output index
+  provider with a provider-owned workspace and dry-run mode.
 - `cmd/pacp-catalog`: runnable catalog server that loads provider manifests.
 - `cmd/pacp-gateway`: runnable agent tool gateway backed by either the catalog
   or static provider manifests.

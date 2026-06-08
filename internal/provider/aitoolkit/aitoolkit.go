@@ -24,6 +24,7 @@ import (
 const (
 	DefaultServiceID                 = "svc_ai_toolkit_provider"
 	DefaultDatasetRegisterCapability = "cap_ai_toolkit_dataset_register"
+	DefaultDatasetUploadCapability   = "cap_ai_toolkit_dataset_upload"
 	DefaultDatasetListCapability     = "cap_ai_toolkit_dataset_list"
 	DefaultDatasetInspectCapability  = "cap_ai_toolkit_dataset_inspect"
 	DefaultDatasetUpdateCapability   = "cap_ai_toolkit_dataset_update"
@@ -31,9 +32,10 @@ const (
 	DefaultOutputListCapability      = "cap_ai_toolkit_lora_list"
 	DefaultOutputInspectCapability   = "cap_ai_toolkit_lora_inspect"
 
-	defaultServiceName = "AI-Toolkit Provider"
-	defaultVersion     = "0.1.0"
-	defaultPreset      = "z-image-turbo-lora"
+	defaultServiceName    = "AI-Toolkit Provider"
+	defaultVersion        = "0.1.0"
+	defaultPreset         = "z-image-turbo-lora"
+	maxDatasetUploadBytes = 100 << 20
 )
 
 type Config struct {
@@ -43,6 +45,7 @@ type Config struct {
 	Version                   string
 	AuthCredential            string
 	DatasetRegisterCapability string
+	DatasetUploadCapability   string
 	DatasetListCapability     string
 	DatasetInspectCapability  string
 	DatasetUpdateCapability   string
@@ -126,6 +129,7 @@ func NewServer(cfg Config) (*provider.Server, error) {
 	}
 	return provider.NewServerWithOptions(manifest(normalized), map[string]provider.CapabilityHandler{
 		normalized.DatasetRegisterCapability: p.registerDataset,
+		normalized.DatasetUploadCapability:   p.uploadDatasetFile,
 		normalized.DatasetListCapability:     p.listDatasets,
 		normalized.DatasetInspectCapability:  p.inspectDataset,
 		normalized.DatasetUpdateCapability:   p.updateDataset,
@@ -147,6 +151,9 @@ func normalizeConfig(cfg Config) (Config, error) {
 	}
 	if cfg.DatasetRegisterCapability == "" {
 		cfg.DatasetRegisterCapability = DefaultDatasetRegisterCapability
+	}
+	if cfg.DatasetUploadCapability == "" {
+		cfg.DatasetUploadCapability = DefaultDatasetUploadCapability
 	}
 	if cfg.DatasetListCapability == "" {
 		cfg.DatasetListCapability = DefaultDatasetListCapability
@@ -340,6 +347,84 @@ func (p *providerImpl) updateDataset(ctx context.Context, req contracts.Provider
 	return contracts.ProviderInvokeResponse{Output: datasetOutput(dataset)}, nil
 }
 
+func (p *providerImpl) uploadDatasetFile(ctx context.Context, req contracts.ProviderInvokeRequest) (contracts.ProviderInvokeResponse, error) {
+	datasetID, err := requiredID(req.Input, "dataset_id")
+	if err != nil {
+		return contracts.ProviderInvokeResponse{}, err
+	}
+	filename, err := requiredString(req.Input, "filename")
+	if err != nil {
+		return contracts.ProviderInvokeResponse{}, err
+	}
+	if err := validateDatasetUploadFilename(filename); err != nil {
+		return contracts.ProviderInvokeResponse{}, err
+	}
+	mediaType, err := datasetUploadMediaType(req.Input, filename)
+	if err != nil {
+		return contracts.ProviderInvokeResponse{}, err
+	}
+	encoded, err := requiredString(req.Input, "content_base64")
+	if err != nil {
+		return contracts.ProviderInvokeResponse{}, err
+	}
+	if len(encoded) > base64.StdEncoding.EncodedLen(maxDatasetUploadBytes) {
+		return contracts.ProviderInvokeResponse{}, fmt.Errorf("%w: content_base64 exceeds maximum supported size", provider.ErrValidation)
+	}
+	body, err := base64.StdEncoding.DecodeString(encoded)
+	if err != nil {
+		return contracts.ProviderInvokeResponse{}, fmt.Errorf("%w: content_base64 is invalid", provider.ErrValidation)
+	}
+	if len(body) == 0 {
+		return contracts.ProviderInvokeResponse{}, fmt.Errorf("%w: content_base64 decoded to empty content", provider.ErrValidation)
+	}
+	if len(body) > maxDatasetUploadBytes {
+		return contracts.ProviderInvokeResponse{}, fmt.Errorf("%w: content exceeds maximum supported size", provider.ErrValidation)
+	}
+
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	dataset, ok := p.datasets[datasetID]
+	if !ok {
+		return contracts.ProviderInvokeResponse{}, fmt.Errorf("%w: dataset %s is not registered", provider.ErrValidation, datasetID)
+	}
+	datasetPath, err := p.resolveDatasetPath(dataset.Path)
+	if err != nil {
+		return contracts.ProviderInvokeResponse{}, err
+	}
+	target := filepath.Join(datasetPath, filename)
+	if !withinRoot(datasetPath, target) {
+		return contracts.ProviderInvokeResponse{}, fmt.Errorf("%w: filename resolves outside dataset path", provider.ErrValidation)
+	}
+	if _, err := os.Stat(target); err == nil {
+		return contracts.ProviderInvokeResponse{}, fmt.Errorf("%w: dataset file %s already exists", provider.ErrValidation, filename)
+	} else if !os.IsNotExist(err) {
+		return contracts.ProviderInvokeResponse{}, err
+	}
+	if err := os.WriteFile(target, body, 0o600); err != nil {
+		return contracts.ProviderInvokeResponse{}, err
+	}
+	count, err := countImages(datasetPath)
+	if err != nil {
+		return contracts.ProviderInvokeResponse{}, err
+	}
+	dataset.ImageCount = count
+	p.datasets[datasetID] = dataset
+	if err := p.saveStateLocked(); err != nil {
+		return contracts.ProviderInvokeResponse{}, err
+	}
+	relativePath := relativeToRoot(p.cfg.WorkspaceRoot, target)
+	return contracts.ProviderInvokeResponse{Output: map[string]any{
+		"dataset": datasetOutput(dataset),
+		"uploaded": map[string]any{
+			"filename":   filename,
+			"path":       relativePath,
+			"media_type": mediaType,
+			"size":       len(body),
+			"checksum":   checksum(body),
+		},
+	}}, nil
+}
+
 func (p *providerImpl) train(ctx context.Context, req contracts.ProviderInvokeRequest) (contracts.ProviderInvokeResponse, error) {
 	datasetID, err := requiredID(req.Input, "dataset_id")
 	if err != nil {
@@ -513,6 +598,52 @@ func countImages(root string) (int, error) {
 		return nil
 	})
 	return count, err
+}
+
+func validateDatasetUploadFilename(filename string) error {
+	if filename == "." || filename == ".." {
+		return fmt.Errorf("%w: filename must be a file name", provider.ErrValidation)
+	}
+	if filepath.IsAbs(filename) || filepath.Base(filename) != filename {
+		return fmt.Errorf("%w: filename must not contain a path", provider.ErrValidation)
+	}
+	ext := strings.ToLower(filepath.Ext(filename))
+	switch ext {
+	case ".jpg", ".jpeg", ".png", ".webp":
+		return nil
+	default:
+		return fmt.Errorf("%w: filename must end in .jpg, .jpeg, .png, or .webp", provider.ErrValidation)
+	}
+}
+
+func datasetUploadMediaType(input map[string]any, filename string) (string, error) {
+	mediaType := optionalStringDefault(input, "media_type", mediaTypeForDatasetFilename(filename))
+	mediaType = strings.ToLower(strings.TrimSpace(mediaType))
+	ext := strings.ToLower(filepath.Ext(filename))
+	allowed := map[string]string{
+		".jpg":  "image/jpeg",
+		".jpeg": "image/jpeg",
+		".png":  "image/png",
+		".webp": "image/webp",
+	}
+	want := allowed[ext]
+	if mediaType != want {
+		return "", fmt.Errorf("%w: media_type for %s must be %s", provider.ErrValidation, ext, want)
+	}
+	return mediaType, nil
+}
+
+func mediaTypeForDatasetFilename(filename string) string {
+	switch strings.ToLower(filepath.Ext(filename)) {
+	case ".jpg", ".jpeg":
+		return "image/jpeg"
+	case ".png":
+		return "image/png"
+	case ".webp":
+		return "image/webp"
+	default:
+		return "application/octet-stream"
+	}
 }
 
 func relativeToRoot(root, path string) string {
@@ -710,6 +841,7 @@ func manifest(cfg Config) contracts.ProviderManifest {
 		Provider: contracts.Provider{Endpoint: cfg.Endpoint, HealthPath: "/v1/provider/health"},
 		Capabilities: []contracts.Capability{
 			datasetRegisterCapability(cfg.DatasetRegisterCapability),
+			datasetUploadCapability(cfg.DatasetUploadCapability),
 			datasetListCapability(cfg.DatasetListCapability),
 			datasetInspectCapability(cfg.DatasetInspectCapability),
 			datasetUpdateCapability(cfg.DatasetUpdateCapability),
@@ -717,6 +849,39 @@ func manifest(cfg Config) contracts.ProviderManifest {
 			outputListCapability(cfg.OutputListCapability),
 			outputInspectCapability(cfg.OutputInspectCapability),
 		},
+	}
+}
+
+func datasetUploadCapability(id string) contracts.Capability {
+	return contracts.Capability{
+		ID:            id,
+		Name:          "Upload dataset image",
+		Description:   "Upload one image file into a registered dataset directory owned by the provider workspace.",
+		Tags:          []string{"dataset", "upload"},
+		ExecutionMode: "sync",
+		InputSchema: map[string]any{
+			"type":     "object",
+			"required": []any{"dataset_id", "filename", "content_base64"},
+			"properties": map[string]any{
+				"dataset_id":     map[string]any{"type": "string"},
+				"filename":       map[string]any{"type": "string"},
+				"media_type":     map[string]any{"type": "string", "enum": []any{"image/jpeg", "image/png", "image/webp"}},
+				"content_base64": map[string]any{"type": "string"},
+			},
+		},
+		OutputSchema: map[string]any{
+			"type":     "object",
+			"required": []any{"dataset", "uploaded"},
+			"properties": map[string]any{
+				"dataset":  datasetSchema(),
+				"uploaded": datasetUploadSchema(),
+			},
+		},
+		Examples:      []map[string]any{{"dataset_id": "product_photos", "filename": "image-0002.png", "media_type": "image/png", "content_base64": "iVBORw0KGgo="}},
+		SideEffects:   "write",
+		ResourceHints: []contracts.ResourceHint{},
+		ArtifactHints: []contracts.ArtifactHint{},
+		TimeoutHint:   "30s",
 	}
 }
 
@@ -928,6 +1093,20 @@ func datasetSchema() map[string]any {
 			"image_count": map[string]any{"type": "integer"},
 			"created_at":  map[string]any{"type": "string"},
 			"metadata":    map[string]any{"type": "object"},
+		},
+	}
+}
+
+func datasetUploadSchema() map[string]any {
+	return map[string]any{
+		"type":     "object",
+		"required": []any{"filename", "path", "media_type", "size", "checksum"},
+		"properties": map[string]any{
+			"filename":   map[string]any{"type": "string"},
+			"path":       map[string]any{"type": "string"},
+			"media_type": map[string]any{"type": "string"},
+			"size":       map[string]any{"type": "integer"},
+			"checksum":   map[string]any{"type": "string"},
 		},
 	}
 }

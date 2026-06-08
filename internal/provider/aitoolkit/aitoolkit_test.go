@@ -2,6 +2,7 @@ package aitoolkit
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -115,6 +116,87 @@ func TestRejectsDatasetUpdateWithoutMutation(t *testing.T) {
 	}
 }
 
+func TestDatasetUploadAddsImageAndPersists(t *testing.T) {
+	workspace := newWorkspace(t)
+	server := newTestServer(t, Config{Endpoint: "http://provider.local", WorkspaceRoot: workspace, DryRun: true})
+	_ = invoke(t, server, DefaultDatasetRegisterCapability, map[string]any{
+		"dataset_id": "product_photos",
+		"name":       "Product Photos",
+		"path":       "datasets/product",
+	}, http.StatusOK)
+
+	body := []byte("fake webp image")
+	output := invoke(t, server, DefaultDatasetUploadCapability, map[string]any{
+		"dataset_id":     "product_photos",
+		"filename":       "image-b.webp",
+		"media_type":     "image/webp",
+		"content_base64": base64.StdEncoding.EncodeToString(body),
+	}, http.StatusOK)
+	dataset := output["dataset"].(map[string]any)
+	if dataset["image_count"].(float64) != 2 {
+		t.Fatalf("dataset = %#v", dataset)
+	}
+	uploaded := output["uploaded"].(map[string]any)
+	if uploaded["filename"] != "image-b.webp" || uploaded["media_type"] != "image/webp" || uploaded["checksum"] == "" || uploaded["size"].(float64) != float64(len(body)) {
+		t.Fatalf("uploaded = %#v", uploaded)
+	}
+	storedPath := filepath.Join(workspace, "datasets", "product", "image-b.webp")
+	stored, err := os.ReadFile(storedPath)
+	if err != nil {
+		t.Fatalf("read uploaded image: %v", err)
+	}
+	if string(stored) != string(body) {
+		t.Fatalf("stored body = %q", stored)
+	}
+
+	reloaded := newTestServer(t, Config{Endpoint: "http://provider.local", WorkspaceRoot: workspace, DryRun: true})
+	persisted := invoke(t, reloaded, DefaultDatasetInspectCapability, map[string]any{"dataset_id": "product_photos"}, http.StatusOK)
+	if persisted["image_count"].(float64) != 2 {
+		t.Fatalf("persisted = %#v", persisted)
+	}
+}
+
+func TestDatasetUploadRejectsUnsafeFilename(t *testing.T) {
+	workspace := newWorkspace(t)
+	server := newTestServer(t, Config{Endpoint: "http://provider.local", WorkspaceRoot: workspace, DryRun: true})
+	_ = invoke(t, server, DefaultDatasetRegisterCapability, map[string]any{
+		"dataset_id": "product_photos",
+		"name":       "Product Photos",
+		"path":       "datasets/product",
+	}, http.StatusOK)
+
+	envelope := invokeEnvelope(t, server, DefaultDatasetUploadCapability, map[string]any{
+		"dataset_id":     "product_photos",
+		"filename":       "../escape.png",
+		"content_base64": base64.StdEncoding.EncodeToString([]byte("fake image")),
+	}, http.StatusBadRequest)
+	errObj := envelope["error"].(map[string]any)
+	if errObj["code"] != "validation_failed" || !strings.Contains(errObj["message"].(string), "filename") {
+		t.Fatalf("error = %#v", errObj)
+	}
+}
+
+func TestDatasetUploadRejectsMediaTypeMismatch(t *testing.T) {
+	workspace := newWorkspace(t)
+	server := newTestServer(t, Config{Endpoint: "http://provider.local", WorkspaceRoot: workspace, DryRun: true})
+	_ = invoke(t, server, DefaultDatasetRegisterCapability, map[string]any{
+		"dataset_id": "product_photos",
+		"name":       "Product Photos",
+		"path":       "datasets/product",
+	}, http.StatusOK)
+
+	envelope := invokeEnvelope(t, server, DefaultDatasetUploadCapability, map[string]any{
+		"dataset_id":     "product_photos",
+		"filename":       "image-c.png",
+		"media_type":     "image/webp",
+		"content_base64": base64.StdEncoding.EncodeToString([]byte("fake image")),
+	}, http.StatusBadRequest)
+	errObj := envelope["error"].(map[string]any)
+	if errObj["code"] != "validation_failed" || !strings.Contains(errObj["message"].(string), "media_type") {
+		t.Fatalf("error = %#v", errObj)
+	}
+}
+
 func TestManifestIncludesIndexCapabilities(t *testing.T) {
 	workspace := newWorkspace(t)
 	server := newTestServer(t, Config{Endpoint: "http://provider.local", WorkspaceRoot: workspace, DryRun: true})
@@ -145,7 +227,7 @@ func TestManifestIncludesIndexCapabilities(t *testing.T) {
 			}
 		}
 	}
-	for _, capabilityID := range []string{DefaultDatasetUpdateCapability, DefaultOutputListCapability, DefaultOutputInspectCapability} {
+	for _, capabilityID := range []string{DefaultDatasetUploadCapability, DefaultDatasetUpdateCapability, DefaultOutputListCapability, DefaultOutputInspectCapability} {
 		if !found[capabilityID] {
 			t.Fatalf("capability %s missing from %#v", capabilityID, capabilities)
 		}
