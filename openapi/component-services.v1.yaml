@@ -1082,6 +1082,9 @@ paths:
                     properties:
                       data:
                         $ref: "#/components/schemas/ProviderInvokeResponse"
+        "504":
+          description: Provider invocation timed out. Error code is `provider_timeout`.
+          $ref: "#/components/responses/Error"
         default:
           $ref: "#/components/responses/Error"
 
