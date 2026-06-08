@@ -321,6 +321,85 @@ func TestMetricsCollectsCoreServicesAndConfiguredNode(t *testing.T) {
 	}
 }
 
+func TestHealthIncludesConfiguredRunnerMonitor(t *testing.T) {
+	seenRunner := false
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v1/runner/health" {
+			seenRunner = true
+			if r.Header.Get("Authorization") != "Bearer runner-token" {
+				t.Fatalf("runner Authorization = %q", r.Header.Get("Authorization"))
+			}
+			writeHealth(t, w, http.StatusOK, "healthy")
+			return
+		}
+		writeHealth(t, w, http.StatusOK, "healthy")
+	}))
+	defer server.Close()
+
+	args := append(coreURLArgs(server.URL),
+		"-runner-url", server.URL,
+		"-runner-token", "runner-token",
+		"health",
+	)
+	var stdout, stderr bytes.Buffer
+	code := run(args, &stdout, &stderr, server.Client())
+	if code != 0 {
+		t.Fatalf("code=%d stderr=%s stdout=%s", code, stderr.String(), stdout.String())
+	}
+	if !seenRunner {
+		t.Fatal("runner health was not checked")
+	}
+	report := decodeReport(t, stdout.Bytes())
+	item := findHealthItem(report, "runner")
+	if item == nil || item.Kind != "runner" || item.Status != "healthy" {
+		t.Fatalf("runner item = %#v", item)
+	}
+}
+
+func TestMetricsIncludesConfiguredRunnerMonitor(t *testing.T) {
+	seenRunner := false
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v1/runner/metrics" {
+			seenRunner = true
+			if r.Header.Get("Authorization") != "Bearer runner-token" {
+				t.Fatalf("runner Authorization = %q", r.Header.Get("Authorization"))
+			}
+			writeMetrics(t, w, http.StatusOK, "runner", []map[string]any{{
+				"name":  "runner_active_jobs",
+				"value": 1,
+				"unit":  "count",
+			}})
+			return
+		}
+		writeMetrics(t, w, http.StatusOK, "component", []map[string]any{})
+	}))
+	defer server.Close()
+
+	args := append(coreURLArgs(server.URL),
+		"-runner-url", server.URL,
+		"-runner-token", "runner-token",
+		"metrics",
+	)
+	var stdout, stderr bytes.Buffer
+	code := run(args, &stdout, &stderr, server.Client())
+	if code != 0 {
+		t.Fatalf("code=%d stderr=%s stdout=%s", code, stderr.String(), stdout.String())
+	}
+	if !seenRunner {
+		t.Fatal("runner metrics were not collected")
+	}
+	report := decodeMetricsReport(t, stdout.Bytes())
+	found := false
+	for _, item := range report.Data.Items {
+		if item.Name == "runner" && item.Kind == "runner" && item.Component == "runner" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("runner metrics item missing: %#v", report.Data.Items)
+	}
+}
+
 func TestMetricsFailsWhenRequiredComponentUnavailable(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/v1/jobs/metrics" {
@@ -410,6 +489,39 @@ func TestAlertsReportsHealthAndMetricFindings(t *testing.T) {
 	}
 	if report.OK || report.Data.Summary.Errors < 2 || report.Data.Summary.Warnings < 4 {
 		t.Fatalf("report = %#v", report)
+	}
+}
+
+func TestAlertsReportsStaleRunnerHeartbeat(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/health") {
+			writeHealth(t, w, http.StatusOK, "healthy")
+			return
+		}
+		if r.URL.Path == "/v1/runner/metrics" {
+			writeMetrics(t, w, http.StatusOK, "runner", []map[string]any{
+				{"name": "runner_active_jobs", "value": 1, "unit": "count"},
+				{"name": "runner_last_successful_heartbeat_unix_seconds", "value": 1, "unit": "seconds"},
+			})
+			return
+		}
+		writeMetrics(t, w, http.StatusOK, "component", []map[string]any{})
+	}))
+	defer server.Close()
+
+	args := append(coreURLArgs(server.URL),
+		"-runner-url", server.URL,
+		"alerts",
+		"-runner-heartbeat-stale-after", "1s",
+	)
+	var stdout, stderr bytes.Buffer
+	code := run(args, &stdout, &stderr, server.Client())
+	if code != 0 {
+		t.Fatalf("code=%d stderr=%s stdout=%s", code, stderr.String(), stdout.String())
+	}
+	output := stdout.String()
+	if !strings.Contains(output, `"code": "runner_heartbeat_stale"`) {
+		t.Fatalf("stdout missing runner_heartbeat_stale:\n%s", output)
 	}
 }
 

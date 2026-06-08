@@ -28,9 +28,11 @@ type adminConfig struct {
 	GatewayURL     string
 	NodeURL        string
 	NodeURLs       string
+	RunnerURL      string
 	ComponentToken string
 	GatewayToken   string
 	NodeToken      string
+	RunnerToken    string
 	Timeout        time.Duration
 }
 
@@ -146,9 +148,11 @@ func run(args []string, stdout, stderr io.Writer, httpClient *http.Client) int {
 	flags.StringVar(&cfg.GatewayURL, "gateway-url", envOrDefault("PACP_GATEWAY_URL", "http://localhost:18086"), "gateway service base URL")
 	flags.StringVar(&cfg.NodeURL, "node-url", os.Getenv("PACP_NODE_URL"), "optional node service base URL")
 	flags.StringVar(&cfg.NodeURLs, "node-urls", os.Getenv("PACP_NODE_URLS"), "optional comma-separated node_id=URL entries")
+	flags.StringVar(&cfg.RunnerURL, "runner-url", os.Getenv("PACP_RUNNER_URL"), "optional runner monitor base URL")
 	flags.StringVar(&cfg.ComponentToken, "component-token", os.Getenv("PACP_COMPONENT_TOKEN"), "optional component API bearer token or raw token")
 	flags.StringVar(&cfg.GatewayToken, "gateway-token", envFirst("PACP_GATEWAY_TOKEN", "PACP_AGENT_TOKEN"), "optional gateway API bearer token or raw token")
 	flags.StringVar(&cfg.NodeToken, "node-token", os.Getenv("PACP_NODE_TOKEN"), "optional node API bearer token or raw token")
+	flags.StringVar(&cfg.RunnerToken, "runner-token", os.Getenv("PACP_RUNNER_MONITOR_TOKEN"), "optional runner monitor bearer token or raw token")
 	flags.DurationVar(&cfg.Timeout, "timeout", 5*time.Second, "per-command timeout")
 	if err := flags.Parse(args); err != nil {
 		return 2
@@ -194,7 +198,9 @@ type healthOptions struct {
 }
 
 type alertOptions struct {
-	QueueDepthThreshold int
+	QueueDepthThreshold       int
+	RunnerHeartbeatStaleAfter time.Duration
+	Now                       time.Time
 }
 
 type diagnosticFinding struct {
@@ -257,19 +263,27 @@ func alertsCommand(cfg adminConfig, httpClient *http.Client, args []string, stdo
 	flags := flag.NewFlagSet("alerts", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	queueDepthThreshold := flags.Int("queue-depth-threshold", 0, "lease queue depth above this value produces a warning")
+	runnerHeartbeatStaleAfter := flags.Duration("runner-heartbeat-stale-after", 0, "active runner heartbeat age above this duration produces a warning")
 	remaining, err := parseSubcommandFlags(flags, args)
 	if err != nil {
 		return 2
 	}
 	if len(remaining) != 0 {
-		return usage(stderr, "usage: pacp-admin [flags] alerts [-queue-depth-threshold n]")
+		return usage(stderr, "usage: pacp-admin [flags] alerts [-queue-depth-threshold n] [-runner-heartbeat-stale-after duration]")
 	}
 	if *queueDepthThreshold < 0 {
 		return usage(stderr, "queue-depth-threshold must be zero or greater")
 	}
+	if *runnerHeartbeatStaleAfter < 0 {
+		return usage(stderr, "runner-heartbeat-stale-after must be zero or greater")
+	}
 	health := checkHealth(cfg, httpClient, healthOptions{})
 	metrics := collectMetrics(cfg, httpClient)
-	report := buildAlertsReport(health, metrics, alertOptions{QueueDepthThreshold: *queueDepthThreshold})
+	report := buildAlertsReport(health, metrics, alertOptions{
+		QueueDepthThreshold:       *queueDepthThreshold,
+		RunnerHeartbeatStaleAfter: *runnerHeartbeatStaleAfter,
+		Now:                       time.Now(),
+	})
 	if err := writeJSON(stdout, report); err != nil {
 		fmt.Fprintf(stderr, "write alerts report: %v\n", err)
 		return 1
@@ -1203,6 +1217,9 @@ func checkHealth(cfg adminConfig, httpClient *http.Client, opts healthOptions) h
 		{Name: "gateway", Kind: "component", URL: cfg.GatewayURL, HealthPath: "/v1/gateway/health", Required: true},
 	}
 	targets = append(targets, nodeHealthTargets(cfg)...)
+	if target, ok := runnerHealthTarget(cfg); ok {
+		targets = append(targets, target)
+	}
 	report := healthReport{
 		OK:    true,
 		Links: map[string]any{},
@@ -1266,7 +1283,36 @@ func metricsTargets(cfg adminConfig) []serviceTarget {
 		{Name: "gateway", Kind: "component", URL: cfg.GatewayURL, MetricsPath: "/v1/gateway/metrics", Required: true},
 	}
 	targets = append(targets, nodeMetricsTargets(cfg)...)
+	if target, ok := runnerMetricsTarget(cfg); ok {
+		targets = append(targets, target)
+	}
 	return targets
+}
+
+func runnerHealthTarget(cfg adminConfig) (serviceTarget, bool) {
+	if strings.TrimSpace(cfg.RunnerURL) == "" {
+		return serviceTarget{}, false
+	}
+	return serviceTarget{
+		Name:       "runner",
+		Kind:       "runner",
+		URL:        cfg.RunnerURL,
+		HealthPath: "/v1/runner/health",
+		Credential: authorizationHeader(cfg.RunnerToken),
+	}, true
+}
+
+func runnerMetricsTarget(cfg adminConfig) (serviceTarget, bool) {
+	if strings.TrimSpace(cfg.RunnerURL) == "" {
+		return serviceTarget{}, false
+	}
+	return serviceTarget{
+		Name:        "runner",
+		Kind:        "runner",
+		URL:         cfg.RunnerURL,
+		MetricsPath: "/v1/runner/metrics",
+		Credential:  authorizationHeader(cfg.RunnerToken),
+	}, true
 }
 
 func nodeMetricsTargets(cfg adminConfig) []serviceTarget {
@@ -1386,6 +1432,9 @@ func addMetricsItem(report *metricsReport, item metricsItem, affectsOK bool) {
 }
 
 func buildAlertsReport(health healthReport, metrics metricsReport, opts alertOptions) alertsReport {
+	if opts.Now.IsZero() {
+		opts.Now = time.Now()
+	}
 	report := alertsReport{
 		OK: true,
 		Data: alertsReportData{
@@ -1423,8 +1472,28 @@ func buildAlertsReport(health healthReport, metrics metricsReport, opts alertOpt
 }
 
 func addMetricFindings(report *alertsReport, item metricsItem, opts alertOptions) {
+	runnerActiveJobs := 0.0
+	runnerLastHeartbeatUnix := 0.0
+	runnerHeartbeatSeen := false
 	for _, sample := range item.Samples {
 		switch sample.Name {
+		case "runner_active_jobs":
+			runnerActiveJobs = sample.Value
+		case "runner_last_successful_heartbeat_unix_seconds":
+			runnerLastHeartbeatUnix = sample.Value
+			runnerHeartbeatSeen = true
+		case "runner_dependency_reachable":
+			if sample.Value == 0 {
+				dependency := sample.Labels["dependency"]
+				if dependency == "" {
+					dependency = "unknown"
+				}
+				severity := "warning"
+				if sample.Labels["required"] == "true" {
+					severity = "error"
+				}
+				addAlertFinding(report, diagnosticFinding{Severity: severity, Code: "runner_dependency_unreachable", Message: fmt.Sprintf("%s dependency %s is unreachable", item.Name, dependency)})
+			}
 		case "jobs_by_state":
 			state := sample.Labels["state"]
 			switch {
@@ -1481,6 +1550,21 @@ func addMetricFindings(report *alertsReport, item metricsItem, opts alertOptions
 			}
 		}
 	}
+	if isRunnerMetricsItem(item) && opts.RunnerHeartbeatStaleAfter > 0 && runnerActiveJobs > 0 {
+		if !runnerHeartbeatSeen || runnerLastHeartbeatUnix <= 0 {
+			addAlertFinding(report, diagnosticFinding{Severity: "warning", Code: "runner_heartbeat_missing", Message: fmt.Sprintf("%s has active work but no successful heartbeat metric", item.Name)})
+			return
+		}
+		heartbeatAt := time.Unix(int64(runnerLastHeartbeatUnix), 0)
+		age := opts.Now.Sub(heartbeatAt)
+		if age > opts.RunnerHeartbeatStaleAfter {
+			addAlertFinding(report, diagnosticFinding{Severity: "warning", Code: "runner_heartbeat_stale", Message: fmt.Sprintf("%s heartbeat is stale: age %s exceeds %s", item.Name, age.Truncate(time.Second), opts.RunnerHeartbeatStaleAfter)})
+		}
+	}
+}
+
+func isRunnerMetricsItem(item metricsItem) bool {
+	return item.Kind == "runner" || item.Component == "runner" || item.Name == "runner"
 }
 
 func addAlertFinding(report *alertsReport, finding diagnosticFinding) {

@@ -67,9 +67,9 @@ Contract simulation data is kept as test input, not as product behavior.
   seed files.
 - `cmd/pacp-bundle`: renders one deployment bundle into catalog manifests,
   node config, lease resource seed, and optional policy seed files.
-- `cmd/pacp-admin`: JSON-first operator CLI for component, gateway, node, and
-  provider health, inspection, job cancellation through C04, and node lifecycle
-  actions.
+- `cmd/pacp-admin`: JSON-first operator CLI for component, gateway, node,
+  runner, and provider health, inspection, job cancellation through C04, and
+  node lifecycle actions.
 - `cmd/pacp-control`: JSON-first CLI for gateway health and agent-facing
   gateway operations.
 - `cmd/pacp-dev`: one-command local development stack using the real service
@@ -223,8 +223,9 @@ curl http://localhost:18088/v1/provider/metrics
 curl http://localhost:18089/v1/runner/metrics
 go run ./cmd/pacp-admin -node-url http://localhost:18087 -node-token token_agent_smoke health
 go run ./cmd/pacp-admin -node-urls node_linux_gpu=http://localhost:18087 -node-token token_agent_smoke health -providers
-go run ./cmd/pacp-admin -node-urls node_linux_gpu=http://localhost:18087 -node-token token_agent_smoke metrics
-go run ./cmd/pacp-admin -node-urls node_linux_gpu=http://localhost:18087 -node-token token_agent_smoke alerts -queue-depth-threshold 1
+go run ./cmd/pacp-admin -runner-url http://localhost:18089 health
+go run ./cmd/pacp-admin -node-urls node_linux_gpu=http://localhost:18087 -node-token token_agent_smoke -runner-url http://localhost:18089 metrics
+go run ./cmd/pacp-admin -node-urls node_linux_gpu=http://localhost:18087 -node-token token_agent_smoke -runner-url http://localhost:18089 alerts -queue-depth-threshold 1 -runner-heartbeat-stale-after 5m
 go run ./cmd/pacp-admin catalog route cap_image_generate_gpu
 go run ./cmd/pacp-admin -node-url http://localhost:18087 -node-token token_agent_smoke node services
 go run ./cmd/pacp-admin -node-url http://localhost:18087 -node-token token_runner_smoke node start svc_comfyui_gpu -idempotency-key start-comfy-1
