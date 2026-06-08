@@ -3,50 +3,108 @@ package testkit
 import (
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
+	"reflect"
+	"sort"
+	"strings"
+	"sync"
 
 	"pacp/internal/contracts"
 )
 
 type FixtureServer struct {
 	packageDir string
-	index      map[string]contracts.HTTPResponse
+	routes     map[string][]fixtureRoute
+	served     map[int]int
+	nextID     int
+	mu         sync.Mutex
+}
+
+type fixtureRoute struct {
+	id       int
+	request  contracts.HTTPRequest
+	response contracts.HTTPResponse
 }
 
 func NewFixtureServer(pkg FixturePackage) *FixtureServer {
 	server := &FixtureServer{
 		packageDir: filepath.Dir(pkg.AbsPath),
-		index:      map[string]contracts.HTTPResponse{},
+		routes:     map[string][]fixtureRoute{},
+		served:     map[int]int{},
 	}
 	for _, fixture := range pkg.File.Fixtures {
 		if fixture.Request == nil || fixture.Response == nil {
 			continue
 		}
 		key := fixture.Request.Method + " " + fixture.Request.Path
-		if _, exists := server.index[key]; !exists {
-			server.index[key] = *fixture.Response
-		}
+		id := server.nextID
+		server.nextID++
+		server.routes[key] = append(server.routes[key], fixtureRoute{
+			id:       id,
+			request:  *fixture.Request,
+			response: *fixture.Response,
+		})
 	}
 	return server
 }
 
 func (s *FixtureServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{
+			"ok": false,
+			"error": map[string]any{
+				"code": "fixture_request_read_failed", "message": err.Error(), "retryable": false,
+			},
+			"links": map[string]any{},
+			"meta":  map[string]any{"request_id": "req_fixture_request_read_failed", "schema_version": "v1"},
+		})
+		return
+	}
+
 	key := r.Method + " " + r.URL.Path
-	response, ok := s.index[key]
-	if !ok {
+	routes := s.routes[key]
+	matches := make([]fixtureRoute, 0, len(routes))
+	for _, route := range routes {
+		if s.requestMatches(r, body, route.request) {
+			matches = append(matches, route)
+		}
+	}
+	if len(matches) == 0 {
 		writeJSON(w, http.StatusNotFound, map[string]any{
 			"ok": false,
 			"error": map[string]any{
 				"code": "fixture_not_found", "message": "no fixture matches request", "retryable": false,
+				"details": map[string]any{"candidate_count": len(routes)},
 			},
 			"links": map[string]any{},
 			"meta":  map[string]any{"request_id": "req_fixture_not_found", "schema_version": "v1"},
 		})
 		return
 	}
+	response := s.nextResponse(matches)
+	s.writeFixtureResponse(w, response)
+}
 
+func (s *FixtureServer) nextResponse(matches []fixtureRoute) contracts.HTTPResponse {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	chosen := matches[len(matches)-1]
+	for _, match := range matches {
+		if s.served[match.id] == 0 {
+			chosen = match
+			break
+		}
+	}
+	s.served[chosen.id]++
+	return chosen.response
+}
+
+func (s *FixtureServer) writeFixtureResponse(w http.ResponseWriter, response contracts.HTTPResponse) {
 	status := http.StatusOK
 	if response.Status != nil {
 		status = *response.Status
@@ -74,6 +132,63 @@ func (s *FixtureServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, status, response.Body)
+}
+
+func (s *FixtureServer) requestMatches(r *http.Request, body []byte, fixture contracts.HTTPRequest) bool {
+	if !queryMatches(r.URL.Query(), fixture.Query) {
+		return false
+	}
+	for name, value := range fixture.Headers {
+		if r.Header.Get(name) != value {
+			return false
+		}
+	}
+	if fixture.BodyFixture != "" {
+		expected, err := readBase64Fixture(filepath.Join(s.packageDir, fixture.BodyFixture))
+		return err == nil && reflect.DeepEqual(expected, body)
+	}
+	if fixture.Body != nil {
+		var actual any
+		if err := json.Unmarshal(body, &actual); err != nil {
+			return false
+		}
+		return reflect.DeepEqual(actual, fixture.Body)
+	}
+	return strings.TrimSpace(string(body)) == ""
+}
+
+func queryMatches(actual map[string][]string, expected map[string]any) bool {
+	if len(expected) == 0 {
+		return len(actual) == 0
+	}
+	if len(actual) != len(expected) {
+		return false
+	}
+	for key, value := range expected {
+		expectedValues := expectedQueryValues(value)
+		actualValues := append([]string(nil), actual[key]...)
+		sort.Strings(expectedValues)
+		sort.Strings(actualValues)
+		if !reflect.DeepEqual(actualValues, expectedValues) {
+			return false
+		}
+	}
+	return true
+}
+
+func expectedQueryValues(value any) []string {
+	switch typed := value.(type) {
+	case []any:
+		values := make([]string, 0, len(typed))
+		for _, item := range typed {
+			values = append(values, fmt.Sprint(item))
+		}
+		return values
+	case []string:
+		return append([]string(nil), typed...)
+	default:
+		return []string{fmt.Sprint(value)}
+	}
 }
 
 func readBase64Fixture(path string) ([]byte, error) {

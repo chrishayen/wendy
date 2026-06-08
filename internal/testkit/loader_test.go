@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"pacp/internal/contracts"
@@ -38,6 +39,7 @@ func TestGatewayFixtureServerServesPublicTools(t *testing.T) {
 	}
 
 	req := httptest.NewRequest(http.MethodGet, "/v1/tools", nil)
+	req.Header.Set("Authorization", "Bearer token_s003_agent")
 	rec := httptest.NewRecorder()
 	NewFixtureServer(pkg).ServeHTTP(rec, req)
 	resp := rec.Result()
@@ -55,6 +57,51 @@ func TestGatewayFixtureServerServesPublicTools(t *testing.T) {
 	}
 }
 
+func TestFixtureServerMatchesHeadersAndBody(t *testing.T) {
+	scenario := loadS003(t)
+	pkg, ok := FindPackage(scenario, "c05-async-job-service")
+	if !ok {
+		t.Fatalf("jobs package not found")
+	}
+	server := NewFixtureServer(pkg)
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/jobs/job_s003_0001/cancel", strings.NewReader(`{"requester_id":"sub_agent_s003","reason":"different reason"}`))
+	req.Header.Set("Authorization", "Bearer token_s003_gateway")
+	req.Header.Set("Idempotency-Key", "idem_s003_c05_cancel_queued")
+	rec := httptest.NewRecorder()
+	server.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want 409; body=%s", rec.Code, rec.Body.String())
+	}
+	body := decodeMap(t, rec.Body)
+	errObj := body["error"].(map[string]any)
+	if errObj["code"] != "idempotency_conflict" {
+		t.Fatalf("error code = %v", errObj["code"])
+	}
+}
+
+func TestFixtureServerServesDuplicateMatchesInFixtureOrder(t *testing.T) {
+	scenario := loadS003(t)
+	pkg, ok := FindPackage(scenario, "c05-async-job-service")
+	if !ok {
+		t.Fatalf("jobs package not found")
+	}
+	server := NewFixtureServer(pkg)
+
+	first := postCancelFixture(t, server)
+	second := postCancelFixture(t, server)
+
+	firstBody := decodeMap(t, first.Body)
+	secondBody := decodeMap(t, second.Body)
+	if requestID(firstBody) != "req_s003_job_cancel_queued" {
+		t.Fatalf("first request id = %s", requestID(firstBody))
+	}
+	if requestID(secondBody) != "req_s003_job_cancel_queued_replay" {
+		t.Fatalf("second request id = %s", requestID(secondBody))
+	}
+}
+
 func TestProviderFixtureServerServesBinaryContent(t *testing.T) {
 	scenario := loadS003(t)
 	pkg, ok := FindPackage(scenario, "c10-comfyui-provider")
@@ -63,6 +110,7 @@ func TestProviderFixtureServerServesBinaryContent(t *testing.T) {
 	}
 
 	req := httptest.NewRequest(http.MethodGet, "/v1/provider/artifacts/pcr_s003_0001/content", nil)
+	req.Header.Set("Authorization", "Bearer token_s003_runner")
 	rec := httptest.NewRecorder()
 	NewFixtureServer(pkg).ServeHTTP(rec, req)
 	resp := rec.Result()
@@ -81,6 +129,34 @@ func TestProviderFixtureServerServesBinaryContent(t *testing.T) {
 	if len(bytes) != 68 {
 		t.Fatalf("binary length = %d, want 68", len(bytes))
 	}
+}
+
+func postCancelFixture(t *testing.T, server *FixtureServer) *httptest.ResponseRecorder {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodPost, "/v1/jobs/job_s003_0001/cancel", strings.NewReader(`{"requester_id":"sub_agent_s003","reason":"canceled by requester"}`))
+	req.Header.Set("Authorization", "Bearer token_s003_gateway")
+	req.Header.Set("Idempotency-Key", "idem_s003_c05_cancel_queued")
+	rec := httptest.NewRecorder()
+	server.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("cancel fixture status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	return rec
+}
+
+func requestID(body map[string]any) string {
+	meta, _ := body["meta"].(map[string]any)
+	value, _ := meta["request_id"].(string)
+	return value
+}
+
+func decodeMap(t *testing.T, reader io.Reader) map[string]any {
+	t.Helper()
+	var body map[string]any
+	if err := json.NewDecoder(reader).Decode(&body); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	return body
 }
 
 func TestValidateScenarioReportsMissingBinaryFixture(t *testing.T) {

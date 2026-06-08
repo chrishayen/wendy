@@ -208,7 +208,10 @@ The command receives `ProviderInvokeRequest` JSON on stdin and must write
 `environment` values and `environment_from_env` for secrets.
 
 The fixture server can also serve individual contract-simulation fixture
-owners when a test needs a fixed fake dependency.
+owners when a test needs a fixed fake dependency. It matches method, path,
+declared query values, declared headers, and declared request bodies. If the
+same exact request appears more than once in a fixture package, repeated calls
+advance through those fixtures in file order so replay cases can be tested.
 
 The policy seed and state files store API tokens and secret values. Keep them
 private and outside shared artifact directories. Reapplying the same policy
