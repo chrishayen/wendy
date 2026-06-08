@@ -55,6 +55,9 @@ func TestToolsSendsBearerTokenAndPrintsEnvelope(t *testing.T) {
 		if got := r.Header.Get("Authorization"); got != "Bearer token_agent" {
 			t.Fatalf("Authorization = %q", got)
 		}
+		if got := r.Header.Get("X-Request-ID"); got != "req_control_trace" {
+			t.Fatalf("X-Request-ID = %q", got)
+		}
 		writeTestJSON(t, w, http.StatusOK, map[string]any{
 			"ok":   true,
 			"data": map[string]any{"items": []any{}},
@@ -63,7 +66,7 @@ func TestToolsSendsBearerTokenAndPrintsEnvelope(t *testing.T) {
 	defer server.Close()
 
 	var stdout, stderr bytes.Buffer
-	code := run([]string{"-gateway-url", server.URL, "-token", "token_agent", "tools"}, &stdout, &stderr, server.Client())
+	code := run([]string{"-gateway-url", server.URL, "-token", "token_agent", "-request-id", "req_control_trace", "tools"}, &stdout, &stderr, server.Client())
 	if code != 0 {
 		t.Fatalf("code=%d stderr=%s", code, stderr.String())
 	}
@@ -73,6 +76,7 @@ func TestToolsSendsBearerTokenAndPrintsEnvelope(t *testing.T) {
 }
 
 func TestInvokePostsInputAndIdempotencyKey(t *testing.T) {
+	seenRequestID := ""
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost || r.URL.Path != "/v1/tools/cap_echo/invoke" {
 			t.Fatalf("request = %s %s", r.Method, r.URL.Path)
@@ -83,6 +87,7 @@ func TestInvokePostsInputAndIdempotencyKey(t *testing.T) {
 		if got := r.Header.Get("Idempotency-Key"); got != "invoke-1" {
 			t.Fatalf("Idempotency-Key = %q", got)
 		}
+		seenRequestID = r.Header.Get("X-Request-ID")
 		var body map[string]any
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			t.Fatalf("decode request: %v", err)
@@ -112,6 +117,9 @@ func TestInvokePostsInputAndIdempotencyKey(t *testing.T) {
 	}
 	if !strings.Contains(stdout.String(), `"mode": "sync"`) {
 		t.Fatalf("stdout = %s", stdout.String())
+	}
+	if !strings.HasPrefix(seenRequestID, "req_control_") {
+		t.Fatalf("generated X-Request-ID = %q", seenRequestID)
 	}
 }
 
@@ -222,6 +230,9 @@ func TestArtifactContentWritesOutputFile(t *testing.T) {
 		if got := r.Header.Get("Authorization"); got != "Bearer token_agent" {
 			t.Fatalf("Authorization = %q", got)
 		}
+		if got := r.Header.Get("X-Request-ID"); got != "req_artifact_trace" {
+			t.Fatalf("X-Request-ID = %q", got)
+		}
 		w.Header().Set("Content-Type", "text/plain")
 		w.Header().Set("Digest", "sha256=testdigest")
 		w.WriteHeader(http.StatusOK)
@@ -234,6 +245,7 @@ func TestArtifactContentWritesOutputFile(t *testing.T) {
 	code := run([]string{
 		"-gateway-url", server.URL,
 		"-token", "token_agent",
+		"-request-id", "req_artifact_trace",
 		"artifact-content", "art_1",
 		"-out", outPath,
 	}, &stdout, &stderr, server.Client())

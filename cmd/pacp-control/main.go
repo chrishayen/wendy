@@ -14,6 +14,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"pacp/internal/observability"
 )
 
 func main() {
@@ -25,6 +27,7 @@ func run(args []string, stdout, stderr io.Writer, httpClient *http.Client) int {
 	global.SetOutput(stderr)
 	gatewayURL := global.String("gateway-url", os.Getenv("PACP_GATEWAY_URL"), "gateway service base URL")
 	token := global.String("token", os.Getenv("PACP_AGENT_TOKEN"), "agent bearer token or raw token")
+	requestID := global.String("request-id", os.Getenv("PACP_REQUEST_ID"), "optional request id propagated as X-Request-ID")
 	timeout := global.Duration("timeout", 30*time.Second, "request timeout")
 	if err := global.Parse(args); err != nil {
 		return 2
@@ -49,11 +52,16 @@ func run(args []string, stdout, stderr io.Writer, httpClient *http.Client) int {
 	if *token != "" {
 		auth = authorizationHeader(*token)
 	}
+	*requestID = strings.TrimSpace(*requestID)
+	if *requestID == "" {
+		*requestID = observability.NewRequestID("req_control")
+	}
 	client := gatewayClient{
-		baseURL: strings.TrimRight(*gatewayURL, "/"),
-		auth:    auth,
-		client:  httpClient,
-		timeout: *timeout,
+		baseURL:   strings.TrimRight(*gatewayURL, "/"),
+		auth:      auth,
+		client:    httpClient,
+		timeout:   *timeout,
+		requestID: *requestID,
 	}
 	code, err := runCommand(client, remaining, stdout, stderr)
 	if err != nil {
@@ -569,10 +577,11 @@ func isTerminalJobState(state string) bool {
 }
 
 type gatewayClient struct {
-	baseURL string
-	auth    string
-	client  *http.Client
-	timeout time.Duration
+	baseURL   string
+	auth      string
+	client    *http.Client
+	timeout   time.Duration
+	requestID string
 }
 
 func (c gatewayClient) do(ctx context.Context, method, path string, body any, idempotencyKey string) (*http.Response, error) {
@@ -601,6 +610,9 @@ func (c gatewayClient) do(ctx context.Context, method, path string, body any, id
 	}
 	if idempotencyKey != "" {
 		req.Header.Set("Idempotency-Key", idempotencyKey)
+	}
+	if c.requestID != "" {
+		req.Header.Set(observability.RequestIDHeader, c.requestID)
 	}
 	return c.client.Do(req)
 }
