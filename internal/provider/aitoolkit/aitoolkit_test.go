@@ -115,7 +115,7 @@ func TestRejectsDatasetUpdateWithoutMutation(t *testing.T) {
 	}
 }
 
-func TestManifestIncludesDatasetUpdateCapability(t *testing.T) {
+func TestManifestIncludesIndexCapabilities(t *testing.T) {
 	workspace := newWorkspace(t)
 	server := newTestServer(t, Config{Endpoint: "http://provider.local", WorkspaceRoot: workspace, DryRun: true})
 	req := httptest.NewRequest(http.MethodGet, "/v1/provider/manifest", nil)
@@ -130,13 +130,26 @@ func TestManifestIncludesDatasetUpdateCapability(t *testing.T) {
 	}
 	data := envelope["data"].(map[string]any)
 	capabilities := data["capabilities"].([]any)
+	found := map[string]bool{}
 	for _, raw := range capabilities {
 		capability := raw.(map[string]any)
-		if capability["id"] == DefaultDatasetUpdateCapability {
-			return
+		id, _ := capability["id"].(string)
+		found[id] = true
+		if id == DefaultTrainCapability {
+			inputSchema := capability["input_schema"].(map[string]any)
+			properties := inputSchema["properties"].(map[string]any)
+			preset := properties["preset"].(map[string]any)
+			enum := preset["enum"].([]any)
+			if len(enum) != 1 || enum[0] != defaultPreset {
+				t.Fatalf("preset enum = %#v", enum)
+			}
 		}
 	}
-	t.Fatalf("dataset update capability missing from %#v", capabilities)
+	for _, capabilityID := range []string{DefaultDatasetUpdateCapability, DefaultOutputListCapability, DefaultOutputInspectCapability} {
+		if !found[capabilityID] {
+			t.Fatalf("capability %s missing from %#v", capabilityID, capabilities)
+		}
+	}
 }
 
 func TestDryRunTrainingProducesOutputAndArtifact(t *testing.T) {
@@ -166,6 +179,63 @@ func TestDryRunTrainingProducesOutputAndArtifact(t *testing.T) {
 	artifact := artifacts[0].(map[string]any)
 	if artifact["media_type"] != "application/json" || artifact["checksum"] == "" {
 		t.Fatalf("artifact = %#v", artifact)
+	}
+}
+
+func TestRejectsUnsupportedTrainingPreset(t *testing.T) {
+	workspace := newWorkspace(t)
+	server := newTestServer(t, Config{Endpoint: "http://provider.local", WorkspaceRoot: workspace, DryRun: true})
+	_ = invoke(t, server, DefaultDatasetRegisterCapability, map[string]any{
+		"dataset_id": "product_photos",
+		"name":       "Product Photos",
+		"path":       "datasets/product",
+	}, http.StatusOK)
+
+	envelope := invokeEnvelope(t, server, DefaultTrainCapability, map[string]any{
+		"dataset_id":  "product_photos",
+		"output_name": "product_lora",
+		"preset":      "unsupported-lora",
+	}, http.StatusBadRequest)
+	errObj := envelope["error"].(map[string]any)
+	if errObj["code"] != "validation_failed" || !strings.Contains(errObj["message"].(string), "preset") {
+		t.Fatalf("error = %#v", errObj)
+	}
+}
+
+func TestTrainingOutputIndexListInspectAndPersistence(t *testing.T) {
+	workspace := newWorkspace(t)
+	server := newTestServer(t, Config{Endpoint: "http://provider.local", WorkspaceRoot: workspace, DryRun: true})
+	_ = invoke(t, server, DefaultDatasetRegisterCapability, map[string]any{
+		"dataset_id": "product_photos",
+		"name":       "Product Photos",
+		"path":       "datasets/product",
+	}, http.StatusOK)
+	_ = invoke(t, server, DefaultTrainCapability, map[string]any{
+		"dataset_id":  "product_photos",
+		"output_name": "product_lora",
+		"steps":       12,
+		"rank":        8,
+	}, http.StatusOK)
+
+	list := invoke(t, server, DefaultOutputListCapability, map[string]any{"dataset_id": "product_photos"}, http.StatusOK)
+	if list["count"].(float64) != 1 {
+		t.Fatalf("list = %#v", list)
+	}
+	items := list["items"].([]any)
+	output := items[0].(map[string]any)
+	if output["output_id"] != "lora_product_lora" || output["dry_run"] != true {
+		t.Fatalf("output = %#v", output)
+	}
+
+	inspected := invoke(t, server, DefaultOutputInspectCapability, map[string]any{"output_id": "lora_product_lora"}, http.StatusOK)
+	if inspected["dataset_id"] != "product_photos" || inspected["preset"] != defaultPreset || inspected["steps"].(float64) != 12 {
+		t.Fatalf("inspected = %#v", inspected)
+	}
+
+	reloaded := newTestServer(t, Config{Endpoint: "http://provider.local", WorkspaceRoot: workspace, DryRun: true})
+	persisted := invoke(t, reloaded, DefaultOutputInspectCapability, map[string]any{"output_id": "lora_product_lora"}, http.StatusOK)
+	if persisted["output_name"] != "product_lora" || persisted["rank"].(float64) != 8 {
+		t.Fatalf("persisted = %#v", persisted)
 	}
 }
 

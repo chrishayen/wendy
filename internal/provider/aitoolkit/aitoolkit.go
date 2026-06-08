@@ -28,6 +28,8 @@ const (
 	DefaultDatasetInspectCapability  = "cap_ai_toolkit_dataset_inspect"
 	DefaultDatasetUpdateCapability   = "cap_ai_toolkit_dataset_update"
 	DefaultTrainCapability           = "cap_ai_toolkit_lora_train"
+	DefaultOutputListCapability      = "cap_ai_toolkit_lora_list"
+	DefaultOutputInspectCapability   = "cap_ai_toolkit_lora_inspect"
 
 	defaultServiceName = "AI-Toolkit Provider"
 	defaultVersion     = "0.1.0"
@@ -44,6 +46,8 @@ type Config struct {
 	DatasetInspectCapability  string
 	DatasetUpdateCapability   string
 	TrainCapability           string
+	OutputListCapability      string
+	OutputInspectCapability   string
 	WorkspaceRoot             string
 	DryRun                    bool
 	TrainCommand              []string
@@ -66,6 +70,7 @@ type TrainingOutput struct {
 	Preset     string         `json:"preset"`
 	Steps      int            `json:"steps"`
 	Rank       int            `json:"rank"`
+	DryRun     bool           `json:"dry_run"`
 	CreatedAt  string         `json:"created_at"`
 	Metadata   map[string]any `json:"metadata,omitempty"`
 }
@@ -124,6 +129,8 @@ func NewServer(cfg Config) (*provider.Server, error) {
 		normalized.DatasetInspectCapability:  p.inspectDataset,
 		normalized.DatasetUpdateCapability:   p.updateDataset,
 		normalized.TrainCapability:           p.train,
+		normalized.OutputListCapability:      p.listOutputs,
+		normalized.OutputInspectCapability:   p.inspectOutput,
 	})
 }
 
@@ -151,6 +158,12 @@ func normalizeConfig(cfg Config) (Config, error) {
 	}
 	if cfg.TrainCapability == "" {
 		cfg.TrainCapability = DefaultTrainCapability
+	}
+	if cfg.OutputListCapability == "" {
+		cfg.OutputListCapability = DefaultOutputListCapability
+	}
+	if cfg.OutputInspectCapability == "" {
+		cfg.OutputInspectCapability = DefaultOutputInspectCapability
 	}
 	if cfg.WorkspaceRoot == "" {
 		return Config{}, fmt.Errorf("%w: workspace_root is required", provider.ErrValidation)
@@ -336,6 +349,9 @@ func (p *providerImpl) train(ctx context.Context, req contracts.ProviderInvokeRe
 		return contracts.ProviderInvokeResponse{}, err
 	}
 	preset := optionalStringDefault(req.Input, "preset", defaultPreset)
+	if preset != defaultPreset {
+		return contracts.ProviderInvokeResponse{}, fmt.Errorf("%w: preset must be %s", provider.ErrValidation, defaultPreset)
+	}
 	steps, err := intInput(req.Input, "steps", 1000)
 	if err != nil {
 		return contracts.ProviderInvokeResponse{}, err
@@ -378,6 +394,7 @@ func (p *providerImpl) train(ctx context.Context, req contracts.ProviderInvokeRe
 		Preset:     preset,
 		Steps:      steps,
 		Rank:       rank,
+		DryRun:     p.cfg.DryRun,
 		CreatedAt:  p.now().UTC().Format(time.RFC3339),
 		Metadata:   mergeMaps(metadata, engine.Metadata),
 	}
@@ -389,7 +406,7 @@ func (p *providerImpl) train(ctx context.Context, req contracts.ProviderInvokeRe
 	}
 	p.mu.Unlock()
 
-	response := contracts.ProviderInvokeResponse{Output: trainingOutput(output, p.cfg.DryRun)}
+	response := contracts.ProviderInvokeResponse{Output: trainingOutput(output)}
 	if engine.ContentBase64 != "" {
 		body, err := base64.StdEncoding.DecodeString(engine.ContentBase64)
 		if err != nil {
@@ -411,6 +428,42 @@ func (p *providerImpl) train(ctx context.Context, req contracts.ProviderInvokeRe
 		}}
 	}
 	return response, nil
+}
+
+func (p *providerImpl) listOutputs(ctx context.Context, req contracts.ProviderInvokeRequest) (contracts.ProviderInvokeResponse, error) {
+	datasetID, hasDatasetID, err := optionalID(req.Input, "dataset_id")
+	if err != nil {
+		return contracts.ProviderInvokeResponse{}, err
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	ids := make([]string, 0, len(p.outputs))
+	for id, output := range p.outputs {
+		if hasDatasetID && output.DatasetID != datasetID {
+			continue
+		}
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	items := make([]any, 0, len(ids))
+	for _, id := range ids {
+		items = append(items, trainingOutput(p.outputs[id]))
+	}
+	return contracts.ProviderInvokeResponse{Output: map[string]any{"items": items, "count": len(items)}}, nil
+}
+
+func (p *providerImpl) inspectOutput(ctx context.Context, req contracts.ProviderInvokeRequest) (contracts.ProviderInvokeResponse, error) {
+	outputID, err := requiredID(req.Input, "output_id")
+	if err != nil {
+		return contracts.ProviderInvokeResponse{}, err
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	output, ok := p.outputs[outputID]
+	if !ok {
+		return contracts.ProviderInvokeResponse{}, fmt.Errorf("%w: LoRA output %s is not registered", provider.ErrValidation, outputID)
+	}
+	return contracts.ProviderInvokeResponse{Output: trainingOutput(output)}, nil
 }
 
 func (p *providerImpl) resolveDatasetPath(rawPath string) (string, error) {
@@ -511,7 +564,7 @@ func datasetOutput(dataset Dataset) map[string]any {
 	}
 }
 
-func trainingOutput(output TrainingOutput, dryRun bool) map[string]any {
+func trainingOutput(output TrainingOutput) map[string]any {
 	return map[string]any{
 		"output_id":   output.OutputID,
 		"dataset_id":  output.DatasetID,
@@ -521,7 +574,7 @@ func trainingOutput(output TrainingOutput, dryRun bool) map[string]any {
 		"rank":        output.Rank,
 		"created_at":  output.CreatedAt,
 		"metadata":    output.Metadata,
-		"dry_run":     dryRun,
+		"dry_run":     output.DryRun,
 	}
 }
 
@@ -544,13 +597,31 @@ func requiredID(input map[string]any, key string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	if err := validateIDValue(key, value); err != nil {
+		return "", err
+	}
+	return value, nil
+}
+
+func optionalID(input map[string]any, key string) (string, bool, error) {
+	value, ok, err := optionalString(input, key)
+	if err != nil || !ok {
+		return value, ok, err
+	}
+	if err := validateIDValue(key, value); err != nil {
+		return "", true, err
+	}
+	return value, true, nil
+}
+
+func validateIDValue(key, value string) error {
 	for _, r := range value {
 		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '_' || r == '-' || r == '.' {
 			continue
 		}
-		return "", fmt.Errorf("%w: %s may contain only letters, digits, underscore, dash, or dot", provider.ErrValidation, key)
+		return fmt.Errorf("%w: %s may contain only letters, digits, underscore, dash, or dot", provider.ErrValidation, key)
 	}
-	return value, nil
+	return nil
 }
 
 func requiredString(input map[string]any, key string) (string, error) {
@@ -642,6 +713,8 @@ func manifest(cfg Config) contracts.ProviderManifest {
 			datasetInspectCapability(cfg.DatasetInspectCapability),
 			datasetUpdateCapability(cfg.DatasetUpdateCapability),
 			trainCapability(cfg.TrainCapability),
+			outputListCapability(cfg.OutputListCapability),
+			outputInspectCapability(cfg.OutputInspectCapability),
 		},
 	}
 }
@@ -758,32 +831,88 @@ func trainCapability(id string) contracts.Capability {
 			"properties": map[string]any{
 				"dataset_id":  map[string]any{"type": "string"},
 				"output_name": map[string]any{"type": "string"},
-				"preset":      map[string]any{"type": "string"},
-				"steps":       map[string]any{"type": "integer"},
-				"rank":        map[string]any{"type": "integer"},
+				"preset":      map[string]any{"type": "string", "enum": []any{defaultPreset}},
+				"steps":       map[string]any{"type": "integer", "minimum": 1, "maximum": 100000},
+				"rank":        map[string]any{"type": "integer", "minimum": 1, "maximum": 256},
 				"metadata":    map[string]any{"type": "object"},
 			},
 		},
-		OutputSchema: map[string]any{
-			"type":     "object",
-			"required": []any{"output_id", "dataset_id", "output_name", "preset", "steps", "rank", "dry_run"},
-			"properties": map[string]any{
-				"output_id":   map[string]any{"type": "string"},
-				"dataset_id":  map[string]any{"type": "string"},
-				"output_name": map[string]any{"type": "string"},
-				"preset":      map[string]any{"type": "string"},
-				"steps":       map[string]any{"type": "integer"},
-				"rank":        map[string]any{"type": "integer"},
-				"created_at":  map[string]any{"type": "string"},
-				"metadata":    map[string]any{"type": "object"},
-				"dry_run":     map[string]any{"type": "boolean"},
-			},
-		},
+		OutputSchema:  trainingOutputSchema(),
 		Examples:      []map[string]any{{"dataset_id": "product_photos", "output_name": "product_photo_lora", "preset": defaultPreset}},
 		SideEffects:   "external",
 		ResourceHints: []contracts.ResourceHint{{Selector: "gpu", Required: true, Quantity: 1}},
 		ArtifactHints: []contracts.ArtifactHint{{MediaType: "application/json", Count: "zero-or-one"}},
 		TimeoutHint:   "3600s",
+	}
+}
+
+func outputListCapability(id string) contracts.Capability {
+	return contracts.Capability{
+		ID:            id,
+		Name:          "List LoRA outputs",
+		Description:   "List trained LoRA outputs recorded in the provider workspace.",
+		Tags:          []string{"training", "lora", "list"},
+		ExecutionMode: "sync",
+		InputSchema: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"dataset_id": map[string]any{"type": "string"},
+			},
+		},
+		OutputSchema: map[string]any{
+			"type":     "object",
+			"required": []any{"items", "count"},
+			"properties": map[string]any{
+				"items": map[string]any{"type": "array"},
+				"count": map[string]any{"type": "integer"},
+			},
+		},
+		Examples:      []map[string]any{{}},
+		SideEffects:   "none",
+		ResourceHints: []contracts.ResourceHint{},
+		ArtifactHints: []contracts.ArtifactHint{},
+		TimeoutHint:   "30s",
+	}
+}
+
+func outputInspectCapability(id string) contracts.Capability {
+	return contracts.Capability{
+		ID:            id,
+		Name:          "Inspect LoRA output",
+		Description:   "Read metadata for a trained LoRA output recorded in the provider workspace.",
+		Tags:          []string{"training", "lora", "inspect"},
+		ExecutionMode: "sync",
+		InputSchema: map[string]any{
+			"type":     "object",
+			"required": []any{"output_id"},
+			"properties": map[string]any{
+				"output_id": map[string]any{"type": "string"},
+			},
+		},
+		OutputSchema:  trainingOutputSchema(),
+		Examples:      []map[string]any{{"output_id": "lora_product_photo_lora"}},
+		SideEffects:   "none",
+		ResourceHints: []contracts.ResourceHint{},
+		ArtifactHints: []contracts.ArtifactHint{},
+		TimeoutHint:   "30s",
+	}
+}
+
+func trainingOutputSchema() map[string]any {
+	return map[string]any{
+		"type":     "object",
+		"required": []any{"output_id", "dataset_id", "output_name", "preset", "steps", "rank", "dry_run"},
+		"properties": map[string]any{
+			"output_id":   map[string]any{"type": "string"},
+			"dataset_id":  map[string]any{"type": "string"},
+			"output_name": map[string]any{"type": "string"},
+			"preset":      map[string]any{"type": "string", "enum": []any{defaultPreset}},
+			"steps":       map[string]any{"type": "integer"},
+			"rank":        map[string]any{"type": "integer"},
+			"created_at":  map[string]any{"type": "string"},
+			"metadata":    map[string]any{"type": "object"},
+			"dry_run":     map[string]any{"type": "boolean"},
+		},
 	}
 }
 
