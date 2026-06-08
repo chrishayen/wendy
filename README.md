@@ -61,7 +61,7 @@ go test ./...
 go run ./cmd/pacp-contract-smoke
 go run ./cmd/pacp-dev
 go run ./cmd/pacp-dev -state-dir /tmp/pacp-dev-state
-go run ./cmd/pacp-http-provider -addr localhost:18088 -manifest testdata/http-provider/echo-manifest.json -routes testdata/http-provider/echo-routes.json -endpoint http://localhost:18088
+PACP_HTTP_ECHO_TOKEN='Bearer dev-token' go run ./cmd/pacp-http-provider -addr localhost:18088 -manifest testdata/http-provider/echo-manifest.json -routes testdata/http-provider/echo-routes.json -endpoint http://localhost:18088
 go run ./cmd/pacp-control -gateway-url http://localhost:18086 -token token_agent tools
 go run ./cmd/pacp-control -gateway-url http://localhost:18086 -token token_agent invoke cap_dev_echo -idempotency-key echo-1 -input '{"message":"hello"}'
 go run ./cmd/pacp-control -gateway-url http://localhost:18086 -token token_agent invoke cap_dev_artifact -idempotency-key artifact-1 -input '{"prompt":"red mug"}'
@@ -84,6 +84,10 @@ go run ./cmd/pacp-gateway -addr localhost:18086 -catalog-url http://localhost:18
 go run ./cmd/pacp-node -addr localhost:18087 -config testdata/node/linux-gpu-fake.json
 go run ./cmd/pacp-runner -once -worker-id runner_local -jobs-url http://localhost:18082 -leases-url http://localhost:18083 -artifacts-url http://localhost:18084 -node-url http://localhost:18087 -node-start-timeout 30s
 ```
+
+HTTP provider bridge route files can set literal `headers` for non-secret
+values and `headers_from_env` for backend credentials that must not be stored in
+JSON config.
 
 The fixture server can also serve individual contract-simulation fixture
 owners when a test needs a fixed fake dependency.

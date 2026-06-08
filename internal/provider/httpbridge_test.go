@@ -63,6 +63,50 @@ func TestHTTPBridgeForwardsProviderInvokeRequest(t *testing.T) {
 	}
 }
 
+func TestHTTPBridgeSupportsHeadersFromEnv(t *testing.T) {
+	t.Setenv("PACP_TEST_BACKEND_TOKEN", "Bearer env-token")
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer env-token" {
+			t.Fatalf("Authorization = %q", r.Header.Get("Authorization"))
+		}
+		writeSuccess(w, r, http.StatusOK, contracts.ProviderInvokeResponse{
+			Output: map[string]any{"message": "env"},
+		})
+	}))
+	defer backend.Close()
+
+	server, err := NewHTTPBridgeServer(bridgeManifest(), HTTPBridgeConfig{
+		Routes: map[string]HTTPBridgeRoute{
+			"cap_bridge_echo": {
+				URL:            backend.URL,
+				HeadersFromEnv: map[string]string{"Authorization": "PACP_TEST_BACKEND_TOKEN"},
+			},
+		},
+		Client: backend.Client(),
+	})
+	if err != nil {
+		t.Fatalf("new bridge: %v", err)
+	}
+	rec := invokeBridge(t, server, contracts.ProviderInvokeRequest{Input: map[string]any{"message": "hello"}})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestHTTPBridgeRejectsMissingHeaderEnv(t *testing.T) {
+	_, err := NewHTTPBridgeServer(bridgeManifest(), HTTPBridgeConfig{
+		Routes: map[string]HTTPBridgeRoute{
+			"cap_bridge_echo": {
+				URL:            "http://backend.invalid/invoke",
+				HeadersFromEnv: map[string]string{"Authorization": "PACP_TEST_MISSING_BACKEND_TOKEN"},
+			},
+		},
+	})
+	if err == nil {
+		t.Fatal("expected missing header env error")
+	}
+}
+
 func TestHTTPBridgeDecodesDirectProviderResponse(t *testing.T) {
 	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(contracts.ProviderInvokeResponse{

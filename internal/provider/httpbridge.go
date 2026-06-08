@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
 	"time"
 
@@ -26,6 +27,7 @@ type HTTPBridgeRoute struct {
 	URL            string            `json:"url"`
 	Method         string            `json:"method,omitempty"`
 	Headers        map[string]string `json:"headers,omitempty"`
+	HeadersFromEnv map[string]string `json:"headers_from_env,omitempty"`
 	TimeoutSeconds int               `json:"timeout_seconds,omitempty"`
 }
 
@@ -73,6 +75,19 @@ func normalizeHTTPBridgeRoute(route HTTPBridgeRoute) (HTTPBridgeRoute, error) {
 	route.Method = method
 	if route.Headers == nil {
 		route.Headers = map[string]string{}
+	}
+	for header, envName := range route.HeadersFromEnv {
+		if header == "" {
+			return HTTPBridgeRoute{}, errors.New("headers_from_env header name is required")
+		}
+		if envName == "" {
+			return HTTPBridgeRoute{}, fmt.Errorf("headers_from_env %s env var is required", header)
+		}
+		value, ok := os.LookupEnv(envName)
+		if !ok {
+			return HTTPBridgeRoute{}, fmt.Errorf("environment variable %s is not set", envName)
+		}
+		route.Headers[header] = value
 	}
 	return route, nil
 }
