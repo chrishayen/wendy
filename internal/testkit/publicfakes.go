@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"strings"
@@ -82,6 +83,19 @@ type FakeLeasesConfig struct {
 	Leases        []contracts.Lease
 	Now           func() time.Time
 	Samples       []contracts.MetricSample
+}
+
+type FakeArtifactsConfig struct {
+	Credential         string
+	Behavior           FakeComponentBehavior
+	HealthStatus       string
+	Artifacts          []contracts.Artifact
+	Uploads            []contracts.ArtifactUploadSession
+	Content            map[string][]byte
+	DeniedArtifactIDs  map[string]bool
+	ExpiredArtifactIDs map[string]bool
+	Now                func() time.Time
+	Samples            []contracts.MetricSample
 }
 
 func NewFakeComponentHandler(cfg FakeComponentConfig) (http.Handler, error) {
@@ -291,6 +305,45 @@ func NewFakeLeasesHandler(cfg FakeLeasesConfig) (http.Handler, error) {
 	return handler, nil
 }
 
+func NewFakeArtifactsHandler(cfg FakeArtifactsConfig) (http.Handler, error) {
+	if cfg.Now == nil {
+		cfg.Now = time.Now
+	}
+	if cfg.HealthStatus == "" {
+		cfg.HealthStatus = "healthy"
+	}
+	if cfg.Behavior == "" {
+		cfg.Behavior = FakeComponentSuccess
+	}
+	switch cfg.Behavior {
+	case FakeComponentSuccess, FakeComponentDenied, FakeComponentUnavailable:
+	default:
+		return nil, errors.New("unsupported fake artifacts behavior: " + string(cfg.Behavior))
+	}
+	artifacts := cfg.Artifacts
+	if artifacts == nil {
+		artifacts = fakeArtifacts()
+	}
+	uploads := cfg.Uploads
+	if uploads == nil {
+		uploads = fakeArtifactUploads()
+	}
+	if cfg.Content == nil {
+		cfg.Content = fakeArtifactContent()
+	}
+	if cfg.DeniedArtifactIDs == nil {
+		cfg.DeniedArtifactIDs = map[string]bool{"art_fake_denied": true}
+	}
+	if cfg.ExpiredArtifactIDs == nil {
+		cfg.ExpiredArtifactIDs = map[string]bool{"art_fake_expired": true}
+	}
+	handler := newFakeArtifactsHandler(cfg, artifacts, uploads)
+	if cfg.Credential != "" {
+		return requireFakeCredential(cfg.Credential, handler), nil
+	}
+	return handler, nil
+}
+
 type fakeComponentHandler struct {
 	cfg      FakeComponentConfig
 	contract componentContract
@@ -349,6 +402,24 @@ type fakeLeasesHandler struct {
 type fakeLeaseIdempotency struct {
 	operation   string
 	leaseID     string
+	fingerprint string
+}
+
+type fakeArtifactsHandler struct {
+	mu           sync.Mutex
+	cfg          FakeArtifactsConfig
+	artifacts    map[string]contracts.Artifact
+	artifactIDs  []string
+	uploads      map[string]contracts.ArtifactUploadSession
+	uploadIDs    []string
+	idempotency  map[string]fakeArtifactIdempotency
+	nextUpload   int
+	nextArtifact int
+}
+
+type fakeArtifactIdempotency struct {
+	operation   string
+	id          string
 	fingerprint string
 }
 
@@ -455,6 +526,39 @@ func newFakeLeasesHandler(cfg FakeLeasesConfig, resources []contracts.ResourceRe
 		releasedLeases:  map[string]bool{},
 		requestByLease:  requestByLease,
 		selectorByLease: selectorByLease,
+	}
+}
+
+func newFakeArtifactsHandler(cfg FakeArtifactsConfig, artifacts []contracts.Artifact, uploads []contracts.ArtifactUploadSession) *fakeArtifactsHandler {
+	artifactMap := make(map[string]contracts.Artifact, len(artifacts))
+	artifactIDs := make([]string, 0, len(artifacts))
+	for _, artifact := range artifacts {
+		artifact = cloneFakeArtifact(artifact)
+		if artifact.ArtifactID == "" {
+			continue
+		}
+		artifactMap[artifact.ArtifactID] = artifact
+		artifactIDs = append(artifactIDs, artifact.ArtifactID)
+	}
+	uploadMap := make(map[string]contracts.ArtifactUploadSession, len(uploads))
+	uploadIDs := make([]string, 0, len(uploads))
+	for _, upload := range uploads {
+		upload = cloneFakeArtifactUpload(upload)
+		if upload.UploadID == "" {
+			continue
+		}
+		uploadMap[upload.UploadID] = upload
+		uploadIDs = append(uploadIDs, upload.UploadID)
+	}
+	return &fakeArtifactsHandler{
+		cfg:          cfg,
+		artifacts:    artifactMap,
+		artifactIDs:  artifactIDs,
+		uploads:      uploadMap,
+		uploadIDs:    uploadIDs,
+		idempotency:  map[string]fakeArtifactIdempotency{},
+		nextUpload:   len(uploadIDs) + 1,
+		nextArtifact: len(artifactIDs) + 1,
 	}
 }
 
@@ -1653,6 +1757,415 @@ func (h *fakeLeasesHandler) writeBlocked(w http.ResponseWriter, r *http.Request)
 	}
 }
 
+func (h *fakeArtifactsHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if h.writeBlocked(w, r) {
+		return
+	}
+	path := strings.TrimSuffix(r.URL.Path, "/")
+	switch {
+	case r.Method == http.MethodGet && path == "/v1/artifacts/health":
+		health := contracts.NewComponentHealth("artifacts", map[string]any{"fake": true})
+		health.Status = h.cfg.HealthStatus
+		health.CheckedAt = h.cfg.Now().UTC().Format(time.RFC3339)
+		writeFakeSuccess(w, r, http.StatusOK, health)
+	case r.Method == http.MethodGet && path == "/v1/artifacts/metrics":
+		samples := h.cfg.Samples
+		if samples == nil {
+			samples = h.metricsSamples()
+		}
+		metrics := contracts.NewComponentMetrics("artifacts", samples)
+		metrics.CollectedAt = h.cfg.Now().UTC().Format(time.RFC3339)
+		writeFakeSuccess(w, r, http.StatusOK, metrics)
+	case r.Method == http.MethodPost && path == "/v1/artifact-uploads":
+		h.createUpload(w, r)
+	case strings.HasPrefix(path, "/v1/artifact-uploads/"):
+		h.uploadRoute(w, r, strings.TrimPrefix(path, "/v1/artifact-uploads/"))
+	case r.Method == http.MethodGet && path == "/v1/artifacts":
+		writeFakeSuccess(w, r, http.StatusOK, map[string]any{"items": h.listArtifacts(r.URL.Query().Get("producer_ref"), r.URL.Query().Get("owner_subject_id")), "next_cursor": nil})
+	case r.Method == http.MethodPost && path == "/v1/artifacts/register-local":
+		h.registerLocalArtifact(w, r)
+	case strings.HasPrefix(path, "/v1/artifacts/"):
+		h.artifactRoute(w, r, strings.TrimPrefix(path, "/v1/artifacts/"))
+	default:
+		writeFakeError(w, r, http.StatusNotFound, "not_found", "fake artifact route not found", false)
+	}
+}
+
+func (h *fakeArtifactsHandler) uploadRoute(w http.ResponseWriter, r *http.Request, tail string) {
+	parts := strings.Split(tail, "/")
+	if len(parts) == 0 || parts[0] == "" {
+		writeFakeError(w, r, http.StatusNotFound, "not_found", "fake artifact upload route not found", false)
+		return
+	}
+	uploadID, err := url.PathUnescape(parts[0])
+	if err != nil {
+		writeFakeError(w, r, http.StatusBadRequest, "validation_failed", "upload_id is invalid", false)
+		return
+	}
+	if len(parts) == 1 && r.Method == http.MethodGet {
+		upload, ok := h.getUpload(uploadID)
+		if !ok {
+			writeFakeError(w, r, http.StatusNotFound, "not_found", "fake artifact upload not found", false)
+			return
+		}
+		writeFakeSuccess(w, r, http.StatusOK, upload)
+		return
+	}
+	if len(parts) != 2 {
+		writeFakeError(w, r, http.StatusNotFound, "not_found", "fake artifact upload route not found", false)
+		return
+	}
+	switch parts[1] {
+	case "content":
+		if r.Method != http.MethodPut {
+			writeFakeError(w, r, http.StatusMethodNotAllowed, "method_not_allowed", "method not allowed", false)
+			return
+		}
+		h.putUploadContent(w, r, uploadID)
+	case "complete":
+		if r.Method != http.MethodPost {
+			writeFakeError(w, r, http.StatusMethodNotAllowed, "method_not_allowed", "method not allowed", false)
+			return
+		}
+		h.completeUpload(w, r, uploadID)
+	default:
+		writeFakeError(w, r, http.StatusNotFound, "not_found", "fake artifact upload route not found", false)
+	}
+}
+
+func (h *fakeArtifactsHandler) artifactRoute(w http.ResponseWriter, r *http.Request, tail string) {
+	parts := strings.Split(tail, "/")
+	if len(parts) == 0 || parts[0] == "" {
+		writeFakeError(w, r, http.StatusNotFound, "not_found", "fake artifact route not found", false)
+		return
+	}
+	artifactID, err := url.PathUnescape(parts[0])
+	if err != nil {
+		writeFakeError(w, r, http.StatusBadRequest, "validation_failed", "artifact_id is invalid", false)
+		return
+	}
+	if len(parts) == 1 && r.Method == http.MethodGet {
+		if h.writeArtifactUnavailable(w, r, artifactID) {
+			return
+		}
+		artifact, ok := h.getArtifact(artifactID)
+		if !ok {
+			writeFakeError(w, r, http.StatusNotFound, "not_found", "fake artifact not found", false)
+			return
+		}
+		writeFakeSuccess(w, r, http.StatusOK, artifact)
+		return
+	}
+	if len(parts) != 2 || r.Method != http.MethodGet {
+		writeFakeError(w, r, http.StatusNotFound, "not_found", "fake artifact route not found", false)
+		return
+	}
+	switch parts[1] {
+	case "policy-context":
+		h.writePolicyContext(w, r, artifactID)
+	case "content":
+		h.readContent(w, r, artifactID)
+	default:
+		writeFakeError(w, r, http.StatusNotFound, "not_found", "fake artifact route not found", false)
+	}
+}
+
+func (h *fakeArtifactsHandler) createUpload(w http.ResponseWriter, r *http.Request) {
+	idempotencyKey := strings.TrimSpace(r.Header.Get("Idempotency-Key"))
+	if idempotencyKey == "" {
+		writeFakeError(w, r, http.StatusBadRequest, "missing_idempotency_key", "Idempotency-Key header is required for artifact upload operations", false)
+		return
+	}
+	var req contracts.CreateArtifactUploadRequest
+	if !decodeFakeBody(w, r, &req) {
+		return
+	}
+	if req.Name == "" || req.MediaType == "" || req.OwnerSubjectID == "" {
+		writeFakeError(w, r, http.StatusBadRequest, "validation_failed", "name, media_type, and owner_subject_id are required", false)
+		return
+	}
+	fingerprint := fakeJSONFingerprint("artifact-upload:create", req)
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if existing, ok := h.idempotency[idempotencyKey]; ok {
+		if existing.operation != "create_upload" || existing.fingerprint != fingerprint {
+			writeFakeError(w, r, http.StatusConflict, "idempotency_conflict", "idempotency key was reused with different request content", false)
+			return
+		}
+		upload := h.uploads[existing.id]
+		writeFakeSuccess(w, r, http.StatusOK, cloneFakeArtifactUpload(upload))
+		return
+	}
+	uploadID := fmt.Sprintf("upload_fake_created_%03d", h.nextUpload)
+	h.nextUpload++
+	upload := contracts.ArtifactUploadSession{
+		UploadID:         uploadID,
+		State:            contracts.ArtifactUploadCreated,
+		Name:             req.Name,
+		MediaType:        req.MediaType,
+		ProducerRef:      req.ProducerRef,
+		OwnerSubjectID:   req.OwnerSubjectID,
+		ExpectedSize:     cloneInt64Pointer(req.ExpectedSize),
+		ExpectedChecksum: req.ExpectedChecksum,
+		ExpiresAt:        h.cfg.Now().UTC().Add(10 * time.Minute).Format(time.RFC3339),
+		Links:            fakeArtifactUploadLinks(uploadID, contracts.ArtifactUploadCreated),
+	}
+	h.uploads[uploadID] = upload
+	h.uploadIDs = append(h.uploadIDs, uploadID)
+	h.idempotency[idempotencyKey] = fakeArtifactIdempotency{operation: "create_upload", id: uploadID, fingerprint: fingerprint}
+	writeFakeSuccess(w, r, http.StatusCreated, cloneFakeArtifactUpload(upload))
+}
+
+func (h *fakeArtifactsHandler) putUploadContent(w http.ResponseWriter, r *http.Request, uploadID string) {
+	idempotencyKey := strings.TrimSpace(r.Header.Get("Idempotency-Key"))
+	if idempotencyKey == "" {
+		writeFakeError(w, r, http.StatusBadRequest, "missing_idempotency_key", "Idempotency-Key header is required for artifact upload operations", false)
+		return
+	}
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		writeFakeError(w, r, http.StatusBadRequest, "validation_failed", "request body could not be read", false)
+		return
+	}
+	defer r.Body.Close()
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	upload, ok := h.uploads[uploadID]
+	if !ok {
+		writeFakeError(w, r, http.StatusNotFound, "not_found", "fake artifact upload not found", false)
+		return
+	}
+	if upload.State == contracts.ArtifactUploadExpired {
+		writeFakeError(w, r, http.StatusGone, "artifact_expired", "artifact upload session has expired", false)
+		return
+	}
+	size := int64(len(body))
+	upload.State = contracts.ArtifactUploadReceived
+	upload.ReceivedSize = &size
+	upload.Links = fakeArtifactUploadLinks(upload.UploadID, upload.State)
+	h.uploads[uploadID] = upload
+	h.cfg.Content[uploadID] = append([]byte(nil), body...)
+	writeFakeSuccess(w, r, http.StatusOK, cloneFakeArtifactUpload(upload))
+}
+
+func (h *fakeArtifactsHandler) completeUpload(w http.ResponseWriter, r *http.Request, uploadID string) {
+	idempotencyKey := strings.TrimSpace(r.Header.Get("Idempotency-Key"))
+	if idempotencyKey == "" {
+		writeFakeError(w, r, http.StatusBadRequest, "missing_idempotency_key", "Idempotency-Key header is required for artifact upload operations", false)
+		return
+	}
+	var req contracts.CompleteArtifactUploadRequest
+	if !decodeFakeBody(w, r, &req) {
+		return
+	}
+	fingerprint := fakeJSONFingerprint("artifact-upload:complete:"+uploadID, req)
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if existing, ok := h.idempotency[idempotencyKey]; ok {
+		if existing.operation != "complete_upload" || existing.fingerprint != fingerprint {
+			writeFakeError(w, r, http.StatusConflict, "idempotency_conflict", "idempotency key was reused with different request content", false)
+			return
+		}
+		artifact := h.artifacts[existing.id]
+		writeFakeSuccess(w, r, http.StatusOK, cloneFakeArtifact(artifact))
+		return
+	}
+	upload, ok := h.uploads[uploadID]
+	if !ok {
+		writeFakeError(w, r, http.StatusNotFound, "not_found", "fake artifact upload not found", false)
+		return
+	}
+	if upload.State == contracts.ArtifactUploadExpired {
+		writeFakeError(w, r, http.StatusGone, "artifact_expired", "artifact upload session has expired", false)
+		return
+	}
+	if upload.State != contracts.ArtifactUploadReceived {
+		writeFakeError(w, r, http.StatusConflict, "validation_failed", "artifact upload content has not been received", false)
+		return
+	}
+	artifactID := fmt.Sprintf("art_fake_created_%03d", h.nextArtifact)
+	h.nextArtifact++
+	artifact := contracts.Artifact{
+		ArtifactID:     artifactID,
+		Name:           upload.Name,
+		MediaType:      upload.MediaType,
+		Size:           req.Size,
+		Checksum:       req.Checksum,
+		CreatedAt:      h.cfg.Now().UTC().Format(time.RFC3339),
+		ProducerRef:    upload.ProducerRef,
+		OwnerSubjectID: upload.OwnerSubjectID,
+		Links:          fakeArtifactLinks(artifactID),
+	}
+	h.artifacts[artifactID] = artifact
+	h.artifactIDs = append(h.artifactIDs, artifactID)
+	upload.State = contracts.ArtifactUploadCompleted
+	upload.ArtifactID = &artifactID
+	upload.CompletedAt = artifact.CreatedAt
+	upload.Links = fakeArtifactUploadLinks(upload.UploadID, upload.State)
+	h.uploads[uploadID] = upload
+	if body, ok := h.cfg.Content[uploadID]; ok {
+		h.cfg.Content[artifactID] = append([]byte(nil), body...)
+	}
+	h.idempotency[idempotencyKey] = fakeArtifactIdempotency{operation: "complete_upload", id: artifactID, fingerprint: fingerprint}
+	writeFakeSuccess(w, r, http.StatusCreated, cloneFakeArtifact(artifact))
+}
+
+func (h *fakeArtifactsHandler) registerLocalArtifact(w http.ResponseWriter, r *http.Request) {
+	var req contracts.RegisterLocalArtifactRequest
+	if !decodeFakeBody(w, r, &req) {
+		return
+	}
+	if req.Path == "" || req.MediaType == "" || req.OwnerSubjectID == "" {
+		writeFakeError(w, r, http.StatusBadRequest, "validation_failed", "path, media_type, and owner_subject_id are required", false)
+		return
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	artifactID := fmt.Sprintf("art_fake_local_%03d", h.nextArtifact)
+	h.nextArtifact++
+	name := req.Name
+	if name == "" {
+		name = "local-artifact"
+	}
+	artifact := contracts.Artifact{
+		ArtifactID:     artifactID,
+		Name:           name,
+		MediaType:      req.MediaType,
+		Size:           0,
+		Checksum:       checksumString(nil),
+		CreatedAt:      h.cfg.Now().UTC().Format(time.RFC3339),
+		ProducerRef:    req.ProducerRef,
+		OwnerSubjectID: req.OwnerSubjectID,
+		Metadata:       cloneMap(req.Metadata),
+		Links:          fakeArtifactLinks(artifactID),
+	}
+	h.artifacts[artifactID] = artifact
+	h.artifactIDs = append(h.artifactIDs, artifactID)
+	h.cfg.Content[artifactID] = []byte{}
+	writeFakeSuccess(w, r, http.StatusCreated, cloneFakeArtifact(artifact))
+}
+
+func (h *fakeArtifactsHandler) writePolicyContext(w http.ResponseWriter, r *http.Request, artifactID string) {
+	if h.writeArtifactUnavailable(w, r, artifactID) {
+		return
+	}
+	artifact, ok := h.getArtifact(artifactID)
+	if !ok {
+		writeFakeError(w, r, http.StatusNotFound, "not_found", "fake artifact not found", false)
+		return
+	}
+	writeFakeSuccess(w, r, http.StatusOK, contracts.ArtifactPolicyContext{
+		ResourceKind:   "artifact",
+		ArtifactID:     artifact.ArtifactID,
+		OwnerSubjectID: artifact.OwnerSubjectID,
+		ProducerRef:    artifact.ProducerRef,
+		PolicyState:    "active",
+	})
+}
+
+func (h *fakeArtifactsHandler) readContent(w http.ResponseWriter, r *http.Request, artifactID string) {
+	if h.writeArtifactUnavailable(w, r, artifactID) {
+		return
+	}
+	artifact, ok := h.getArtifact(artifactID)
+	if !ok {
+		writeFakeError(w, r, http.StatusNotFound, "not_found", "fake artifact not found", false)
+		return
+	}
+	h.mu.Lock()
+	body := append([]byte(nil), h.cfg.Content[artifactID]...)
+	h.mu.Unlock()
+	w.Header().Set("Content-Type", artifact.MediaType)
+	w.Header().Set("Content-Length", fmt.Sprintf("%d", len(body)))
+	w.Header().Set("Digest", artifact.Checksum)
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(body)
+}
+
+func (h *fakeArtifactsHandler) listArtifacts(producerRef, ownerSubjectID string) []contracts.Artifact {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	items := []contracts.Artifact{}
+	for _, artifactID := range h.artifactIDs {
+		artifact, ok := h.artifacts[artifactID]
+		if !ok || h.cfg.DeniedArtifactIDs[artifactID] || h.cfg.ExpiredArtifactIDs[artifactID] {
+			continue
+		}
+		if producerRef != "" && artifact.ProducerRef != producerRef {
+			continue
+		}
+		if ownerSubjectID != "" && artifact.OwnerSubjectID != ownerSubjectID {
+			continue
+		}
+		items = append(items, cloneFakeArtifact(artifact))
+	}
+	return items
+}
+
+func (h *fakeArtifactsHandler) getUpload(uploadID string) (contracts.ArtifactUploadSession, bool) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	upload, ok := h.uploads[uploadID]
+	if !ok {
+		return contracts.ArtifactUploadSession{}, false
+	}
+	return cloneFakeArtifactUpload(upload), true
+}
+
+func (h *fakeArtifactsHandler) getArtifact(artifactID string) (contracts.Artifact, bool) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	artifact, ok := h.artifacts[artifactID]
+	if !ok {
+		return contracts.Artifact{}, false
+	}
+	return cloneFakeArtifact(artifact), true
+}
+
+func (h *fakeArtifactsHandler) metricsSamples() []contracts.MetricSample {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	uploadsByState := map[contracts.ArtifactUploadState]int{}
+	for _, upload := range h.uploads {
+		uploadsByState[upload.State]++
+	}
+	samples := []contracts.MetricSample{contracts.CountMetric("artifacts_total", len(h.artifacts), nil)}
+	for state, count := range uploadsByState {
+		samples = append(samples, contracts.CountMetric("artifact_uploads_by_state", count, map[string]string{"state": string(state)}))
+	}
+	return samples
+}
+
+func (h *fakeArtifactsHandler) writeArtifactUnavailable(w http.ResponseWriter, r *http.Request, artifactID string) bool {
+	h.mu.Lock()
+	denied := h.cfg.DeniedArtifactIDs[artifactID]
+	expired := h.cfg.ExpiredArtifactIDs[artifactID]
+	h.mu.Unlock()
+	switch {
+	case denied:
+		writeFakeError(w, r, http.StatusForbidden, "forbidden", "fake artifact access denied", false)
+		return true
+	case expired:
+		writeFakeError(w, r, http.StatusGone, "artifact_expired", "fake artifact has expired", false)
+		return true
+	default:
+		return false
+	}
+}
+
+func (h *fakeArtifactsHandler) writeBlocked(w http.ResponseWriter, r *http.Request) bool {
+	switch h.cfg.Behavior {
+	case FakeComponentDenied:
+		writeFakeError(w, r, http.StatusForbidden, "forbidden", "fake artifacts access denied", false)
+		return true
+	case FakeComponentUnavailable:
+		writeFakeError(w, r, http.StatusServiceUnavailable, "component_unavailable", "fake artifacts unavailable", true)
+		return true
+	default:
+		return false
+	}
+}
+
 func (h *fakeComponentHandler) writeBlocked(w http.ResponseWriter, r *http.Request) bool {
 	switch h.cfg.Behavior {
 	case FakeComponentDenied:
@@ -1691,6 +2204,99 @@ func fakeNodeService(serviceID, status string) contracts.NodeService {
 		ProviderEndpoint: "http://node.fake/providers/" + serviceID,
 		Links:            map[string]any{},
 	}
+}
+
+func fakeArtifacts() []contracts.Artifact {
+	now := "2026-06-08T00:00:00Z"
+	return []contracts.Artifact{
+		fakeArtifact("art_fake_available", "fake-output.txt", "job_fake_001", "sub_fake_agent", now, []byte("fake artifact body")),
+		fakeArtifact("art_fake_denied", "denied-output.txt", "job_fake_denied", "sub_denied", now, []byte("denied")),
+		fakeArtifact("art_fake_expired", "expired-output.txt", "job_fake_expired", "sub_fake_agent", now, []byte("expired")),
+	}
+}
+
+func fakeArtifact(artifactID, name, producerRef, ownerSubjectID, createdAt string, body []byte) contracts.Artifact {
+	return contracts.Artifact{
+		ArtifactID:     artifactID,
+		Name:           name,
+		MediaType:      "text/plain",
+		Size:           int64(len(body)),
+		Checksum:       checksumString(body),
+		CreatedAt:      createdAt,
+		ProducerRef:    producerRef,
+		OwnerSubjectID: ownerSubjectID,
+		Metadata:       map[string]any{"fake": true},
+		Links:          fakeArtifactLinks(artifactID),
+	}
+}
+
+func fakeArtifactUploads() []contracts.ArtifactUploadSession {
+	size := int64(len("received body"))
+	artifactID := "art_fake_available"
+	return []contracts.ArtifactUploadSession{{
+		UploadID:       "upload_fake_created",
+		State:          contracts.ArtifactUploadCreated,
+		Name:           "created.txt",
+		MediaType:      "text/plain",
+		OwnerSubjectID: "sub_fake_agent",
+		ExpiresAt:      "2026-06-08T00:10:00Z",
+		Links:          fakeArtifactUploadLinks("upload_fake_created", contracts.ArtifactUploadCreated),
+	}, {
+		UploadID:       "upload_fake_received",
+		State:          contracts.ArtifactUploadReceived,
+		Name:           "received.txt",
+		MediaType:      "text/plain",
+		OwnerSubjectID: "sub_fake_agent",
+		ReceivedSize:   &size,
+		ExpiresAt:      "2026-06-08T00:10:00Z",
+		Links:          fakeArtifactUploadLinks("upload_fake_received", contracts.ArtifactUploadReceived),
+	}, {
+		UploadID:       "upload_fake_completed",
+		State:          contracts.ArtifactUploadCompleted,
+		Name:           "fake-output.txt",
+		MediaType:      "text/plain",
+		ProducerRef:    "job_fake_001",
+		OwnerSubjectID: "sub_fake_agent",
+		ArtifactID:     &artifactID,
+		CompletedAt:    "2026-06-08T00:00:00Z",
+		Links:          fakeArtifactUploadLinks("upload_fake_completed", contracts.ArtifactUploadCompleted),
+	}, {
+		UploadID:       "upload_fake_expired",
+		State:          contracts.ArtifactUploadExpired,
+		Name:           "expired.txt",
+		MediaType:      "text/plain",
+		OwnerSubjectID: "sub_fake_agent",
+		ExpiresAt:      "2026-06-08T00:00:00Z",
+		Links:          fakeArtifactUploadLinks("upload_fake_expired", contracts.ArtifactUploadExpired),
+	}}
+}
+
+func fakeArtifactContent() map[string][]byte {
+	return map[string][]byte{
+		"art_fake_available":   []byte("fake artifact body"),
+		"art_fake_denied":      []byte("denied"),
+		"art_fake_expired":     []byte("expired"),
+		"upload_fake_received": []byte("received body"),
+	}
+}
+
+func fakeArtifactLinks(artifactID string) map[string]any {
+	return map[string]any{
+		"self":           map[string]any{"method": "GET", "href": "/v1/artifacts/" + artifactID},
+		"policy_context": map[string]any{"method": "GET", "href": "/v1/artifacts/" + artifactID + "/policy-context"},
+		"content":        map[string]any{"method": "GET", "href": "/v1/artifacts/" + artifactID + "/content"},
+	}
+}
+
+func fakeArtifactUploadLinks(uploadID string, state contracts.ArtifactUploadState) map[string]any {
+	links := map[string]any{"self": map[string]any{"method": "GET", "href": "/v1/artifact-uploads/" + uploadID}}
+	switch state {
+	case contracts.ArtifactUploadCreated:
+		links["content"] = map[string]any{"method": "PUT", "href": "/v1/artifact-uploads/" + uploadID + "/content"}
+	case contracts.ArtifactUploadReceived:
+		links["complete"] = map[string]any{"method": "POST", "href": "/v1/artifact-uploads/" + uploadID + "/complete"}
+	}
+	return links
 }
 
 func fakeLeaseResources() []contracts.ResourceRecord {
@@ -1820,6 +2426,28 @@ func cloneFakeNodeService(service contracts.NodeService) contracts.NodeService {
 		service.Manifest = &manifest
 	}
 	return service
+}
+
+func cloneFakeArtifact(artifact contracts.Artifact) contracts.Artifact {
+	artifact.Metadata = cloneMap(artifact.Metadata)
+	artifact.Links = cloneMap(artifact.Links)
+	return artifact
+}
+
+func cloneFakeArtifactUpload(upload contracts.ArtifactUploadSession) contracts.ArtifactUploadSession {
+	upload.ReceivedSize = cloneInt64Pointer(upload.ReceivedSize)
+	upload.ExpectedSize = cloneInt64Pointer(upload.ExpectedSize)
+	upload.ArtifactID = cloneStringPointer(upload.ArtifactID)
+	upload.Links = cloneMap(upload.Links)
+	return upload
+}
+
+func cloneInt64Pointer(value *int64) *int64 {
+	if value == nil {
+		return nil
+	}
+	cloned := *value
+	return &cloned
 }
 
 func cloneFakeResource(resource contracts.ResourceRecord) contracts.ResourceRecord {
@@ -2010,20 +2638,14 @@ func fakeListPayload(kind string, override []any) map[string]any {
 }
 
 func fakeListItems(kind string) []any {
-	now := "2026-06-08T00:00:00Z"
 	switch kind {
 	case "artifacts":
-		return []any{contracts.Artifact{
-			ArtifactID:     "art_fake_001",
-			Name:           "fake-output.txt",
-			MediaType:      "text/plain",
-			Size:           11,
-			Checksum:       "sha256:fake",
-			CreatedAt:      now,
-			ProducerRef:    "job_fake_001",
-			OwnerSubjectID: "sub_fake_agent",
-			Links:          map[string]any{},
-		}}
+		artifacts := fakeArtifacts()
+		items := make([]any, 0, len(artifacts))
+		for _, artifact := range artifacts {
+			items = append(items, artifact)
+		}
+		return items
 	case "catalog":
 		capability := fakeProviderManifest("http://provider.fake").Capabilities[0]
 		capability.ServiceID = "svc_fake_provider"

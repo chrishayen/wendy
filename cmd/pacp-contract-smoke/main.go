@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -151,6 +152,7 @@ func runFakePublicAPISmoke(timeout time.Duration, stdout, stderr io.Writer) int 
 		}
 	}
 
+	appendFakeArtifactsChecks(ctx, &checks)
 	appendFakeJobsChecks(ctx, &checks)
 	appendFakeLeasesChecks(ctx, &checks)
 
@@ -225,6 +227,226 @@ type fakePolicyEnvelope struct {
 	OK    bool                  `json:"ok"`
 	Data  json.RawMessage       `json:"data"`
 	Error contracts.ErrorObject `json:"error"`
+}
+
+func appendFakeArtifactsChecks(ctx context.Context, checks *[]fakePublicAPICheck) {
+	handler, err := testkit.NewFakeArtifactsHandler(testkit.FakeArtifactsConfig{})
+	if err != nil {
+		*checks = append(*checks, fakePublicAPICheck{Name: "fake.artifacts.create", Error: err.Error()})
+		return
+	}
+	server := httptest.NewServer(handler)
+	defer server.Close()
+	*checks = append(*checks,
+		checkFakeArtifactsAvailable(ctx, server.Client(), server.URL),
+		checkFakeArtifactContent(ctx, server.Client(), server.URL),
+		requestFakeArtifactsExpectedError(ctx, server.Client(), server.URL, http.MethodGet, "/v1/artifacts/art_fake_denied", "fake.artifacts.denied.forbidden", http.StatusForbidden, "forbidden", nil, nil),
+		requestFakeArtifactsExpectedError(ctx, server.Client(), server.URL, http.MethodGet, "/v1/artifacts/art_fake_expired", "fake.artifacts.expired", http.StatusGone, "artifact_expired", nil, nil),
+		requestFakeArtifactsExpectedError(ctx, server.Client(), server.URL, http.MethodGet, "/v1/artifacts/art_missing", "fake.artifacts.missing.not_found", http.StatusNotFound, "not_found", nil, nil),
+		checkFakeArtifactUploadLifecycle(ctx, server.Client(), server.URL),
+	)
+
+	unavailable, err := testkit.NewFakeArtifactsHandler(testkit.FakeArtifactsConfig{Behavior: testkit.FakeComponentUnavailable})
+	if err != nil {
+		*checks = append(*checks, fakePublicAPICheck{Name: "fake.artifacts.unavailable.create", Error: err.Error()})
+		return
+	}
+	unavailableServer := httptest.NewServer(unavailable)
+	defer unavailableServer.Close()
+	*checks = append(*checks, requestFakeArtifactsExpectedError(ctx, unavailableServer.Client(), unavailableServer.URL, http.MethodGet, "/v1/artifacts/health", "fake.artifacts.unavailable.component_unavailable", http.StatusServiceUnavailable, "component_unavailable", nil, nil))
+}
+
+func checkFakeArtifactsAvailable(ctx context.Context, client *http.Client, baseURL string) fakePublicAPICheck {
+	var list struct {
+		Items []contracts.Artifact `json:"items"`
+	}
+	check := requestFakeArtifactsJSON(ctx, client, baseURL, http.MethodGet, "/v1/artifacts?producer_ref=job_fake_001", "fake.artifacts.available.metadata", nil, nil, &list)
+	if !check.OK {
+		return check
+	}
+	if len(list.Items) != 1 || list.Items[0].ArtifactID != "art_fake_available" {
+		check.OK = false
+		check.Error = fmt.Sprintf("list = %#v", list.Items)
+		return check
+	}
+	var artifact contracts.Artifact
+	check = requestFakeArtifactsJSON(ctx, client, baseURL, http.MethodGet, "/v1/artifacts/art_fake_available", "fake.artifacts.available.metadata", nil, nil, &artifact)
+	if !check.OK {
+		return check
+	}
+	if artifact.OwnerSubjectID != "sub_fake_agent" {
+		check.OK = false
+		check.Error = fmt.Sprintf("artifact = %#v", artifact)
+	}
+	return check
+}
+
+func checkFakeArtifactContent(ctx context.Context, client *http.Client, baseURL string) fakePublicAPICheck {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, baseURL+"/v1/artifacts/art_fake_available/content", nil)
+	if err != nil {
+		return fakePublicAPICheck{Name: "fake.artifacts.available.content", Error: err.Error()}
+	}
+	req.Header.Set("X-Request-ID", "req_contract_fake_artifacts")
+	resp, err := client.Do(req)
+	if err != nil {
+		return fakePublicAPICheck{Name: "fake.artifacts.available.content", Error: err.Error()}
+	}
+	defer resp.Body.Close()
+	check := fakePublicAPICheck{Name: "fake.artifacts.available.content", HTTPStatus: resp.StatusCode}
+	if resp.StatusCode != http.StatusOK {
+		check.Error = fmt.Sprintf("HTTP %d", resp.StatusCode)
+		return check
+	}
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		check.Error = err.Error()
+		return check
+	}
+	if string(body) != "fake artifact body" || resp.Header.Get("Digest") != checksumStringForSmoke(body) {
+		check.Error = "artifact content body or digest mismatch"
+		return check
+	}
+	check.OK = true
+	return check
+}
+
+func checkFakeArtifactUploadLifecycle(ctx context.Context, client *http.Client, baseURL string) fakePublicAPICheck {
+	var upload contracts.ArtifactUploadSession
+	check := requestFakeArtifactsJSON(ctx, client, baseURL, http.MethodPost, "/v1/artifact-uploads", "fake.artifacts.upload.lifecycle", map[string]string{
+		"Idempotency-Key": "fake-artifacts-create",
+	}, contracts.CreateArtifactUploadRequest{
+		Name:           "smoke.txt",
+		MediaType:      "text/plain",
+		ProducerRef:    "job_smoke",
+		OwnerSubjectID: "sub_smoke",
+	}, &upload)
+	if !check.OK {
+		return check
+	}
+	body := []byte("smoke artifact")
+	check = putFakeArtifactContent(ctx, client, baseURL, upload.UploadID, "fake.artifacts.upload.lifecycle", body)
+	if !check.OK {
+		return check
+	}
+	var artifact contracts.Artifact
+	check = requestFakeArtifactsJSON(ctx, client, baseURL, http.MethodPost, "/v1/artifact-uploads/"+upload.UploadID+"/complete", "fake.artifacts.upload.lifecycle", map[string]string{
+		"Idempotency-Key": "fake-artifacts-complete",
+	}, contracts.CompleteArtifactUploadRequest{
+		Checksum: checksumStringForSmoke(body),
+		Size:     int64(len(body)),
+	}, &artifact)
+	if !check.OK {
+		return check
+	}
+	if artifact.ProducerRef != "job_smoke" || artifact.OwnerSubjectID != "sub_smoke" {
+		check.OK = false
+		check.Error = fmt.Sprintf("artifact = %#v", artifact)
+	}
+	return check
+}
+
+func putFakeArtifactContent(ctx context.Context, client *http.Client, baseURL, uploadID, name string, body []byte) fakePublicAPICheck {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPut, baseURL+"/v1/artifact-uploads/"+uploadID+"/content", bytes.NewReader(body))
+	if err != nil {
+		return fakePublicAPICheck{Name: name, Error: err.Error()}
+	}
+	req.Header.Set("X-Request-ID", "req_contract_fake_artifacts")
+	req.Header.Set("Content-Type", "text/plain")
+	req.Header.Set("Idempotency-Key", "fake-artifacts-content")
+	resp, err := client.Do(req)
+	if err != nil {
+		return fakePublicAPICheck{Name: name, Error: err.Error()}
+	}
+	defer resp.Body.Close()
+	check := fakePublicAPICheck{Name: name, HTTPStatus: resp.StatusCode}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		check.Error = fmt.Sprintf("HTTP %d", resp.StatusCode)
+		return check
+	}
+	var envelope fakePolicyEnvelope
+	if err := json.NewDecoder(resp.Body).Decode(&envelope); err != nil {
+		check.Error = err.Error()
+		return check
+	}
+	if !envelope.OK {
+		check.Error = envelope.Error.Message
+		return check
+	}
+	check.OK = true
+	return check
+}
+
+func requestFakeArtifactsJSON(ctx context.Context, client *http.Client, baseURL, method, path, name string, headers map[string]string, body any, out any) fakePublicAPICheck {
+	req, err := newFakeJSONRequest(ctx, method, baseURL+path, body)
+	if err != nil {
+		return fakePublicAPICheck{Name: name, Error: err.Error()}
+	}
+	req.Header.Set("X-Request-ID", "req_contract_fake_artifacts")
+	for key, value := range headers {
+		req.Header.Set(key, value)
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return fakePublicAPICheck{Name: name, Error: err.Error()}
+	}
+	defer resp.Body.Close()
+	check := fakePublicAPICheck{Name: name, HTTPStatus: resp.StatusCode}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		check.Error = fmt.Sprintf("HTTP %d", resp.StatusCode)
+		return check
+	}
+	var envelope fakePolicyEnvelope
+	if err := json.NewDecoder(resp.Body).Decode(&envelope); err != nil {
+		check.Error = err.Error()
+		return check
+	}
+	if !envelope.OK {
+		check.Error = envelope.Error.Message
+		return check
+	}
+	if err := json.Unmarshal(envelope.Data, out); err != nil {
+		check.Error = err.Error()
+		return check
+	}
+	check.OK = true
+	return check
+}
+
+func requestFakeArtifactsExpectedError(ctx context.Context, client *http.Client, baseURL, method, path, name string, wantStatus int, wantCode string, headers map[string]string, body any) fakePublicAPICheck {
+	req, err := newFakeJSONRequest(ctx, method, baseURL+path, body)
+	if err != nil {
+		return fakePublicAPICheck{Name: name, Error: err.Error()}
+	}
+	req.Header.Set("X-Request-ID", "req_contract_fake_artifacts")
+	for key, value := range headers {
+		req.Header.Set(key, value)
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return fakePublicAPICheck{Name: name, Error: err.Error()}
+	}
+	defer resp.Body.Close()
+	check := fakePublicAPICheck{Name: name, HTTPStatus: resp.StatusCode}
+	var envelope fakePolicyEnvelope
+	if err := json.NewDecoder(resp.Body).Decode(&envelope); err != nil {
+		check.Error = err.Error()
+		return check
+	}
+	if resp.StatusCode != wantStatus {
+		check.Error = fmt.Sprintf("HTTP %d, want %d", resp.StatusCode, wantStatus)
+		return check
+	}
+	if envelope.OK || envelope.Error.Code != wantCode {
+		check.Error = fmt.Sprintf("error code = %q, want %q", envelope.Error.Code, wantCode)
+		return check
+	}
+	check.OK = true
+	return check
+}
+
+func checksumStringForSmoke(body []byte) string {
+	sum := sha256.Sum256(body)
+	return fmt.Sprintf("sha256:%x", sum)
 }
 
 func appendFakeJobsChecks(ctx context.Context, checks *[]fakePublicAPICheck) {

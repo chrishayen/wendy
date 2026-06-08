@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -508,6 +509,151 @@ func TestFakeLeasesHandlerSupportsDeniedAndUnavailableBehavior(t *testing.T) {
 	}
 }
 
+func TestFakeArtifactsHandlerExposesAvailableDeniedExpiredAndMissingOutcomes(t *testing.T) {
+	handler, err := NewFakeArtifactsHandler(FakeArtifactsConfig{Now: fixedFakeClock})
+	if err != nil {
+		t.Fatalf("new fake artifacts: %v", err)
+	}
+	server := httptest.NewServer(handler)
+	defer server.Close()
+
+	listEnvelope := doFakeArtifactsEnvelope(t, server, http.MethodGet, "/v1/artifacts?producer_ref=job_fake_001", nil, nil, http.StatusOK)
+	var list struct {
+		Items []contracts.Artifact `json:"items"`
+	}
+	decodeEnvelopeData(t, listEnvelope, &list)
+	if len(list.Items) != 1 || list.Items[0].ArtifactID != "art_fake_available" {
+		t.Fatalf("list = %#v", list.Items)
+	}
+
+	metadata := doFakeArtifactsEnvelope(t, server, http.MethodGet, "/v1/artifacts/art_fake_available", nil, nil, http.StatusOK)
+	var artifact contracts.Artifact
+	decodeEnvelopeData(t, metadata, &artifact)
+	if artifact.OwnerSubjectID != "sub_fake_agent" || artifact.Links["content"] == nil {
+		t.Fatalf("artifact = %#v", artifact)
+	}
+
+	policy := doFakeArtifactsEnvelope(t, server, http.MethodGet, "/v1/artifacts/art_fake_available/policy-context", nil, nil, http.StatusOK)
+	var context contracts.ArtifactPolicyContext
+	decodeEnvelopeData(t, policy, &context)
+	if context.ArtifactID != "art_fake_available" || context.OwnerSubjectID != "sub_fake_agent" {
+		t.Fatalf("policy context = %#v", context)
+	}
+
+	body, headers := doFakeArtifactContent(t, server, "/v1/artifacts/art_fake_available/content", http.StatusOK)
+	if string(body) != "fake artifact body" || headers.Get("Digest") != checksumString(body) {
+		t.Fatalf("content body=%q headers=%#v", string(body), headers)
+	}
+
+	denied := doFakeArtifactsEnvelope(t, server, http.MethodGet, "/v1/artifacts/art_fake_denied", nil, nil, http.StatusForbidden)
+	if denied.OK || denied.Error.Code != "forbidden" {
+		t.Fatalf("denied = %#v", denied)
+	}
+	expired := doFakeArtifactsEnvelope(t, server, http.MethodGet, "/v1/artifacts/art_fake_expired", nil, nil, http.StatusGone)
+	if expired.OK || expired.Error.Code != "artifact_expired" {
+		t.Fatalf("expired = %#v", expired)
+	}
+	missing := doFakeArtifactsEnvelope(t, server, http.MethodGet, "/v1/artifacts/art_missing", nil, nil, http.StatusNotFound)
+	if missing.OK || missing.Error.Code != "not_found" {
+		t.Fatalf("missing = %#v", missing)
+	}
+
+	upload := doFakeArtifactsEnvelope(t, server, http.MethodGet, "/v1/artifact-uploads/upload_fake_expired", nil, nil, http.StatusOK)
+	var session contracts.ArtifactUploadSession
+	decodeEnvelopeData(t, upload, &session)
+	if session.State != contracts.ArtifactUploadExpired {
+		t.Fatalf("upload = %#v", session)
+	}
+	expiredPut := doFakeArtifactPutContent(t, server, "/v1/artifact-uploads/upload_fake_expired/content", []byte("late"), map[string]string{"Idempotency-Key": "content-expired"}, http.StatusGone)
+	if expiredPut.OK || expiredPut.Error.Code != "artifact_expired" {
+		t.Fatalf("expired put = %#v", expiredPut)
+	}
+}
+
+func TestFakeArtifactsHandlerUploadLifecycleAndRegisterLocal(t *testing.T) {
+	handler, err := NewFakeArtifactsHandler(FakeArtifactsConfig{Now: fixedFakeClock})
+	if err != nil {
+		t.Fatalf("new fake artifacts: %v", err)
+	}
+	server := httptest.NewServer(handler)
+	defer server.Close()
+
+	missingKey := doFakeArtifactsEnvelope(t, server, http.MethodPost, "/v1/artifact-uploads", nil, contracts.CreateArtifactUploadRequest{
+		Name:           "result.txt",
+		MediaType:      "text/plain",
+		OwnerSubjectID: "sub_agent",
+	}, http.StatusBadRequest)
+	if missingKey.OK || missingKey.Error.Code != "missing_idempotency_key" {
+		t.Fatalf("missing key = %#v", missingKey)
+	}
+
+	created := doFakeArtifactsEnvelope(t, server, http.MethodPost, "/v1/artifact-uploads", map[string]string{"Idempotency-Key": "upload-create"}, contracts.CreateArtifactUploadRequest{
+		Name:           "result.txt",
+		MediaType:      "text/plain",
+		ProducerRef:    "job_upload",
+		OwnerSubjectID: "sub_agent",
+	}, http.StatusCreated)
+	var session contracts.ArtifactUploadSession
+	decodeEnvelopeData(t, created, &session)
+	if session.State != contracts.ArtifactUploadCreated || session.UploadID == "" {
+		t.Fatalf("created = %#v", session)
+	}
+
+	body := []byte("uploaded artifact")
+	received := doFakeArtifactPutContent(t, server, "/v1/artifact-uploads/"+session.UploadID+"/content", body, map[string]string{"Idempotency-Key": "upload-content"}, http.StatusOK)
+	decodeEnvelopeData(t, received, &session)
+	if session.State != contracts.ArtifactUploadReceived || session.ReceivedSize == nil || *session.ReceivedSize != int64(len(body)) {
+		t.Fatalf("received = %#v", session)
+	}
+
+	completed := doFakeArtifactsEnvelope(t, server, http.MethodPost, "/v1/artifact-uploads/"+session.UploadID+"/complete", map[string]string{"Idempotency-Key": "upload-complete"}, contracts.CompleteArtifactUploadRequest{
+		Checksum: checksumString(body),
+		Size:     int64(len(body)),
+	}, http.StatusCreated)
+	var artifact contracts.Artifact
+	decodeEnvelopeData(t, completed, &artifact)
+	if artifact.ProducerRef != "job_upload" || artifact.OwnerSubjectID != "sub_agent" {
+		t.Fatalf("completed artifact = %#v", artifact)
+	}
+
+	readBody, _ := doFakeArtifactContent(t, server, "/v1/artifacts/"+artifact.ArtifactID+"/content", http.StatusOK)
+	if string(readBody) != string(body) {
+		t.Fatalf("read body = %q", string(readBody))
+	}
+
+	local := doFakeArtifactsEnvelope(t, server, http.MethodPost, "/v1/artifacts/register-local", nil, contracts.RegisterLocalArtifactRequest{
+		Path:           "/tmp/secret-provider-path.txt",
+		Name:           "local.txt",
+		MediaType:      "text/plain",
+		OwnerSubjectID: "sub_agent",
+	}, http.StatusCreated)
+	decodeEnvelopeData(t, local, &artifact)
+	raw, err := json.Marshal(artifact)
+	if err != nil {
+		t.Fatalf("marshal artifact: %v", err)
+	}
+	if bytes.Contains(raw, []byte("secret-provider-path")) {
+		t.Fatalf("local artifact leaked path: %s", string(raw))
+	}
+}
+
+func TestFakeArtifactsHandlerSupportsUnavailableBehavior(t *testing.T) {
+	handler, err := NewFakeArtifactsHandler(FakeArtifactsConfig{
+		Behavior: FakeComponentUnavailable,
+		Now:      fixedFakeClock,
+	})
+	if err != nil {
+		t.Fatalf("new fake artifacts: %v", err)
+	}
+	server := httptest.NewServer(handler)
+	defer server.Close()
+
+	envelope := doFakeArtifactsEnvelope(t, server, http.MethodGet, "/v1/artifacts/health", nil, nil, http.StatusServiceUnavailable)
+	if envelope.OK || envelope.Error.Code != "component_unavailable" || !envelope.Error.Retryable {
+		t.Fatalf("envelope = %#v", envelope)
+	}
+}
+
 func TestFakePolicyHandlerSupportsAuthAllowAndDeny(t *testing.T) {
 	handler := NewFakePolicyHandler(FakePolicyConfig{
 		ValidCredential: "token_policy",
@@ -989,6 +1135,87 @@ func doFakeLeasesEnvelope(t *testing.T, server *httptest.Server, method, path st
 		t.Fatalf("decode envelope: %v", err)
 	}
 	return envelope
+}
+
+func doFakeArtifactsEnvelope(t *testing.T, server *httptest.Server, method, path string, headers map[string]string, body any, wantStatus int) fakePolicyEnvelope {
+	t.Helper()
+	var req *http.Request
+	var err error
+	if body != nil {
+		raw, err := json.Marshal(body)
+		if err != nil {
+			t.Fatalf("marshal body: %v", err)
+		}
+		req, err = http.NewRequest(method, server.URL+path, bytes.NewReader(raw))
+	} else {
+		req, err = http.NewRequest(method, server.URL+path, nil)
+	}
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	req.Header.Set("X-Request-ID", "req_fake_artifacts")
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	for key, value := range headers {
+		req.Header.Set(key, value)
+	}
+	resp, err := server.Client().Do(req)
+	if err != nil {
+		t.Fatalf("%s %s: %v", method, path, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != wantStatus {
+		t.Fatalf("%s %s status = %d, want %d", method, path, resp.StatusCode, wantStatus)
+	}
+	var envelope fakePolicyEnvelope
+	if err := json.NewDecoder(resp.Body).Decode(&envelope); err != nil {
+		t.Fatalf("decode envelope: %v", err)
+	}
+	return envelope
+}
+
+func doFakeArtifactPutContent(t *testing.T, server *httptest.Server, path string, body []byte, headers map[string]string, wantStatus int) fakePolicyEnvelope {
+	t.Helper()
+	req, err := http.NewRequest(http.MethodPut, server.URL+path, bytes.NewReader(body))
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	req.Header.Set("X-Request-ID", "req_fake_artifacts")
+	req.Header.Set("Content-Type", "text/plain")
+	for key, value := range headers {
+		req.Header.Set(key, value)
+	}
+	resp, err := server.Client().Do(req)
+	if err != nil {
+		t.Fatalf("PUT %s: %v", path, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != wantStatus {
+		t.Fatalf("PUT %s status = %d, want %d", path, resp.StatusCode, wantStatus)
+	}
+	var envelope fakePolicyEnvelope
+	if err := json.NewDecoder(resp.Body).Decode(&envelope); err != nil {
+		t.Fatalf("decode envelope: %v", err)
+	}
+	return envelope
+}
+
+func doFakeArtifactContent(t *testing.T, server *httptest.Server, path string, wantStatus int) ([]byte, http.Header) {
+	t.Helper()
+	resp, err := server.Client().Get(server.URL + path)
+	if err != nil {
+		t.Fatalf("GET %s: %v", path, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != wantStatus {
+		t.Fatalf("GET %s status = %d, want %d", path, resp.StatusCode, wantStatus)
+	}
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read body: %v", err)
+	}
+	return body, resp.Header
 }
 
 func decodeEnvelopeData(t *testing.T, envelope fakePolicyEnvelope, out any) {
