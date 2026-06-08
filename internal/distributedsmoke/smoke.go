@@ -200,6 +200,7 @@ func Run(ctx context.Context) DistributedSmokeReport {
 		NodeStartTimeout:    2 * time.Second,
 		NodePollInterval:    10 * time.Millisecond,
 		ComponentCredential: "Bearer " + runnerToken,
+		ActorSubjectID:      runnerID,
 		Client:              client,
 	})
 	runJobID, ok, err := r.RunOnce(ctx)
@@ -234,12 +235,27 @@ func Run(ctx context.Context) DistributedSmokeReport {
 	checkGatewayArtifactContent(ctx, client, gatewayHTTP.URL, agentToken, report.ArtifactID, &report)
 	checkNodeService(ctx, client, nodeHTTP.URL, runnerToken, serviceID, &report)
 	checkNodeStartMetric(ctx, client, nodeHTTP.URL, runnerToken, &report)
+	checkLeaseReleaseAudit(leaseStore, runnerID, jobID, &report)
 	if providerInvocations.Load() != 1 {
 		report.add(DistributedSmokeCheck{Name: "provider.invoked", Error: fmt.Sprintf("invocations=%d", providerInvocations.Load())})
 	} else {
 		report.add(DistributedSmokeCheck{Name: "provider.invoked", OK: true})
 	}
 	return report
+}
+
+func checkLeaseReleaseAudit(store *leases.Store, runnerID, jobID string, report *DistributedSmokeReport) {
+	events := store.AuditEvents()
+	if len(events) != 1 {
+		report.add(DistributedSmokeCheck{Name: "leases.release_audit", Error: fmt.Sprintf("audit_events=%d", len(events))})
+		return
+	}
+	event := events[0]
+	if event.ActorSubjectID != runnerID || event.HolderID != jobID || event.EventType != "lease.released" {
+		report.add(DistributedSmokeCheck{Name: "leases.release_audit", Error: fmt.Sprintf("event=%#v", event)})
+		return
+	}
+	report.add(DistributedSmokeCheck{Name: "leases.release_audit", OK: true})
 }
 
 func distributedProviderManifest(serviceID, capabilityID, endpoint string) contracts.ProviderManifest {

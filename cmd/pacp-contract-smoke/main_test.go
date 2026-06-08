@@ -165,6 +165,7 @@ func TestRunDistributedSmokePasses(t *testing.T) {
 		"check=gateway.invoke status=pass",
 		"check=runner.run_once status=pass",
 		"check=node.service_running status=pass",
+		"check=leases.release_audit status=pass",
 		"check=provider.invoked status=pass",
 		"distributed-smoke=pass",
 	} {
