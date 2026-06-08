@@ -15,9 +15,13 @@ func ValidateObject(value map[string]any, schema map[string]any) error {
 	if schemaType, _ := schema["type"].(string); schemaType != "" && schemaType != "object" {
 		return fmt.Errorf("only object schemas are supported")
 	}
+	return validateObject("", value, schema)
+}
+
+func validateObject(prefix string, value map[string]any, schema map[string]any) error {
 	for _, required := range SchemaStringSlice(schema["required"]) {
 		if _, ok := value[required]; !ok {
-			return fmt.Errorf("%s is required", required)
+			return fmt.Errorf("%s is required", schemaPath(prefix, required))
 		}
 	}
 	properties, _ := schema["properties"].(map[string]any)
@@ -27,20 +31,66 @@ func ValidateObject(value map[string]any, schema map[string]any) error {
 		if !exists || actual == nil {
 			continue
 		}
-		if expected, _ := property["type"].(string); expected != "" && !matchesJSONType(actual, expected) {
-			return fmt.Errorf("%s must be %s", key, expected)
-		}
-		if enumValues := schemaList(property["enum"]); len(enumValues) > 0 && !matchesEnumValue(actual, enumValues) {
-			return fmt.Errorf("%s must be one of %s", key, enumDescription(enumValues))
-		}
-		if err := validateStringBounds(key, actual, property); err != nil {
-			return err
-		}
-		if err := validateNumberBounds(key, actual, property); err != nil {
+		if err := validateSchemaValue(schemaPath(prefix, key), actual, property); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+func validateSchemaValue(path string, value any, schema map[string]any) error {
+	expected, _ := schema["type"].(string)
+	if expected != "" && !matchesJSONType(value, expected) {
+		return fmt.Errorf("%s must be %s", path, expected)
+	}
+	if enumValues := schemaList(schema["enum"]); len(enumValues) > 0 && !matchesEnumValue(value, enumValues) {
+		return fmt.Errorf("%s must be one of %s", path, enumDescription(enumValues))
+	}
+	if err := validateStringBounds(path, value, schema); err != nil {
+		return err
+	}
+	if err := validateNumberBounds(path, value, schema); err != nil {
+		return err
+	}
+	if err := validateNestedObject(path, value, schema); err != nil {
+		return err
+	}
+	if err := validateArrayItems(path, value, schema); err != nil {
+		return err
+	}
+	return nil
+}
+
+func validateNestedObject(path string, value any, schema map[string]any) error {
+	if _, hasProperties := schema["properties"]; !hasProperties {
+		return nil
+	}
+	object, ok := value.(map[string]any)
+	if !ok {
+		return nil
+	}
+	return validateObject(path, object, schema)
+}
+
+func validateArrayItems(path string, value any, schema map[string]any) error {
+	itemSchema, _ := schema["items"].(map[string]any)
+	if itemSchema == nil || !matchesJSONType(value, "array") {
+		return nil
+	}
+	items := reflect.ValueOf(value)
+	for i := 0; i < items.Len(); i++ {
+		if err := validateSchemaValue(fmt.Sprintf("%s[%d]", path, i), items.Index(i).Interface(), itemSchema); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func schemaPath(prefix, key string) string {
+	if prefix == "" {
+		return key
+	}
+	return prefix + "." + key
 }
 
 func SchemaStringSlice(value any) []string {
@@ -61,6 +111,9 @@ func SchemaStringSlice(value any) []string {
 }
 
 func matchesJSONType(value any, expected string) bool {
+	if value == nil {
+		return false
+	}
 	switch expected {
 	case "string":
 		_, ok := value.(string)

@@ -87,10 +87,42 @@ func TestValidateObjectAcceptsTypedGoSlicesAsArrays(t *testing.T) {
 	schema := map[string]any{
 		"type": "object",
 		"properties": map[string]any{
-			"tags": map[string]any{"type": "array"},
+			"tags": map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
 		},
 	}
 	if err := ValidateObject(map[string]any{"tags": []string{"gpu", "image"}}, schema); err != nil {
 		t.Fatalf("ValidateObject returned error for typed slice: %v", err)
+	}
+}
+
+func TestValidateObjectRejectsInvalidArrayItem(t *testing.T) {
+	schema := map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"artifact_refs": map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
+		},
+	}
+	err := ValidateObject(map[string]any{"artifact_refs": []any{"art_1", 42}}, schema)
+	if err == nil || err.Error() != "artifact_refs[1] must be string" {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestValidateObjectRejectsInvalidNestedObjectProperty(t *testing.T) {
+	schema := map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"metadata": map[string]any{
+				"type":     "object",
+				"required": []any{"source"},
+				"properties": map[string]any{
+					"source": map[string]any{"type": "string"},
+				},
+			},
+		},
+	}
+	err := ValidateObject(map[string]any{"metadata": map[string]any{"source": 7}}, schema)
+	if err == nil || err.Error() != "metadata.source must be string" {
+		t.Fatalf("error = %v", err)
 	}
 }
