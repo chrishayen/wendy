@@ -67,10 +67,30 @@ func run(args []string, stdout, stderr io.Writer, httpClient *http.Client) int {
 	report := testkit.ValidateScenario(scenario)
 	fmt.Fprintf(stdout, "scenario=%s status=%s packages=%d files=%d fixtures=%d\n",
 		scenario.Manifest.ScenarioID, scenario.Manifest.Status, len(scenario.Packages), report.Files, report.Fixtures)
-	if report.Passed() {
+	if !report.Passed() {
+		for _, finding := range report.Findings {
+			if finding.Fixture == "" {
+				fmt.Fprintf(stderr, "%s: %s: %s\n", finding.File, finding.Code, finding.Message)
+				continue
+			}
+			fmt.Fprintf(stderr, "%s:%s: %s: %s\n", finding.File, finding.Fixture, finding.Code, finding.Message)
+		}
+		return 1
+	}
+	replayReport := testkit.ReplayScenarioFixtures(scenario)
+	fmt.Fprintf(stdout, "fixture-replay=checked packages=%d exchanges=%d\n", replayReport.Packages, replayReport.Exchanges)
+	if replayReport.Passed() {
+		fmt.Fprintln(stdout, "fixture-replay=pass")
 		fmt.Fprintln(stdout, "contract-smoke=pass")
 		return 0
 	}
+	for _, finding := range replayReport.Findings {
+		fmt.Fprintf(stderr, "%s:%s: fixture_replay_failed: %s\n", finding.Path, finding.FixtureID, finding.Message)
+	}
+	return 1
+}
+
+func writeContractFindings(stderr io.Writer, report contracts.Report) {
 	for _, finding := range report.Findings {
 		if finding.Fixture == "" {
 			fmt.Fprintf(stderr, "%s: %s: %s\n", finding.File, finding.Code, finding.Message)
@@ -78,7 +98,6 @@ func run(args []string, stdout, stderr io.Writer, httpClient *http.Client) int {
 		}
 		fmt.Fprintf(stderr, "%s:%s: %s: %s\n", finding.File, finding.Fixture, finding.Code, finding.Message)
 	}
-	return 1
 }
 
 func runDistributedSmoke(timeout time.Duration, stdout, stderr io.Writer) int {

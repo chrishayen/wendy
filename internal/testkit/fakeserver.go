@@ -257,6 +257,10 @@ func (s *FixtureServer) requestMatches(r *http.Request, body []byte, fixture con
 		expected, err := readBase64Fixture(filepath.Join(s.packageDir, fixture.BodyFixture))
 		return err == nil && reflect.DeepEqual(expected, body)
 	}
+	if fixture.BodyBase64 != "" {
+		expected, err := base64.StdEncoding.DecodeString(fixture.BodyBase64)
+		return err == nil && reflect.DeepEqual(expected, body)
+	}
 	if fixture.Body != nil {
 		var actual any
 		if err := json.Unmarshal(body, &actual); err != nil {

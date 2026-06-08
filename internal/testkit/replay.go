@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"path/filepath"
 	"reflect"
+	"sort"
 
 	"pacp/internal/contracts"
 )
@@ -22,6 +23,45 @@ type ReplayResult struct {
 	RawBody   []byte
 }
 
+type ScenarioReplayReport struct {
+	Packages  int
+	Exchanges int
+	Findings  []ScenarioReplayFinding
+}
+
+type ScenarioReplayFinding struct {
+	Owner     string
+	Path      string
+	FixtureID string
+	Message   string
+}
+
+func (r ScenarioReplayReport) Passed() bool {
+	return len(r.Findings) == 0
+}
+
+func ReplayScenarioFixtures(s Scenario) ScenarioReplayReport {
+	report := ScenarioReplayReport{}
+	for _, pkg := range s.Packages {
+		report.Packages++
+		server := NewFixtureServer(pkg)
+		for _, fixture := range pkg.File.Fixtures {
+			for _, exchange := range fixtureReplayExchanges(fixture) {
+				report.Exchanges++
+				if _, err := replayHTTPExchange(server, pkg, exchange.fixtureID, exchange.request, exchange.response); err != nil {
+					report.Findings = append(report.Findings, ScenarioReplayFinding{
+						Owner:     pkg.Owner,
+						Path:      pkg.Path,
+						FixtureID: exchange.fixtureID,
+						Message:   err.Error(),
+					})
+				}
+			}
+		}
+	}
+	return report
+}
+
 func ReplayHTTPFixture(handler http.Handler, pkg FixturePackage, fixtureID string) (ReplayResult, error) {
 	fixture, ok := findFixture(pkg, fixtureID)
 	if !ok {
@@ -30,6 +70,122 @@ func ReplayHTTPFixture(handler http.Handler, pkg FixturePackage, fixtureID strin
 	if fixture.Request == nil || fixture.Response == nil {
 		return ReplayResult{}, fmt.Errorf("fixture %s is not an HTTP exchange", fixtureID)
 	}
+	result, err := replayHTTPExchange(handler, pkg, fixtureID, fixture.Request, fixture.Response)
+	if err != nil {
+		return result, err
+	}
+	return result, nil
+}
+
+type replayExchange struct {
+	fixtureID string
+	request   *contracts.HTTPRequest
+	response  *contracts.HTTPResponse
+}
+
+func fixtureReplayExchanges(fixture contracts.Fixture) []replayExchange {
+	exchanges := []replayExchange{}
+	if fixture.Request != nil && fixture.Response != nil {
+		exchanges = append(exchanges, replayExchange{fixtureID: fixture.ID, request: fixture.Request, response: fixture.Response})
+	}
+	for i := range fixture.Steps {
+		step := fixture.Steps[i]
+		if step.Request != nil && step.Response != nil {
+			exchanges = append(exchanges, replayExchange{fixtureID: stepFixtureID(fixture.ID, "step", i, step), request: step.Request, response: step.Response})
+		}
+	}
+	if fixture.TimeoutInvoke != nil && fixture.TimeoutInvoke.Request != nil && fixture.TimeoutInvoke.Response != nil {
+		exchanges = append(exchanges, replayExchange{fixtureID: stepFixtureID(fixture.ID, "timeout_invoke", 0, *fixture.TimeoutInvoke), request: fixture.TimeoutInvoke.Request, response: fixture.TimeoutInvoke.Response})
+	}
+	for i := range fixture.TimeoutCleanup {
+		step := fixture.TimeoutCleanup[i]
+		if step.Request != nil && step.Response != nil {
+			exchanges = append(exchanges, replayExchange{fixtureID: stepFixtureID(fixture.ID, "timeout_cleanup", i, step), request: step.Request, response: step.Response})
+		}
+	}
+	exchanges = append(exchanges, eventListReplayExchanges(fixture.ID, "event_list", fixture.EventList)...)
+	exchanges = append(exchanges, eventListReplayExchanges(fixture.ID, "liveness_event_list", fixture.LivenessEventList)...)
+	return exchanges
+}
+
+func stepFixtureID(fixtureID, kind string, index int, step contracts.OrchestrationStep) string {
+	switch {
+	case step.Fixture != "":
+		return step.Fixture
+	case step.FixtureRef != "":
+		return step.FixtureRef
+	default:
+		return fmt.Sprintf("%s.%s.%d", fixtureID, kind, index)
+	}
+}
+
+func eventListReplayExchanges(fixtureID, listName string, eventList map[string]any) []replayExchange {
+	if len(eventList) == 0 {
+		return nil
+	}
+	events, _ := eventList["events"].([]any)
+	if len(events) == 0 {
+		return nil
+	}
+	if requestTemplate, ok := eventList["request_template"]; ok {
+		responseTemplate, ok := eventList["response_template"]
+		if !ok {
+			return nil
+		}
+		exchanges := make([]replayExchange, 0, len(events))
+		for i, rawEvent := range events {
+			if exchange, ok := eventReplayExchange(fixtureID, listName, "", i, rawEvent, requestTemplate, responseTemplate); ok {
+				exchanges = append(exchanges, exchange)
+			}
+		}
+		return exchanges
+	}
+
+	requestTemplates, _ := eventList["request_templates"].(map[string]any)
+	responseTemplates, _ := eventList["response_templates"].(map[string]any)
+	if len(requestTemplates) == 0 || len(responseTemplates) == 0 {
+		return nil
+	}
+	names := make([]string, 0, len(requestTemplates))
+	for name := range requestTemplates {
+		if _, ok := responseTemplates[name]; ok {
+			names = append(names, name)
+		}
+	}
+	sort.Strings(names)
+	exchanges := []replayExchange{}
+	for i, rawEvent := range events {
+		for _, name := range names {
+			if exchange, ok := eventReplayExchange(fixtureID, listName, name, i, rawEvent, requestTemplates[name], responseTemplates[name]); ok {
+				exchanges = append(exchanges, exchange)
+			}
+		}
+	}
+	return exchanges
+}
+
+func eventReplayExchange(fixtureID, listName, templateName string, index int, rawEvent any, requestTemplate any, responseTemplate any) (replayExchange, bool) {
+	event, ok := rawEvent.(map[string]any)
+	if !ok {
+		return replayExchange{}, false
+	}
+	var request contracts.HTTPRequest
+	if !decodeTemplate(requestTemplate, event, &request) {
+		return replayExchange{}, false
+	}
+	var response contracts.HTTPResponse
+	if !decodeTemplate(responseTemplate, event, &response) {
+		return replayExchange{}, false
+	}
+	id := fmt.Sprintf("%s.%s.%d", fixtureID, listName, index)
+	if templateName != "" {
+		id = fmt.Sprintf("%s.%s.%s.%d", fixtureID, listName, templateName, index)
+	}
+	return replayExchange{fixtureID: id, request: &request, response: &response}, true
+}
+
+func replayHTTPExchange(handler http.Handler, pkg FixturePackage, fixtureID string, request *contracts.HTTPRequest, response *contracts.HTTPResponse) (ReplayResult, error) {
+	fixture := contracts.Fixture{ID: fixtureID, Request: request, Response: response}
 	req, err := requestFromFixture(pkg, fixture)
 	if err != nil {
 		return ReplayResult{}, err
@@ -86,7 +242,7 @@ func requestFromFixture(pkg FixturePackage, fixture contracts.Fixture) (*http.Re
 	for key, value := range fixture.Request.Headers {
 		req.Header.Set(key, value)
 	}
-	if len(body) > 0 && fixture.Request.BodyFixture == "" {
+	if len(body) > 0 && fixture.Request.Body != nil && req.Header.Get("Content-Type") == "" {
 		req.Header.Set("Content-Type", "application/json")
 	}
 	if req.Header.Get("X-Request-ID") == "" {

@@ -25,6 +25,9 @@ func TestRunScenarioSmokeStillPasses(t *testing.T) {
 	if !strings.Contains(stdout.String(), "contract-smoke=pass") {
 		t.Fatalf("stdout = %s", stdout.String())
 	}
+	if !strings.Contains(stdout.String(), "fixture-replay=pass") {
+		t.Fatalf("stdout = %s", stdout.String())
+	}
 }
 
 func TestRunProviderSmokeChecksLiveProvider(t *testing.T) {
