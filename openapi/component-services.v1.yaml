@@ -920,7 +920,10 @@ paths:
         - nodeBearer: []
       parameters:
         - $ref: "#/components/parameters/ServiceID"
+        - $ref: "#/components/parameters/IdempotencyKeyRequired"
       responses:
+        "200":
+          $ref: "#/components/responses/Success"
         "202":
           $ref: "#/components/responses/Success"
         default:

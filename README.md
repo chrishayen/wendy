@@ -170,9 +170,9 @@ Node resource declarations can be converted into lease resource seed files:
 go run ./cmd/pacp-node -config testdata/node/linux-gpu-fake.json -export-lease-resources
 ```
 
-Node service start is a side-effecting operation and requires an
-`Idempotency-Key`; `pacp-admin node start` and the runner set this header for
-you.
+Node service start and stop are side-effecting operations and require an
+`Idempotency-Key`; `pacp-admin node start` and `pacp-admin node stop` expose an
+`-idempotency-key` flag, and runner start operations set this header for you.
 
 For distributed deployments, set `PACP_COMPONENT_TOKEN` or `-component-token`
 on catalog, jobs, leases, artifacts, and policy services. `pacp-gateway` and
@@ -236,7 +236,7 @@ go run ./cmd/pacp-admin -node-urls node_linux_gpu=http://localhost:18087 -node-t
 go run ./cmd/pacp-admin catalog route cap_image_generate_gpu
 go run ./cmd/pacp-admin -node-url http://localhost:18087 -node-token token_agent_smoke node services
 go run ./cmd/pacp-admin -node-url http://localhost:18087 -node-token token_runner_smoke node start svc_comfyui_gpu -idempotency-key start-comfy-1
-go run ./cmd/pacp-admin -node-url http://localhost:18087 -node-token token_runner_smoke node stop svc_comfyui_gpu
+go run ./cmd/pacp-admin -node-url http://localhost:18087 -node-token token_runner_smoke node stop svc_comfyui_gpu -idempotency-key stop-comfy-1
 go run ./cmd/pacp-control -gateway-url http://localhost:18086 -token token_agent tools
 ```
 

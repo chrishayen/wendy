@@ -34,9 +34,19 @@ func TestHandlerNodeLifecycle(t *testing.T) {
 	if running["status"] != "running" {
 		t.Fatalf("running = %#v", running)
 	}
-	stopped := doJSON(t, handler, http.MethodPost, "/v1/node/services/svc_comfyui_gpu/stop", headers, http.StatusAccepted)
+	stopped := doJSON(t, handler, http.MethodPost, "/v1/node/services/svc_comfyui_gpu/stop", map[string]string{
+		"Authorization":   "Bearer token_runner",
+		"Idempotency-Key": "stop-http-1",
+	}, http.StatusAccepted)
 	if stopped["status"] != "stopped" {
 		t.Fatalf("stopped = %#v", stopped)
+	}
+	replayedStop := doJSON(t, handler, http.MethodPost, "/v1/node/services/svc_comfyui_gpu/stop", map[string]string{
+		"Authorization":   "Bearer token_runner",
+		"Idempotency-Key": "stop-http-1",
+	}, http.StatusOK)
+	if replayedStop["status"] != "stopped" {
+		t.Fatalf("replayed stop = %#v", replayedStop)
 	}
 	metrics := doJSON(t, handler, http.MethodGet, "/v1/node/metrics", headers, http.StatusOK)
 	if metrics["component"] != "node" {
@@ -61,6 +71,17 @@ func TestHandlerRejectsUnauthorizedLifecycle(t *testing.T) {
 func TestHandlerRequiresIdempotencyForStart(t *testing.T) {
 	handler := NewHandler(newTestStore(t))
 	envelope := doJSONEnvelope(t, handler, http.MethodPost, "/v1/node/services/svc_comfyui_gpu/start", map[string]string{
+		"Authorization": "Bearer token_runner",
+	}, http.StatusBadRequest)
+	errObj := envelope["error"].(map[string]any)
+	if errObj["code"] != "missing_idempotency_key" {
+		t.Fatalf("error = %#v", errObj)
+	}
+}
+
+func TestHandlerRequiresIdempotencyForStop(t *testing.T) {
+	handler := NewHandler(newTestStore(t))
+	envelope := doJSONEnvelope(t, handler, http.MethodPost, "/v1/node/services/svc_comfyui_gpu/stop", map[string]string{
 		"Authorization": "Bearer token_runner",
 	}, http.StatusBadRequest)
 	errObj := envelope["error"].(map[string]any)

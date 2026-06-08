@@ -994,10 +994,7 @@ func nodeCommand(cfg adminConfig, httpClient *http.Client, args []string, stdout
 	case "start":
 		return nodeStartCommand(cfg, httpClient, args[1:], stdout, stderr)
 	case "stop":
-		if len(args) != 2 {
-			return usage(stderr, "usage: pacp-admin [flags] node stop <service-id>")
-		}
-		return postJSON(cfg, httpClient, cfg.NodeURL, "/v1/node/services/"+url.PathEscape(args[1])+"/stop", authorizationHeader(cfg.NodeToken), "", stdout, stderr)
+		return nodeStopCommand(cfg, httpClient, args[1:], stdout, stderr)
 	default:
 		return usage(stderr, "usage: pacp-admin [flags] node <resources|services|service|start|stop> [id]")
 	}
@@ -1018,6 +1015,24 @@ func nodeStartCommand(cfg adminConfig, httpClient *http.Client, args []string, s
 		return usage(stderr, "idempotency-key is required for node start")
 	}
 	path := "/v1/node/services/" + url.PathEscape(remaining[0]) + "/start"
+	return postJSON(cfg, httpClient, cfg.NodeURL, path, authorizationHeader(cfg.NodeToken), *idempotencyKey, stdout, stderr)
+}
+
+func nodeStopCommand(cfg adminConfig, httpClient *http.Client, args []string, stdout, stderr io.Writer) int {
+	flags := flag.NewFlagSet("node stop", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	idempotencyKey := flags.String("idempotency-key", "", "idempotency key for this node stop")
+	remaining, err := parseSubcommandFlags(flags, args)
+	if err != nil {
+		return 2
+	}
+	if len(remaining) != 1 {
+		return usage(stderr, "usage: pacp-admin [flags] node stop <service-id> -idempotency-key <key>")
+	}
+	if *idempotencyKey == "" {
+		return usage(stderr, "idempotency-key is required for node stop")
+	}
+	path := "/v1/node/services/" + url.PathEscape(remaining[0]) + "/stop"
 	return postJSON(cfg, httpClient, cfg.NodeURL, path, authorizationHeader(cfg.NodeToken), *idempotencyKey, stdout, stderr)
 }
 

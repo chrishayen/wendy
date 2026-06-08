@@ -32,7 +32,7 @@ type Store struct {
 	config      contracts.NodeConfig
 	authByToken map[string]contracts.NodeAuthSubject
 	services    map[string]*serviceRecord
-	idempotency map[string]idempotentStart
+	idempotency map[string]idempotentLifecycle
 	startCount  int
 	stopCount   int
 }
@@ -44,7 +44,7 @@ type serviceRecord struct {
 	dockerReadyDeadline time.Time
 }
 
-type idempotentStart struct {
+type idempotentLifecycle struct {
 	fingerprint string
 	serviceID   string
 }
@@ -79,7 +79,7 @@ func NewStore(cfg contracts.NodeConfig) (*Store, error) {
 		config:      cfg,
 		authByToken: map[string]contracts.NodeAuthSubject{},
 		services:    map[string]*serviceRecord{},
-		idempotency: map[string]idempotentStart{},
+		idempotency: map[string]idempotentLifecycle{},
 	}
 	for _, subject := range cfg.Auth {
 		if subject.Token == "" || subject.SubjectID == "" {
@@ -209,6 +209,12 @@ func (s *Store) StartService(serviceID, idempotencyKey string) (contracts.NodeSe
 		if existing.fingerprint != fingerprint {
 			return contracts.NodeService{}, 0, ErrIdempotencyConflict
 		}
+		rec, ok := s.services[serviceID]
+		if !ok {
+			return contracts.NodeService{}, 0, ErrNotFound
+		}
+		s.advanceRuntimeLocked(rec)
+		return serviceProjection(rec), lifecycleReplayStatus(rec), nil
 	}
 	rec, ok := s.services[serviceID]
 	if !ok {
@@ -262,42 +268,70 @@ func (s *Store) StartService(serviceID, idempotencyKey string) (contracts.NodeSe
 	default:
 		return contracts.NodeService{}, 0, ErrRuntimeUnavailable
 	}
-	s.idempotency[idempotencyKey] = idempotentStart{fingerprint: fingerprint, serviceID: serviceID}
+	s.idempotency[idempotencyKey] = idempotentLifecycle{fingerprint: fingerprint, serviceID: serviceID}
 	return serviceProjection(rec), status, nil
 }
 
-func (s *Store) StopService(serviceID string) (contracts.NodeService, error) {
+func (s *Store) StopService(serviceID, idempotencyKey string) (contracts.NodeService, int, error) {
+	if idempotencyKey == "" {
+		return contracts.NodeService{}, 0, ErrMissingIdempotency
+	}
+	fingerprint := "stop:" + serviceID
 	s.mu.Lock()
+	if existing, ok := s.idempotency[idempotencyKey]; ok {
+		if existing.fingerprint != fingerprint {
+			s.mu.Unlock()
+			return contracts.NodeService{}, 0, ErrIdempotencyConflict
+		}
+		rec, ok := s.services[serviceID]
+		if !ok {
+			s.mu.Unlock()
+			return contracts.NodeService{}, 0, ErrNotFound
+		}
+		s.advanceRuntimeLocked(rec)
+		service := serviceProjection(rec)
+		s.mu.Unlock()
+		return service, http.StatusOK, nil
+	}
 	rec, ok := s.services[serviceID]
 	if !ok {
 		s.mu.Unlock()
-		return contracts.NodeService{}, ErrNotFound
+		return contracts.NodeService{}, 0, ErrNotFound
 	}
 	s.advanceRuntimeLocked(rec)
 	if rec.config.RuntimeAdapter == "docker" {
 		config := rec.config
 		s.mu.Unlock()
 		if err := stopDockerRuntime(config); err != nil {
-			return contracts.NodeService{}, err
+			return contracts.NodeService{}, 0, err
 		}
 		s.mu.Lock()
 		rec = s.services[serviceID]
 		rec.status = "stopped"
 		rec.dockerReadyDeadline = time.Time{}
 		s.stopCount++
+		s.idempotency[idempotencyKey] = idempotentLifecycle{fingerprint: fingerprint, serviceID: serviceID}
 		service := serviceProjection(rec)
 		s.mu.Unlock()
-		return service, nil
+		return service, http.StatusAccepted, nil
 	}
 	process := rec.process
 	rec.process = nil
 	rec.status = "stopped"
 	s.stopCount++
+	s.idempotency[idempotencyKey] = idempotentLifecycle{fingerprint: fingerprint, serviceID: serviceID}
 	service := serviceProjection(rec)
 	timeout := processStopTimeout(rec.config)
 	s.mu.Unlock()
 	stopProcessRuntime(process, timeout)
-	return service, nil
+	return service, http.StatusAccepted, nil
+}
+
+func lifecycleReplayStatus(rec *serviceRecord) int {
+	if rec.status == "starting" {
+		return http.StatusAccepted
+	}
+	return http.StatusOK
 }
 
 func (s *Store) advanceRuntimeLocked(rec *serviceRecord) {

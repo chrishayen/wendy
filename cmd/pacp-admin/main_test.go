@@ -1437,6 +1437,9 @@ func TestNodeStopCommandPosts(t *testing.T) {
 		if r.Header.Get("Authorization") != "Bearer node-token" {
 			t.Fatalf("Authorization = %q", r.Header.Get("Authorization"))
 		}
+		if r.Header.Get("Idempotency-Key") != "stop-1" {
+			t.Fatalf("Idempotency-Key = %q", r.Header.Get("Idempotency-Key"))
+		}
 		writeEnvelope(t, w, http.StatusAccepted, map[string]any{"service_id": "svc_gpu", "status": "stopped"})
 	}))
 	defer server.Close()
@@ -1445,13 +1448,24 @@ func TestNodeStopCommandPosts(t *testing.T) {
 	code := run([]string{
 		"-node-url", server.URL,
 		"-node-token", "node-token",
-		"node", "stop", "svc_gpu",
+		"node", "stop", "svc_gpu", "-idempotency-key", "stop-1",
 	}, &stdout, &stderr, server.Client())
 	if code != 0 {
 		t.Fatalf("code=%d stderr=%s stdout=%s", code, stderr.String(), stdout.String())
 	}
 	if !strings.Contains(stdout.String(), `"status": "stopped"`) {
 		t.Fatalf("stdout = %s", stdout.String())
+	}
+}
+
+func TestNodeStopRequiresIdempotencyKey(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := run([]string{"-node-url", "http://node.invalid", "node", "stop", "svc_gpu"}, &stdout, &stderr, http.DefaultClient)
+	if code != 2 {
+		t.Fatalf("code=%d stderr=%s", code, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "idempotency-key is required") {
+		t.Fatalf("stderr = %s", stderr.String())
 	}
 }
 

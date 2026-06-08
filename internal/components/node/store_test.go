@@ -54,12 +54,19 @@ func TestStoreLifecycleAndAuth(t *testing.T) {
 	if status != 200 || replay.Status != "running" {
 		t.Fatalf("start replay status=%d service=%#v", status, replay)
 	}
-	stopped, err := store.StopService("svc_comfyui_gpu")
+	stopped, status, err := store.StopService("svc_comfyui_gpu", "stop-1")
 	if err != nil {
 		t.Fatalf("stop service: %v", err)
 	}
-	if stopped.Status != "stopped" {
-		t.Fatalf("stopped service = %#v", stopped)
+	if status != 202 || stopped.Status != "stopped" {
+		t.Fatalf("stop response status=%d service=%#v", status, stopped)
+	}
+	replayedStop, status, err := store.StopService("svc_comfyui_gpu", "stop-1")
+	if err != nil {
+		t.Fatalf("stop replay: %v", err)
+	}
+	if status != 200 || replayedStop.Status != "stopped" {
+		t.Fatalf("stop replay status=%d service=%#v", status, replayedStop)
 	}
 }
 
@@ -92,7 +99,7 @@ func TestStoreProcessRuntimeLifecycle(t *testing.T) {
 		t.Fatalf("new process store: %v", err)
 	}
 	t.Cleanup(func() {
-		_, _ = store.StopService("svc_process_provider")
+		_, _, _ = store.StopService("svc_process_provider", "cleanup-process")
 	})
 
 	starting, status, err := store.StartService("svc_process_provider", "start-process-1")
@@ -116,12 +123,12 @@ func TestStoreProcessRuntimeLifecycle(t *testing.T) {
 	if status != 200 || replay.Status != "running" {
 		t.Fatalf("replay status=%d service=%#v", status, replay)
 	}
-	stopped, err := store.StopService("svc_process_provider")
+	stopped, status, err := store.StopService("svc_process_provider", "stop-process-1")
 	if err != nil {
 		t.Fatalf("stop process service: %v", err)
 	}
-	if stopped.Status != "stopped" {
-		t.Fatalf("stopped process service = %#v", stopped)
+	if status != 202 || stopped.Status != "stopped" {
+		t.Fatalf("stopped process status=%d service=%#v", status, stopped)
 	}
 	record := store.services["svc_process_provider"]
 	if record.process != nil {
@@ -169,12 +176,12 @@ func TestStoreDockerRuntimeLifecycle(t *testing.T) {
 	if status != 200 || replay.Status != "running" {
 		t.Fatalf("replay status=%d service=%#v", status, replay)
 	}
-	stopped, err := store.StopService("svc_docker_provider")
+	stopped, status, err := store.StopService("svc_docker_provider", "stop-docker-1")
 	if err != nil {
 		t.Fatalf("stop docker service: %v", err)
 	}
-	if stopped.Status != "stopped" {
-		t.Fatalf("stopped docker service = %#v", stopped)
+	if status != 202 || stopped.Status != "stopped" {
+		t.Fatalf("stopped docker status=%d service=%#v", status, stopped)
 	}
 	state, err := os.ReadFile(statePath)
 	if err != nil {

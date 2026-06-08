@@ -93,12 +93,12 @@ func (h Handler) serviceRoute(w http.ResponseWriter, r *http.Request, tail strin
 		if !h.require(w, r, "node.service.stop") {
 			return
 		}
-		service, err := h.store.StopService(serviceID)
+		service, status, err := h.store.StopService(serviceID, r.Header.Get("Idempotency-Key"))
 		if err != nil {
 			writeStoreError(w, r, err)
 			return
 		}
-		writeSuccess(w, r, http.StatusAccepted, service)
+		writeSuccess(w, r, status, service)
 	default:
 		writeError(w, r, http.StatusNotFound, "not_found", "node service route not found", false)
 	}
@@ -125,7 +125,7 @@ func writeStoreError(w http.ResponseWriter, r *http.Request, err error) {
 	case errors.Is(err, ErrRuntimeUnavailable):
 		writeError(w, r, http.StatusServiceUnavailable, "provider_unavailable", "runtime adapter is unavailable", true)
 	case errors.Is(err, ErrMissingIdempotency):
-		writeError(w, r, http.StatusBadRequest, "missing_idempotency_key", "Idempotency-Key header is required for node service start", false)
+		writeError(w, r, http.StatusBadRequest, "missing_idempotency_key", "Idempotency-Key header is required for node service lifecycle operations", false)
 	case errors.Is(err, ErrIdempotencyConflict):
 		writeError(w, r, http.StatusConflict, "idempotency_conflict", "idempotency key was reused with different node lifecycle content", false)
 	default:
