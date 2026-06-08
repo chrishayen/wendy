@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestHealthChecksCoreServicesWithComponentToken(t *testing.T) {
@@ -454,6 +455,83 @@ func TestJobsCancelRequiresGatewayToken(t *testing.T) {
 	}
 	if !strings.Contains(stderr.String(), "gateway-token is required") {
 		t.Fatalf("stderr = %s", stderr.String())
+	}
+}
+
+func TestDiagnoseJobFetchesJobAndLogsWithComponentToken(t *testing.T) {
+	now := time.Now().UTC()
+	seen := map[string]bool{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seen[r.URL.Path] = true
+		if r.Header.Get("Authorization") != "Bearer component-token" {
+			t.Fatalf("%s Authorization = %q", r.URL.Path, r.Header.Get("Authorization"))
+		}
+		switch r.URL.Path {
+		case "/v1/jobs/job_1":
+			writeEnvelope(t, w, http.StatusOK, map[string]any{
+				"job_id":     "job_1",
+				"state":      "running",
+				"created_at": now.Add(-time.Minute).Format(time.RFC3339),
+				"updated_at": now.Format(time.RFC3339),
+				"claim": map[string]any{
+					"worker_id":  "runner_1",
+					"claimed_at": now.Add(-time.Minute).Format(time.RFC3339),
+					"expires_at": now.Add(time.Minute).Format(time.RFC3339),
+				},
+				"metadata": map[string]any{
+					"execution_plan": map[string]any{
+						"resource_selector": "gpu",
+						"route": map[string]any{
+							"node_managed": true,
+							"node_id":      "node_linux_gpu",
+							"service_id":   "svc_comfyui_gpu",
+						},
+					},
+				},
+				"artifact_refs": []any{},
+				"links":         map[string]any{},
+			})
+		case "/v1/jobs/job_1/logs":
+			if r.URL.Query().Get("limit") != "20" {
+				t.Fatalf("logs query = %s", r.URL.RawQuery)
+			}
+			writeEnvelope(t, w, http.StatusOK, map[string]any{
+				"items": []map[string]any{{
+					"timestamp": now.Format(time.RFC3339),
+					"level":     "info",
+					"message":   "running provider invocation",
+				}},
+				"next_cursor": nil,
+			})
+		default:
+			t.Fatalf("request = %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	var stdout, stderr bytes.Buffer
+	code := run([]string{
+		"-jobs-url", server.URL,
+		"-component-token", "component-token",
+		"diagnose", "job", "job_1",
+	}, &stdout, &stderr, server.Client())
+	if code != 0 {
+		t.Fatalf("code=%d stderr=%s stdout=%s", code, stderr.String(), stdout.String())
+	}
+	if !seen["/v1/jobs/job_1"] || !seen["/v1/jobs/job_1/logs"] {
+		t.Fatalf("seen requests = %#v", seen)
+	}
+	output := stdout.String()
+	for _, expected := range []string{
+		`"admin_command": "diagnose job"`,
+		`"code": "job_running"`,
+		`"code": "resource_selector"`,
+		`"code": "node_managed_route"`,
+		`"check node health and service status"`,
+	} {
+		if !strings.Contains(output, expected) {
+			t.Fatalf("stdout missing %q:\n%s", expected, output)
+		}
 	}
 }
 

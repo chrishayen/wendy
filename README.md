@@ -98,6 +98,7 @@ go run ./cmd/pacp-admin -node-urls node_mac=http://mac:18087,node_linux_gpu=http
 go run ./cmd/pacp-admin catalog capabilities
 go run ./cmd/pacp-admin catalog import /tmp/pacp-bundle/catalog
 go run ./cmd/pacp-admin jobs list
+go run ./cmd/pacp-admin diagnose job job_000001
 go run ./cmd/pacp-admin -gateway-token token_agent jobs cancel job_000001 -idempotency-key cancel-1 -reason "stop requested"
 go run ./cmd/pacp-admin leases resources
 go run ./cmd/pacp-admin leases register-resource -resource-id res_gpu_0 -selector gpu -node-id node_linux_gpu -tags gpu,gpu:0

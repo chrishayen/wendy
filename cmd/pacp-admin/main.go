@@ -123,6 +123,8 @@ func run(args []string, stdout, stderr io.Writer, httpClient *http.Client) int {
 		return policyCommand(cfg, httpClient, remaining[1:], stdout, stderr)
 	case "node":
 		return nodeCommand(cfg, httpClient, remaining[1:], stdout, stderr)
+	case "diagnose":
+		return diagnoseCommand(cfg, httpClient, remaining[1:], stdout, stderr)
 	default:
 		printUsage(stderr)
 		fmt.Fprintf(stderr, "unknown command %q\n", remaining[0])
@@ -132,6 +134,19 @@ func run(args []string, stdout, stderr io.Writer, httpClient *http.Client) int {
 
 type healthOptions struct {
 	Providers bool
+}
+
+type diagnosticFinding struct {
+	Severity string `json:"severity"`
+	Code     string `json:"code"`
+	Message  string `json:"message"`
+}
+
+type jobDiagnosticData struct {
+	Job              contracts.Job           `json:"job"`
+	Logs             []contracts.JobLogEntry `json:"logs"`
+	Findings         []diagnosticFinding     `json:"findings"`
+	SuggestedActions []string                `json:"suggested_actions"`
 }
 
 func healthCommand(cfg adminConfig, httpClient *http.Client, args []string, stdout, stderr io.Writer) int {
@@ -883,6 +898,185 @@ func nodeStartCommand(cfg adminConfig, httpClient *http.Client, args []string, s
 	return postJSON(cfg, httpClient, cfg.NodeURL, path, authorizationHeader(cfg.NodeToken), *idempotencyKey, stdout, stderr)
 }
 
+func diagnoseCommand(cfg adminConfig, httpClient *http.Client, args []string, stdout, stderr io.Writer) int {
+	if len(args) == 0 {
+		return usage(stderr, "usage: pacp-admin [flags] diagnose <job> [id]")
+	}
+	switch args[0] {
+	case "job":
+		return diagnoseJobCommand(cfg, httpClient, args[1:], stdout, stderr)
+	default:
+		return usage(stderr, "usage: pacp-admin [flags] diagnose <job> [id]")
+	}
+}
+
+func diagnoseJobCommand(cfg adminConfig, httpClient *http.Client, args []string, stdout, stderr io.Writer) int {
+	if len(args) != 1 {
+		return usage(stderr, "usage: pacp-admin [flags] diagnose job <job-id>")
+	}
+	jobID := args[0]
+	var jobEnvelope struct {
+		OK    bool                  `json:"ok"`
+		Data  contracts.Job         `json:"data"`
+		Error contracts.ErrorObject `json:"error"`
+	}
+	status, err := getJSONDecode(cfg, httpClient, cfg.JobsURL, "/v1/jobs/"+url.PathEscape(jobID), authorizationHeader(cfg.ComponentToken), &jobEnvelope)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	if status < 200 || status >= 300 || !jobEnvelope.OK {
+		message := jobEnvelope.Error.Message
+		if message == "" {
+			message = fmt.Sprintf("jobs service returned HTTP %d", status)
+		}
+		fmt.Fprintln(stderr, message)
+		return 1
+	}
+
+	logs, logFinding := fetchJobLogs(cfg, httpClient, jobID)
+	data := buildJobDiagnostics(jobEnvelope.Data, logs)
+	if logFinding != nil {
+		data.Findings = append(data.Findings, *logFinding)
+		addSuggestedAction(&data.SuggestedActions, "retry log fetch or inspect job service health")
+	}
+	return writeCommandJSON(stdout, stderr, map[string]any{
+		"ok":    true,
+		"data":  data,
+		"links": map[string]any{"job": "/v1/jobs/" + jobID, "logs": "/v1/jobs/" + jobID + "/logs"},
+		"meta":  map[string]string{"schema_version": "v1", "admin_command": "diagnose job"},
+	})
+}
+
+func fetchJobLogs(cfg adminConfig, httpClient *http.Client, jobID string) ([]contracts.JobLogEntry, *diagnosticFinding) {
+	var logsEnvelope struct {
+		OK   bool `json:"ok"`
+		Data struct {
+			Items []contracts.JobLogEntry `json:"items"`
+		} `json:"data"`
+		Error contracts.ErrorObject `json:"error"`
+	}
+	status, err := getJSONDecode(cfg, httpClient, cfg.JobsURL, "/v1/jobs/"+url.PathEscape(jobID)+"/logs?limit=20", authorizationHeader(cfg.ComponentToken), &logsEnvelope)
+	if err != nil {
+		return nil, &diagnosticFinding{Severity: "warning", Code: "logs_unavailable", Message: err.Error()}
+	}
+	if status < 200 || status >= 300 || !logsEnvelope.OK {
+		message := logsEnvelope.Error.Message
+		if message == "" {
+			message = fmt.Sprintf("jobs service returned HTTP %d for logs", status)
+		}
+		return nil, &diagnosticFinding{Severity: "warning", Code: "logs_unavailable", Message: message}
+	}
+	return logsEnvelope.Data.Items, nil
+}
+
+func buildJobDiagnostics(job contracts.Job, logs []contracts.JobLogEntry) jobDiagnosticData {
+	data := jobDiagnosticData{
+		Job:  job,
+		Logs: logs,
+	}
+	plan := executionPlanMap(job.Metadata)
+	resourceSelector, _ := plan["resource_selector"].(string)
+	route, _ := plan["route"].(map[string]any)
+	nodeManaged, _ := route["node_managed"].(bool)
+	nodeID, _ := route["node_id"].(string)
+	serviceID, _ := route["service_id"].(string)
+
+	switch job.State {
+	case contracts.JobQueued:
+		data.Findings = append(data.Findings, diagnosticFinding{Severity: "info", Code: "job_queued", Message: "job is waiting for a runner claim"})
+		addSuggestedAction(&data.SuggestedActions, "verify runner health and worker credentials")
+		if resourceSelector != "" {
+			addSuggestedAction(&data.SuggestedActions, "inspect lease resources and queue for selector "+resourceSelector)
+		}
+	case contracts.JobClaimed:
+		data.Findings = append(data.Findings, claimFinding(job))
+		addSuggestedAction(&data.SuggestedActions, "wait for claim heartbeat or expiry")
+		addSuggestedAction(&data.SuggestedActions, "verify the claiming runner is still running")
+	case contracts.JobRunning:
+		data.Findings = append(data.Findings, diagnosticFinding{Severity: "info", Code: "job_running", Message: "job is currently running"})
+		addSuggestedAction(&data.SuggestedActions, "wait for runner progress")
+		if nodeManaged {
+			addSuggestedAction(&data.SuggestedActions, "check node health and service status")
+		}
+	case contracts.JobSucceeded:
+		data.Findings = append(data.Findings, diagnosticFinding{Severity: "info", Code: "job_succeeded", Message: "job completed successfully"})
+	case contracts.JobFailed:
+		message := "job failed"
+		if job.TerminalError != nil && job.TerminalError.Message != "" {
+			message = job.TerminalError.Code + ": " + job.TerminalError.Message
+		}
+		data.Findings = append(data.Findings, diagnosticFinding{Severity: "error", Code: "job_failed", Message: message})
+		addSuggestedAction(&data.SuggestedActions, "inspect recent logs and fix the reported dependency before retrying")
+	case contracts.JobCanceled:
+		data.Findings = append(data.Findings, diagnosticFinding{Severity: "info", Code: "job_canceled", Message: "job was canceled"})
+	case contracts.JobExpired:
+		data.Findings = append(data.Findings, diagnosticFinding{Severity: "warning", Code: "job_expired", Message: "job expired before completion"})
+		addSuggestedAction(&data.SuggestedActions, "retry after verifying runner and queue health")
+	default:
+		data.Findings = append(data.Findings, diagnosticFinding{Severity: "warning", Code: "unknown_job_state", Message: "job state is not recognized: " + string(job.State)})
+	}
+
+	if resourceSelector != "" {
+		data.Findings = append(data.Findings, diagnosticFinding{Severity: "info", Code: "resource_selector", Message: "job requests resource selector " + resourceSelector})
+	}
+	if nodeManaged {
+		message := "job route is node-managed"
+		if nodeID != "" {
+			message += " on node " + nodeID
+		}
+		if serviceID != "" {
+			message += " for service " + serviceID
+		}
+		data.Findings = append(data.Findings, diagnosticFinding{Severity: "info", Code: "node_managed_route", Message: message})
+	}
+	if len(job.ArtifactRefs) > 0 {
+		data.Findings = append(data.Findings, diagnosticFinding{Severity: "info", Code: "artifacts_registered", Message: fmt.Sprintf("job references %d artifact(s)", len(job.ArtifactRefs))})
+	}
+	if len(logs) == 0 && job.State != contracts.JobQueued {
+		data.Findings = append(data.Findings, diagnosticFinding{Severity: "warning", Code: "no_recent_logs", Message: "job has no recent log entries"})
+		addSuggestedAction(&data.SuggestedActions, "verify runner log appends can reach the job service")
+	}
+	return data
+}
+
+func claimFinding(job contracts.Job) diagnosticFinding {
+	if job.Claim == nil {
+		return diagnosticFinding{Severity: "warning", Code: "claimed_without_claim_details", Message: "job is claimed but claim details are missing"}
+	}
+	expiresAt, err := time.Parse(time.RFC3339, job.Claim.ExpiresAt)
+	if err != nil {
+		return diagnosticFinding{Severity: "warning", Code: "invalid_claim_expiry", Message: "claim expiry is invalid: " + job.Claim.ExpiresAt}
+	}
+	if time.Now().UTC().After(expiresAt) {
+		return diagnosticFinding{Severity: "warning", Code: "claim_expired", Message: "claim by " + job.Claim.WorkerID + " expired at " + job.Claim.ExpiresAt}
+	}
+	return diagnosticFinding{Severity: "info", Code: "claim_active", Message: "job is claimed by " + job.Claim.WorkerID + " until " + job.Claim.ExpiresAt}
+}
+
+func executionPlanMap(metadata map[string]any) map[string]any {
+	if metadata == nil {
+		return map[string]any{}
+	}
+	plan, _ := metadata["execution_plan"].(map[string]any)
+	if plan == nil {
+		return map[string]any{}
+	}
+	return plan
+}
+
+func addSuggestedAction(actions *[]string, action string) {
+	if action == "" {
+		return
+	}
+	for _, existing := range *actions {
+		if existing == action {
+			return
+		}
+	}
+	*actions = append(*actions, action)
+}
+
 func checkHealth(cfg adminConfig, httpClient *http.Client, opts healthOptions) healthReport {
 	ctx := context.Background()
 	if cfg.Timeout > 0 {
@@ -1229,6 +1423,39 @@ func getJSON(cfg adminConfig, httpClient *http.Client, baseURL, path, credential
 	return 0
 }
 
+func getJSONDecode(cfg adminConfig, httpClient *http.Client, baseURL, path, credential string, out any) (int, error) {
+	baseURL = strings.TrimRight(strings.TrimSpace(baseURL), "/")
+	if baseURL == "" {
+		return 0, fmt.Errorf("service URL is required for %s", path)
+	}
+	ctx := context.Background()
+	if cfg.Timeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, cfg.Timeout)
+		defer cancel()
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, baseURL+path, nil)
+	if err != nil {
+		return 0, err
+	}
+	if credential != "" {
+		req.Header.Set("Authorization", credential)
+	}
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return 0, err
+	}
+	defer resp.Body.Close()
+	if out != nil {
+		if err := json.NewDecoder(resp.Body).Decode(out); err != nil {
+			return resp.StatusCode, err
+		}
+	} else if _, err := io.Copy(io.Discard, resp.Body); err != nil {
+		return resp.StatusCode, err
+	}
+	return resp.StatusCode, nil
+}
+
 func postJSON(cfg adminConfig, httpClient *http.Client, baseURL, path, credential, idempotencyKey string, stdout, stderr io.Writer) int {
 	return postJSONBody(cfg, httpClient, baseURL, path, credential, idempotencyKey, nil, stdout, stderr)
 }
@@ -1533,7 +1760,7 @@ func writePrettyJSON(w io.Writer, raw []byte) error {
 
 func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "usage: pacp-admin [flags] <command>")
-	fmt.Fprintln(w, "commands: health, catalog, jobs, leases, artifacts, policy, node")
+	fmt.Fprintln(w, "commands: health, catalog, jobs, leases, artifacts, policy, node, diagnose")
 }
 
 func loadManifestInputs(path string) ([]contracts.ProviderManifest, error) {
