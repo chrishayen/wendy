@@ -235,7 +235,8 @@ format is comma-separated `node_id=URL` entries, for example
 
 HTTP provider bridge route files can set literal `headers` for non-secret
 values and `headers_from_env` for backend credentials that must not be stored in
-JSON config.
+JSON config. The bridge forwards the provider invocation request id to backend
+HTTP services as `X-Request-ID` when the runner supplies one.
 
 ComfyUI image generation returns provider-local `content_refs` to the runner.
 The runner dereferences `/v1/provider/artifacts/{content_ref}/content`, verifies
@@ -270,7 +271,10 @@ seeded local component and worker credentials.
 Command provider bridge route files map each capability id to a command array.
 The command receives `ProviderInvokeRequest` JSON on stdin and must write
 `ProviderInvokeResponse` JSON on stdout. Route files can set literal
-`environment` values and `environment_from_env` for secrets.
+`environment` values and `environment_from_env` for secrets. The bridge also
+adds non-empty invocation context values as `PACP_REQUEST_ID`,
+`PACP_SUBJECT_ID`, `PACP_JOB_ID`, `PACP_RESOURCE_LEASE_ID`, and
+`PACP_ARTIFACT_BASE_URL`.
 
 The fixture server can also serve individual contract-simulation fixture
 owners when a test needs a fixed fake dependency. It matches method, path,
