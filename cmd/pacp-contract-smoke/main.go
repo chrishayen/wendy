@@ -11,12 +11,14 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
 	"pacp/internal/contracts"
 	"pacp/internal/distributedsmoke"
 	"pacp/internal/openapicheck"
+	"pacp/internal/processsmoke"
 	"pacp/internal/testkit"
 )
 
@@ -38,6 +40,7 @@ func run(args []string, stdout, stderr io.Writer, httpClient *http.Client) int {
 	inputRaw := flags.String("input", "{}", "JSON object input for provider invocation")
 	openAPIPaths := flags.String("openapi", "", "optional comma-separated OpenAPI files to validate")
 	distributed := flags.Bool("distributed", false, "run the primary-plus-node distributed smoke suite")
+	processDistributed := flags.Bool("process-distributed", false, "run a process-level distributed smoke suite with real PACP commands")
 	fakePublicAPIs := flags.Bool("fake-public-apis", false, "run contract checks against reusable fake public APIs")
 	timeout := flags.Duration("timeout", 5*time.Second, "smoke check timeout")
 	if err := flags.Parse(args); err != nil {
@@ -48,6 +51,9 @@ func run(args []string, stdout, stderr io.Writer, httpClient *http.Client) int {
 	}
 	if *distributed {
 		return runDistributedSmoke(*timeout, stdout, stderr)
+	}
+	if *processDistributed {
+		return runProcessDistributedSmoke(*timeout, stdout, stderr)
 	}
 	if *fakePublicAPIs {
 		return runFakePublicAPISmoke(*timeout, stdout, stderr)
@@ -88,6 +94,60 @@ func run(args []string, stdout, stderr io.Writer, httpClient *http.Client) int {
 		fmt.Fprintf(stderr, "%s:%s: fixture_replay_failed: %s\n", finding.Path, finding.FixtureID, finding.Message)
 	}
 	return 1
+}
+
+func runProcessDistributedSmoke(timeout time.Duration, stdout, stderr io.Writer) int {
+	ctx := context.Background()
+	if timeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, timeout)
+		defer cancel()
+	}
+	repoRoot, err := discoverRepoRoot(".")
+	if err != nil {
+		fmt.Fprintf(stderr, "process-distributed-smoke: %v\n", err)
+		return 1
+	}
+	report := processsmoke.RunDistributed(ctx, processsmoke.Config{RepoRoot: repoRoot, Timeout: timeout})
+	fmt.Fprintf(stdout, "process-distributed-smoke=checked checks=%d job_id=%s artifact_id=%s\n", len(report.Checks), report.JobID, report.ArtifactID)
+	for _, check := range report.Checks {
+		status := "fail"
+		if check.OK {
+			status = "pass"
+		}
+		if check.HTTPStatus != 0 {
+			fmt.Fprintf(stdout, "check=%s status=%s http_status=%d\n", check.Name, status, check.HTTPStatus)
+			continue
+		}
+		fmt.Fprintf(stdout, "check=%s status=%s\n", check.Name, status)
+	}
+	if report.OK {
+		fmt.Fprintln(stdout, "process-distributed-smoke=pass")
+		return 0
+	}
+	for _, check := range report.Checks {
+		if !check.OK {
+			fmt.Fprintf(stderr, "%s: %s\n", check.Name, check.Error)
+		}
+	}
+	return 1
+}
+
+func discoverRepoRoot(start string) (string, error) {
+	dir, err := filepath.Abs(start)
+	if err != nil {
+		return "", err
+	}
+	for {
+		if _, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil {
+			return dir, nil
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return "", fmt.Errorf("could not find go.mod from %s", start)
+		}
+		dir = parent
+	}
 }
 
 func writeContractFindings(stderr io.Writer, report contracts.Report) {

@@ -255,6 +255,31 @@ func TestRunOpenAPICheckPassesRepositoryContracts(t *testing.T) {
 	}
 }
 
+func TestRunProcessDistributedSmokeChecksRealProcesses(t *testing.T) {
+	if testing.Short() {
+		t.Skip("process-level smoke starts real PACP commands")
+	}
+	var stdout, stderr bytes.Buffer
+	code := run([]string{"-process-distributed", "-timeout", "30s"}, &stdout, &stderr, http.DefaultClient)
+	if code != 0 {
+		t.Fatalf("code=%d stderr=%s stdout=%s", code, stderr.String(), stdout.String())
+	}
+	for _, expected := range []string{
+		"process-distributed-smoke=pass",
+		"check=process.start.provider status=pass",
+		"check=process.start.node status=pass",
+		"check=process.start.primary status=pass",
+		"check=gateway.invoke status=pass",
+		"check=runner.once status=pass",
+		"check=gateway.job.succeeded status=pass",
+		"check=artifact.content.verify status=pass",
+	} {
+		if !strings.Contains(stdout.String(), expected) {
+			t.Fatalf("stdout missing %q:\n%s", expected, stdout.String())
+		}
+	}
+}
+
 func TestRunOpenAPICheckReportsFailures(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "bad-openapi.yaml")
 	if err := os.WriteFile(path, []byte(`
