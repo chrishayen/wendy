@@ -257,6 +257,90 @@ func TestStoreRejectsHolderMismatch(t *testing.T) {
 	}
 }
 
+func TestStoreListResourcesPaginatesWithOpaqueCursor(t *testing.T) {
+	store := NewStore()
+	for _, resourceID := range []string{"res_gpu_0", "res_gpu_1"} {
+		if _, err := store.RegisterResource(contracts.RegisterResourceRequest{
+			ResourceID: resourceID,
+			Selector:   "gpu",
+			Status:     contracts.ResourceAvailable,
+		}); err != nil {
+			t.Fatalf("register %s: %v", resourceID, err)
+		}
+	}
+
+	first, next, err := store.ListResources("gpu", ListOptions{Limit: 1})
+	if err != nil {
+		t.Fatalf("list first page: %v", err)
+	}
+	if len(first) != 1 || first[0].ResourceID != "res_gpu_0" || next == nil {
+		t.Fatalf("first page resources=%#v next=%v", first, next)
+	}
+	if *next != resourceListCursor(1) {
+		t.Fatalf("next cursor = %q", *next)
+	}
+
+	second, next, err := store.ListResources("gpu", ListOptions{Cursor: *next, Limit: 1})
+	if err != nil {
+		t.Fatalf("list second page: %v", err)
+	}
+	if len(second) != 1 || second[0].ResourceID != "res_gpu_1" || next != nil {
+		t.Fatalf("second page resources=%#v next=%v", second, next)
+	}
+
+	if _, _, err := store.ListResources("gpu", ListOptions{Cursor: "cursor_lease_requests_000001"}); !errors.Is(err, ErrInvalidCursor) {
+		t.Fatalf("expected invalid cursor prefix, got %v", err)
+	}
+	if _, _, err := store.ListResources("gpu", ListOptions{Cursor: resourceListCursor(3)}); !errors.Is(err, ErrInvalidCursor) {
+		t.Fatalf("expected past-end cursor error, got %v", err)
+	}
+}
+
+func TestStoreListLeaseRequestsPaginatesWithOpaqueCursor(t *testing.T) {
+	store := NewStore()
+	if _, err := store.RegisterResource(contracts.RegisterResourceRequest{
+		ResourceID: "res_gpu_0",
+		Selector:   "gpu",
+		Status:     contracts.ResourceAvailable,
+	}); err != nil {
+		t.Fatalf("register resource: %v", err)
+	}
+	firstRequest, err := store.CreateLeaseRequest(contracts.CreateLeaseRequest{RequesterID: "job_page", ResourceSelector: "gpu"})
+	if err != nil {
+		t.Fatalf("create first request: %v", err)
+	}
+	secondRequest, err := store.CreateLeaseRequest(contracts.CreateLeaseRequest{RequesterID: "job_page", ResourceSelector: "gpu"})
+	if err != nil {
+		t.Fatalf("create second request: %v", err)
+	}
+
+	first, next, err := store.ListLeaseRequestsByRequester("job_page", ListOptions{Limit: 1})
+	if err != nil {
+		t.Fatalf("list first page: %v", err)
+	}
+	if len(first) != 1 || first[0].RequestID != firstRequest.RequestID || next == nil {
+		t.Fatalf("first page requests=%#v next=%v", first, next)
+	}
+	if *next != leaseRequestListCursor(1) {
+		t.Fatalf("next cursor = %q", *next)
+	}
+
+	second, next, err := store.ListLeaseRequestsByRequester("job_page", ListOptions{Cursor: *next, Limit: 1})
+	if err != nil {
+		t.Fatalf("list second page: %v", err)
+	}
+	if len(second) != 1 || second[0].RequestID != secondRequest.RequestID || next != nil {
+		t.Fatalf("second page requests=%#v next=%v", second, next)
+	}
+
+	if _, _, err := store.ListLeaseRequestsByRequester("job_page", ListOptions{Cursor: "cursor_leases_resources_000001"}); !errors.Is(err, ErrInvalidCursor) {
+		t.Fatalf("expected invalid cursor prefix, got %v", err)
+	}
+	if _, _, err := store.ListLeaseRequestsByRequester("job_page", ListOptions{Cursor: leaseRequestListCursor(3)}); !errors.Is(err, ErrInvalidCursor) {
+		t.Fatalf("expected past-end cursor error, got %v", err)
+	}
+}
+
 func TestPersistentStoreReloadsLeaseState(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "leases.json")
 	store, err := NewPersistentStore(path)

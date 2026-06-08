@@ -376,7 +376,7 @@ func TestRunnerCancelsPendingLeaseRequestWhenWaitStops(t *testing.T) {
 		t.Fatalf("run result jobID=%q ok=%v", jobID, ok)
 	}
 
-	requests, err := leaseStore.ListLeaseRequestsByRequester(created.JobID)
+	requests, _, err := leaseStore.ListLeaseRequestsByRequester(created.JobID, leases.ListOptions{})
 	if err != nil {
 		t.Fatalf("list lease requests: %v", err)
 	}

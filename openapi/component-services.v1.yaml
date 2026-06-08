@@ -463,6 +463,8 @@ paths:
           in: query
           schema:
             type: string
+        - $ref: "#/components/parameters/Cursor"
+        - $ref: "#/components/parameters/Limit"
       responses:
         "200":
           $ref: "#/components/responses/Success"
@@ -518,6 +520,8 @@ paths:
       x-policy-action: lease.read
       parameters:
         - $ref: "#/components/parameters/RequesterID"
+        - $ref: "#/components/parameters/Cursor"
+        - $ref: "#/components/parameters/Limit"
       responses:
         "200":
           $ref: "#/components/responses/Success"

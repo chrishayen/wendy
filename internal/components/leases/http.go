@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"pacp/internal/contracts"
@@ -113,8 +114,20 @@ func (h Handler) leaseRoute(w http.ResponseWriter, r *http.Request, tail string)
 }
 
 func (h Handler) listResources(w http.ResponseWriter, r *http.Request) {
-	resources := h.store.ListResources(r.URL.Query().Get("selector"))
-	writeSuccess(w, r, http.StatusOK, map[string]any{"items": resources, "next_cursor": nil})
+	limit, err := positiveInt(r.URL.Query().Get("limit"))
+	if err != nil {
+		writeError(w, r, http.StatusBadRequest, "validation_failed", "limit must be a positive integer", false)
+		return
+	}
+	resources, next, err := h.store.ListResources(r.URL.Query().Get("selector"), ListOptions{
+		Cursor: r.URL.Query().Get("cursor"),
+		Limit:  limit,
+	})
+	if err != nil {
+		writeStoreError(w, r, err)
+		return
+	}
+	writeSuccess(w, r, http.StatusOK, map[string]any{"items": resources, "next_cursor": next})
 }
 
 func (h Handler) registerResource(w http.ResponseWriter, r *http.Request) {
@@ -162,12 +175,20 @@ func (h Handler) createLeaseRequest(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h Handler) listLeaseRequests(w http.ResponseWriter, r *http.Request) {
-	requests, err := h.store.ListLeaseRequestsByRequester(r.URL.Query().Get("requester_id"))
+	limit, err := positiveInt(r.URL.Query().Get("limit"))
+	if err != nil {
+		writeError(w, r, http.StatusBadRequest, "validation_failed", "limit must be a positive integer", false)
+		return
+	}
+	requests, next, err := h.store.ListLeaseRequestsByRequester(r.URL.Query().Get("requester_id"), ListOptions{
+		Cursor: r.URL.Query().Get("cursor"),
+		Limit:  limit,
+	})
 	if err != nil {
 		writeStoreError(w, r, err)
 		return
 	}
-	writeSuccess(w, r, http.StatusOK, map[string]any{"items": requests, "next_cursor": nil})
+	writeSuccess(w, r, http.StatusOK, map[string]any{"items": requests, "next_cursor": next})
 }
 
 func (h Handler) getLeaseRequest(w http.ResponseWriter, r *http.Request, requestID string) {
@@ -242,6 +263,8 @@ func writeStoreError(w http.ResponseWriter, r *http.Request, err error) {
 		writeError(w, r, http.StatusNotFound, "not_found", "lease resource not found", false)
 	case errors.Is(err, ErrValidation):
 		writeError(w, r, http.StatusBadRequest, "validation_failed", validationMessage(err), false)
+	case errors.Is(err, ErrInvalidCursor):
+		writeError(w, r, http.StatusBadRequest, "invalid_cursor", "cursor is invalid or expired", false)
 	case errors.Is(err, ErrResourceConflict):
 		writeError(w, r, http.StatusConflict, "resource_conflict", "resource already exists", false)
 	case errors.Is(err, ErrResourceUnavailable):
@@ -265,6 +288,17 @@ func writeStoreError(w http.ResponseWriter, r *http.Request, err error) {
 
 func validationMessage(err error) string {
 	return strings.TrimPrefix(err.Error(), ErrValidation.Error()+": ")
+}
+
+func positiveInt(raw string) (int, error) {
+	if raw == "" {
+		return 0, nil
+	}
+	value, err := strconv.Atoi(raw)
+	if err != nil || value < 1 {
+		return 0, ErrValidation
+	}
+	return value, nil
 }
 
 func leaseExpiredMessage(r *http.Request) string {

@@ -24,6 +24,7 @@ var (
 	ErrInvalidTransition   = errors.New("invalid lease transition")
 	ErrMissingIdempotency  = errors.New("missing idempotency key")
 	ErrIdempotencyConflict = errors.New("idempotency conflict")
+	ErrInvalidCursor       = errors.New("invalid cursor")
 )
 
 type Store struct {
@@ -74,6 +75,11 @@ type idempotentRelease struct {
 	fingerprint string
 	leaseID     string
 	response    contracts.Lease
+}
+
+type ListOptions struct {
+	Cursor string
+	Limit  int
 }
 
 type snapshotFile struct {
@@ -277,7 +283,16 @@ func (s *Store) RegisterResource(req contracts.RegisterResourceRequest) (contrac
 	return cloneResource(record), nil
 }
 
-func (s *Store) ListResources(selector string) []contracts.ResourceRecord {
+func (s *Store) ListResources(selector string, opts ListOptions) ([]contracts.ResourceRecord, *string, error) {
+	start := 0
+	if opts.Cursor != "" {
+		parsed, err := parseResourceListCursor(opts.Cursor)
+		if err != nil {
+			return nil, nil, ErrInvalidCursor
+		}
+		start = parsed
+	}
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.expireLeasesLocked()
@@ -297,7 +312,17 @@ func (s *Store) ListResources(selector string) []contracts.ResourceRecord {
 		}
 		resources = append(resources, cloneResource(rec.resource))
 	}
-	return resources
+	if start > len(resources) {
+		return nil, nil, ErrInvalidCursor
+	}
+	end := len(resources)
+	var next *string
+	if opts.Limit > 0 && start+opts.Limit < end {
+		end = start + opts.Limit
+		cursor := resourceListCursor(end)
+		next = &cursor
+	}
+	return resources[start:end], next, nil
 }
 
 func (s *Store) GetResource(resourceID string) (contracts.ResourceRecord, error) {
@@ -408,9 +433,17 @@ func (s *Store) GetLeaseRequest(requestID string) (contracts.LeaseRequest, error
 	return cloneLeaseRequest(rec.request), nil
 }
 
-func (s *Store) ListLeaseRequestsByRequester(requesterID string) ([]contracts.LeaseRequest, error) {
+func (s *Store) ListLeaseRequestsByRequester(requesterID string, opts ListOptions) ([]contracts.LeaseRequest, *string, error) {
 	if requesterID == "" {
-		return nil, fmt.Errorf("%w: requester_id is required", ErrValidation)
+		return nil, nil, fmt.Errorf("%w: requester_id is required", ErrValidation)
+	}
+	start := 0
+	if opts.Cursor != "" {
+		parsed, err := parseLeaseRequestListCursor(opts.Cursor)
+		if err != nil {
+			return nil, nil, ErrInvalidCursor
+		}
+		start = parsed
 	}
 
 	s.mu.Lock()
@@ -432,7 +465,47 @@ func (s *Store) ListLeaseRequestsByRequester(requesterID string) ([]contracts.Le
 	for _, rec := range records {
 		requests = append(requests, cloneLeaseRequest(rec.request))
 	}
-	return requests, nil
+	if start > len(requests) {
+		return nil, nil, ErrInvalidCursor
+	}
+	end := len(requests)
+	var next *string
+	if opts.Limit > 0 && start+opts.Limit < end {
+		end = start + opts.Limit
+		cursor := leaseRequestListCursor(end)
+		next = &cursor
+	}
+	return requests[start:end], next, nil
+}
+
+func resourceListCursor(index int) string {
+	return fmt.Sprintf("cursor_leases_resources_%06d", index)
+}
+
+func parseResourceListCursor(cursor string) (int, error) {
+	var index int
+	if _, err := fmt.Sscanf(cursor, "cursor_leases_resources_%06d", &index); err != nil {
+		return 0, err
+	}
+	if index < 0 || resourceListCursor(index) != cursor {
+		return 0, ErrInvalidCursor
+	}
+	return index, nil
+}
+
+func leaseRequestListCursor(index int) string {
+	return fmt.Sprintf("cursor_lease_requests_%06d", index)
+}
+
+func parseLeaseRequestListCursor(cursor string) (int, error) {
+	var index int
+	if _, err := fmt.Sscanf(cursor, "cursor_lease_requests_%06d", &index); err != nil {
+		return 0, err
+	}
+	if index < 0 || leaseRequestListCursor(index) != cursor {
+		return 0, ErrInvalidCursor
+	}
+	return index, nil
 }
 
 func (s *Store) CancelLeaseRequest(requestID string, req contracts.CancelRequest) (contracts.LeaseRequest, error) {

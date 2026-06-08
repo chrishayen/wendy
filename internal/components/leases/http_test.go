@@ -118,6 +118,85 @@ func TestHandlerListsLeaseRequestsByRequester(t *testing.T) {
 	}
 }
 
+func TestHandlerListResourcesPaginates(t *testing.T) {
+	handler := NewHandler(NewStore())
+	for _, resourceID := range []string{"res_gpu_0", "res_gpu_1"} {
+		_ = doJSON(t, handler, http.MethodPost, "/v1/resources", map[string]any{
+			"resource_id": resourceID,
+			"selector":    "gpu",
+			"status":      "available",
+		}, nil)
+	}
+
+	first := doJSON(t, handler, http.MethodGet, "/v1/resources?selector=gpu&limit=1", nil, nil)
+	items := first["items"].([]any)
+	if len(items) != 1 || items[0].(map[string]any)["resource_id"] != "res_gpu_0" {
+		t.Fatalf("first resources page = %#v", first)
+	}
+	cursor, ok := first["next_cursor"].(string)
+	if !ok || cursor == "" {
+		t.Fatalf("first resources page missing cursor = %#v", first)
+	}
+
+	second := doJSON(t, handler, http.MethodGet, "/v1/resources?selector=gpu&limit=1&cursor="+cursor, nil, nil)
+	items = second["items"].([]any)
+	if len(items) != 1 || items[0].(map[string]any)["resource_id"] != "res_gpu_1" || second["next_cursor"] != nil {
+		t.Fatalf("second resources page = %#v", second)
+	}
+
+	invalidLimit := doJSONStatus(t, handler, http.MethodGet, "/v1/resources?limit=0", nil, nil, http.StatusBadRequest)
+	if invalidLimit["error"].(map[string]any)["code"] != "validation_failed" {
+		t.Fatalf("invalid resource limit error = %#v", invalidLimit)
+	}
+	invalidCursor := doJSONStatus(t, handler, http.MethodGet, "/v1/resources?cursor=cursor_lease_requests_000001", nil, nil, http.StatusBadRequest)
+	if invalidCursor["error"].(map[string]any)["code"] != "invalid_cursor" {
+		t.Fatalf("invalid resource cursor error = %#v", invalidCursor)
+	}
+}
+
+func TestHandlerListLeaseRequestsPaginates(t *testing.T) {
+	handler := NewHandler(NewStore())
+
+	_ = doJSON(t, handler, http.MethodPost, "/v1/resources", map[string]any{
+		"resource_id": "res_gpu_0",
+		"selector":    "gpu",
+		"status":      "available",
+	}, nil)
+	firstRequest := doJSON(t, handler, http.MethodPost, "/v1/lease-requests", map[string]any{
+		"requester_id":      "job_page",
+		"resource_selector": "gpu",
+	}, nil)
+	secondRequest := doJSON(t, handler, http.MethodPost, "/v1/lease-requests", map[string]any{
+		"requester_id":      "job_page",
+		"resource_selector": "gpu",
+	}, nil)
+
+	first := doJSON(t, handler, http.MethodGet, "/v1/lease-requests?requester_id=job_page&limit=1", nil, nil)
+	items := first["items"].([]any)
+	if len(items) != 1 || items[0].(map[string]any)["request_id"] != firstRequest["request_id"] {
+		t.Fatalf("first lease request page = %#v", first)
+	}
+	cursor, ok := first["next_cursor"].(string)
+	if !ok || cursor == "" {
+		t.Fatalf("first lease request page missing cursor = %#v", first)
+	}
+
+	second := doJSON(t, handler, http.MethodGet, "/v1/lease-requests?requester_id=job_page&limit=1&cursor="+cursor, nil, nil)
+	items = second["items"].([]any)
+	if len(items) != 1 || items[0].(map[string]any)["request_id"] != secondRequest["request_id"] || second["next_cursor"] != nil {
+		t.Fatalf("second lease request page = %#v", second)
+	}
+
+	invalidLimit := doJSONStatus(t, handler, http.MethodGet, "/v1/lease-requests?requester_id=job_page&limit=0", nil, nil, http.StatusBadRequest)
+	if invalidLimit["error"].(map[string]any)["code"] != "validation_failed" {
+		t.Fatalf("invalid lease request limit error = %#v", invalidLimit)
+	}
+	invalidCursor := doJSONStatus(t, handler, http.MethodGet, "/v1/lease-requests?requester_id=job_page&cursor=cursor_leases_resources_000001", nil, nil, http.StatusBadRequest)
+	if invalidCursor["error"].(map[string]any)["code"] != "invalid_cursor" {
+		t.Fatalf("invalid lease request cursor error = %#v", invalidCursor)
+	}
+}
+
 func TestHandlerErrorsUseStableEnvelopes(t *testing.T) {
 	handler := NewHandler(NewStore())
 	data := doJSONStatus(t, handler, http.MethodPost, "/v1/lease-requests", map[string]any{
