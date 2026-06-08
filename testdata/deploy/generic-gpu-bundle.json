@@ -1,0 +1,100 @@
+{
+  "schema_version": "v1",
+  "node": {
+    "node_id": "node_linux_gpu",
+    "display_name": "Linux GPU Node"
+  },
+  "auth": [
+    {
+      "token": "token_node_runner",
+      "subject_id": "sub_runner",
+      "scopes": ["worker"],
+      "allowed_actions": ["node.read", "node.service.start", "node.service.stop"]
+    },
+    {
+      "token": "token_node_admin",
+      "subject_id": "sub_admin",
+      "scopes": ["admin"],
+      "allowed_actions": ["node.read", "node.service.start", "node.service.stop"]
+    }
+  ],
+  "resources": [
+    {
+      "resource_id": "res_gpu_0",
+      "tags": ["gpu", "gpu:0"],
+      "metadata": {
+        "selector": "gpu",
+        "kind": "gpu",
+        "vendor": "nvidia"
+      }
+    }
+  ],
+  "services": [
+    {
+      "runtime_adapter": "fake",
+      "initial_status": "stopped",
+      "manifest": {
+        "schema_version": "v1",
+        "service": {
+          "id": "svc_generic_gpu_image",
+          "name": "Generic GPU Image Provider",
+          "description": "Node-managed image generation provider.",
+          "version": "v1",
+          "provider_kind": "http",
+          "tags": ["image", "gpu"]
+        },
+        "provider": {
+          "endpoint": "http://linux-gpu-node:18088"
+        },
+        "capabilities": [
+          {
+            "id": "cap_image_generate",
+            "name": "Image generation",
+            "description": "Generate an image using a GPU-backed provider.",
+            "execution_mode": "async",
+            "input_schema": {
+              "type": "object",
+              "required": ["prompt"],
+              "properties": {
+                "prompt": {"type": "string"},
+                "width": {"type": "integer"},
+                "height": {"type": "integer"},
+                "seed": {"type": "integer"}
+              }
+            },
+            "output_schema": {
+              "type": "object",
+              "properties": {
+                "artifact_refs": {"type": "array", "items": {"type": "string"}}
+              }
+            },
+            "examples": [],
+            "side_effects": "external",
+            "resource_hints": [{"selector": "gpu", "required": true, "quantity": 1}],
+            "artifact_hints": [{"media_type": "image/png", "count": "one"}],
+            "timeout_hint": "15m"
+          }
+        ]
+      }
+    }
+  ],
+  "policy_seed": {
+    "api_keys": [
+      {
+        "subject_id": "sub_agent",
+        "scopes": ["agent"],
+        "token": "token_agent"
+      },
+      {
+        "subject_id": "sub_runner",
+        "scopes": ["worker"],
+        "token": "token_runner"
+      },
+      {
+        "subject_id": "sub_gateway",
+        "scopes": ["component"],
+        "token": "token_component"
+      }
+    ]
+  }
+}

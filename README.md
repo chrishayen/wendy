@@ -48,6 +48,8 @@ Contract simulation data is kept as test input, not as product behavior.
 - `cmd/pacp-policy`: runnable access policy and secrets service.
 - `cmd/pacp-node`: runnable runtime node agent for one configured service node.
 - `cmd/pacp-runner`: runnable composition runner.
+- `cmd/pacp-bundle`: renders one deployment bundle into catalog manifests,
+  node config, lease resource seed, and optional policy seed files.
 - `cmd/pacp-admin`: JSON-first operator CLI for component, gateway, and node
   health and read-only inspection commands.
 - `cmd/pacp-control`: JSON-first CLI for gateway health and agent-facing
@@ -74,6 +76,7 @@ go run ./cmd/pacp-admin catalog capabilities
 go run ./cmd/pacp-admin jobs list
 go run ./cmd/pacp-admin leases resources
 go run ./cmd/pacp-admin artifacts list
+go run ./cmd/pacp-bundle -bundle testdata/deploy/generic-gpu-bundle.json -out-dir /tmp/pacp-bundle
 go run ./cmd/pacp-control -gateway-url http://localhost:18086 health
 go run ./cmd/pacp-control -gateway-url http://localhost:18086 -token token_agent tools
 go run ./cmd/pacp-control -gateway-url http://localhost:18086 -token token_agent invoke cap_dev_echo -idempotency-key echo-1 -input '{"message":"hello"}'
@@ -96,6 +99,17 @@ go run ./cmd/pacp-policy -addr localhost:18085 -state-file /tmp/pacp-policy-stat
 go run ./cmd/pacp-gateway -addr localhost:18086 -catalog-url http://localhost:18081 -jobs-url http://localhost:18082 -artifacts-url http://localhost:18084 -policy-url http://localhost:18085 -idempotency-state-file /tmp/pacp-gateway-idempotency-state.json
 go run ./cmd/pacp-node -addr localhost:18087 -config testdata/node/linux-gpu-fake.json
 go run ./cmd/pacp-runner -once -worker-id runner_local -jobs-url http://localhost:18082 -leases-url http://localhost:18083 -artifacts-url http://localhost:18084 -node-urls node_linux_gpu=http://localhost:18087 -node-start-timeout 30s
+```
+
+Deployment bundles are offline packaging inputs for distributed nodes. Render a
+bundle once, then pass the generated files to the existing component binaries:
+
+```sh
+go run ./cmd/pacp-bundle -bundle testdata/deploy/generic-gpu-bundle.json -out-dir /tmp/pacp-bundle
+go run ./cmd/pacp-catalog -manifest /tmp/pacp-bundle/catalog/svc_generic_gpu_image.manifest.json
+go run ./cmd/pacp-node -config /tmp/pacp-bundle/node/node.json
+go run ./cmd/pacp-leases -resources /tmp/pacp-bundle/leases/resources.json
+go run ./cmd/pacp-policy -seed /tmp/pacp-bundle/policy/policy-seed.json
 ```
 
 Node resource declarations can be converted into lease resource seed files:
