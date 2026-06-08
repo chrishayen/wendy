@@ -823,7 +823,7 @@ func TestRunnerWaitsForNodeManagedServiceStartup(t *testing.T) {
 	})
 	nodeID := "node_linux_gpu"
 	route := contracts.CapabilityRoute{ServiceID: "svc_remote_provider", NodeID: &nodeID, NodeManaged: true}
-	if err := r.ensureNodeService(context.Background(), route); err != nil {
+	if _, err := r.ensureNodeService(context.Background(), route); err != nil {
 		t.Fatalf("ensureNodeService: %v", err)
 	}
 	if starts != 1 || gets < 3 {
@@ -849,7 +849,7 @@ func TestRunnerTimesOutWaitingForNodeManagedServiceStartup(t *testing.T) {
 		Client:           nodeServer.Client(),
 	})
 	route := contracts.CapabilityRoute{ServiceID: "svc_slow_provider", NodeManaged: true}
-	if err := r.ensureNodeService(context.Background(), route); err == nil {
+	if _, err := r.ensureNodeService(context.Background(), route); err == nil {
 		t.Fatal("expected node start timeout")
 	}
 }
@@ -858,8 +858,109 @@ func TestRunnerRequiresConfiguredNodeURLForNodeID(t *testing.T) {
 	r := New(Config{})
 	nodeID := "node_linux_gpu"
 	route := contracts.CapabilityRoute{ServiceID: "svc_remote_provider", NodeID: &nodeID, NodeManaged: true}
-	if err := r.ensureNodeService(context.Background(), route); err == nil {
+	if _, err := r.ensureNodeService(context.Background(), route); err == nil {
 		t.Fatal("expected missing node URL error")
+	}
+}
+
+func TestRunnerUsesNodeReturnedProviderEndpoint(t *testing.T) {
+	jobStore := jobs.NewStore()
+	jobsServer := httptest.NewServer(jobs.NewHandler(jobStore))
+	defer jobsServer.Close()
+
+	var providerInvocations atomic.Int32
+	providerServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/v1/provider/capabilities/cap_node_endpoint/invoke" {
+			t.Fatalf("unexpected provider request %s %s", r.Method, r.URL.Path)
+		}
+		if got := r.Header.Get("Authorization"); got != "Bearer token_runner" {
+			t.Fatalf("provider Authorization = %q", got)
+		}
+		providerInvocations.Add(1)
+		writeRunnerTestSuccess(w, http.StatusOK, contracts.ProviderInvokeResponse{Output: map[string]any{"ok": true}})
+	}))
+	defer providerServer.Close()
+
+	var serviceGets atomic.Int32
+	var serviceStarts atomic.Int32
+	nodeServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/v1/node/services/svc_node_endpoint_provider":
+			gets := serviceGets.Add(1)
+			status := "stopped"
+			if gets > 1 {
+				status = "running"
+			}
+			writeRunnerTestSuccess(w, http.StatusOK, contracts.NodeService{
+				ServiceID:        "svc_node_endpoint_provider",
+				Status:           status,
+				ProviderEndpoint: providerServer.URL,
+			})
+		case r.Method == http.MethodPost && r.URL.Path == "/v1/node/services/svc_node_endpoint_provider/start":
+			serviceStarts.Add(1)
+			writeRunnerTestSuccess(w, http.StatusAccepted, contracts.NodeService{
+				ServiceID:        "svc_node_endpoint_provider",
+				Status:           "starting",
+				ProviderEndpoint: providerServer.URL,
+			})
+		default:
+			t.Fatalf("unexpected node request %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer nodeServer.Close()
+
+	nodeID := "node_linux_gpu"
+	route := contracts.CapabilityRoute{
+		CapabilityID:       "cap_node_endpoint",
+		ServiceID:          "svc_node_endpoint_provider",
+		ProviderEndpoint:   "http://127.0.0.1:1",
+		ProviderHealthPath: "/v1/provider/health",
+		ProviderInvokePath: "/v1/provider/capabilities/cap_node_endpoint/invoke",
+		NodeID:             &nodeID,
+		NodeManaged:        true,
+		ServiceStartMode:   "on_demand",
+	}
+	created, _, err := jobStore.Create(contracts.CreateJobRequest{
+		RequesterID:  "sub_agent",
+		CapabilityID: "cap_node_endpoint",
+		InputSummary: map[string]any{"prompt_present": true},
+		Metadata: map[string]any{"execution_plan": map[string]any{
+			"capability_id":   "cap_node_endpoint",
+			"subject_id":      "sub_agent",
+			"input":           map[string]any{"prompt": "red mug"},
+			"route":           route,
+			"timeout_seconds": 30,
+		}},
+	}, "create-node-endpoint-job")
+	if err != nil {
+		t.Fatalf("create job: %v", err)
+	}
+
+	runner := New(Config{
+		WorkerID:            "runner_test",
+		JobsURL:             jobsServer.URL,
+		ArtifactsURL:        "http://artifacts.invalid",
+		NodeURLs:            map[string]string{nodeID: nodeServer.URL},
+		NodePollInterval:    time.Millisecond,
+		ComponentCredential: "Bearer token_runner",
+		Client:              jobsServer.Client(),
+	})
+	jobID, ok, err := runner.RunOnce(context.Background())
+	if err != nil {
+		t.Fatalf("run once: %v", err)
+	}
+	if !ok || jobID != created.JobID {
+		t.Fatalf("run result jobID=%q ok=%v", jobID, ok)
+	}
+	if serviceStarts.Load() != 1 || providerInvocations.Load() != 1 {
+		t.Fatalf("starts=%d providerInvocations=%d", serviceStarts.Load(), providerInvocations.Load())
+	}
+	completed, err := jobStore.Get(created.JobID)
+	if err != nil {
+		t.Fatalf("get completed job: %v", err)
+	}
+	if completed.State != contracts.JobSucceeded {
+		t.Fatalf("completed job = %#v", completed)
 	}
 }
 

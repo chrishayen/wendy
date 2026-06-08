@@ -186,9 +186,13 @@ func (r *Runner) runJob(ctx context.Context, job contracts.Job) error {
 		}()
 	}
 	if plan.Route.NodeManaged {
-		if err := r.ensureNodeService(ctx, plan.Route); err != nil {
+		service, err := r.ensureNodeService(ctx, plan.Route)
+		if err != nil {
 			_ = r.failJob(ctx, job.JobID, "node_unavailable", err.Error())
 			return err
+		}
+		if service.ProviderEndpoint != "" {
+			plan.Route.ProviderEndpoint = service.ProviderEndpoint
 		}
 	}
 	if err := r.heartbeatRunning(ctx, job.JobID); err != nil {
@@ -427,11 +431,11 @@ func (r *Runner) heartbeatLease(ctx context.Context, leaseID, holderID string) e
 	return r.postJSON(ctx, r.cfg.LeasesURL+"/v1/leases/"+url.PathEscape(leaseID)+"/heartbeat", contracts.LeaseHeartbeatRequest{HolderID: holderID}, "", &lease)
 }
 
-func (r *Runner) ensureNodeService(ctx context.Context, route contracts.CapabilityRoute) error {
+func (r *Runner) ensureNodeService(ctx context.Context, route contracts.CapabilityRoute) (contracts.NodeService, error) {
 	serviceID := route.ServiceID
 	nodeURL, err := r.nodeURLForRoute(route)
 	if err != nil {
-		return err
+		return contracts.NodeService{}, err
 	}
 	waitCtx, cancel := context.WithTimeout(ctx, r.cfg.NodeStartTimeout)
 	defer cancel()
@@ -440,27 +444,27 @@ func (r *Runner) ensureNodeService(ctx context.Context, route contracts.Capabili
 	for {
 		service, err := r.getNodeService(waitCtx, nodeURL, serviceID)
 		if err != nil {
-			return err
+			return contracts.NodeService{}, err
 		}
 		if service.Status == "running" {
-			return nil
+			return service, nil
 		}
 		if !startIssued && service.Status != "starting" {
 			service, err = r.startNodeService(waitCtx, nodeURL, serviceID)
 			if err != nil {
-				return err
+				return contracts.NodeService{}, err
 			}
 			startIssued = true
 			if service.Status == "running" {
-				return nil
+				return service, nil
 			}
 		}
 		if startIssued && service.Status == "stopped" {
-			return fmt.Errorf("node service %s stopped during startup", serviceID)
+			return contracts.NodeService{}, fmt.Errorf("node service %s stopped during startup", serviceID)
 		}
 		select {
 		case <-waitCtx.Done():
-			return fmt.Errorf("node service %s did not become running before timeout: %w", serviceID, waitCtx.Err())
+			return contracts.NodeService{}, fmt.Errorf("node service %s did not become running before timeout: %w", serviceID, waitCtx.Err())
 		case <-time.After(r.cfg.NodePollInterval):
 		}
 	}
