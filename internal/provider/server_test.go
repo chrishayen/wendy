@@ -144,6 +144,57 @@ func TestServerPreservesStructuredInvokeError(t *testing.T) {
 	}
 }
 
+func TestServerExposesAsyncStyleAcceptedHandle(t *testing.T) {
+	manifest := testManifest()
+	manifest.Capabilities = append(manifest.Capabilities, contracts.Capability{
+		ID:            "cap_accept",
+		Name:          "Accept",
+		Description:   "Accept provider-local async work and return a handle as output.",
+		Tags:          []string{"test", "async"},
+		ExecutionMode: "async",
+		InputSchema: map[string]any{
+			"type":       "object",
+			"properties": map[string]any{},
+		},
+		OutputSchema: map[string]any{
+			"type":     "object",
+			"required": []any{"handle_id", "status"},
+			"properties": map[string]any{
+				"handle_id":  map[string]any{"type": "string"},
+				"status":     map[string]any{"type": "string"},
+				"status_url": map[string]any{"type": "string"},
+			},
+		},
+		Examples:      []map[string]any{},
+		SideEffects:   "external",
+		ResourceHints: []contracts.ResourceHint{},
+		ArtifactHints: []contracts.ArtifactHint{},
+		TimeoutHint:   "30s",
+	})
+	server, err := NewServer(manifest, map[string]CapabilityHandler{
+		"cap_echo": func(ctx context.Context, req contracts.ProviderInvokeRequest) (contracts.ProviderInvokeResponse, error) {
+			return contracts.ProviderInvokeResponse{Output: map[string]any{"message": req.Input["message"]}}, nil
+		},
+		"cap_accept": AsyncHandler(func(ctx context.Context, req contracts.ProviderInvokeRequest) (AcceptedHandle, error) {
+			return AcceptedHandle{
+				HandleID:  "provider_run_123",
+				Status:    "accepted",
+				StatusURL: "https://provider.local/runs/provider_run_123",
+			}, nil
+		}),
+	})
+	if err != nil {
+		t.Fatalf("new provider: %v", err)
+	}
+	response := doJSON(t, server, http.MethodPost, "/v1/provider/capabilities/cap_accept/invoke", map[string]any{
+		"input": map[string]any{},
+	}, http.StatusOK)
+	output := response["output"].(map[string]any)
+	if output["handle_id"] != "provider_run_123" || output["status"] != "accepted" || output["status_url"] == "" {
+		t.Fatalf("invoke response = %#v", response)
+	}
+}
+
 func newTestProvider(t *testing.T) *Server {
 	t.Helper()
 	server, err := NewServer(testManifest(), map[string]CapabilityHandler{

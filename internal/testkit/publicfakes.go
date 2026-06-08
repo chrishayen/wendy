@@ -164,11 +164,9 @@ func NewFakeProviderHandler(cfg FakeProviderConfig) (http.Handler, error) {
 				}},
 			}, nil
 		},
-		"cap_async_accept": func(ctx context.Context, req contracts.ProviderInvokeRequest) (contracts.ProviderInvokeResponse, error) {
-			return contracts.ProviderInvokeResponse{
-				Output: map[string]any{"result": "accepted"},
-			}, nil
-		},
+		"cap_async_accept": provider.AsyncHandler(func(ctx context.Context, req contracts.ProviderInvokeRequest) (provider.AcceptedHandle, error) {
+			return provider.AcceptedHandle{HandleID: "provider_run_fake_0001", Status: "accepted"}, nil
+		}),
 		"cap_fail": func(ctx context.Context, req contracts.ProviderInvokeRequest) (contracts.ProviderInvokeResponse, error) {
 			return contracts.ProviderInvokeResponse{}, provider.InvokeError{
 				ErrorObject: contracts.ErrorObject{
@@ -3154,9 +3152,10 @@ func fakeProviderManifest(endpoint string) contracts.ProviderManifest {
 			},
 			OutputSchema: map[string]any{
 				"type":     "object",
-				"required": []any{"result"},
+				"required": []any{"handle_id", "status"},
 				"properties": map[string]any{
-					"result": map[string]any{"type": "string"},
+					"handle_id": map[string]any{"type": "string"},
+					"status":    map[string]any{"type": "string"},
 				},
 			},
 			Examples:    []map[string]any{},

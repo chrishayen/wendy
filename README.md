@@ -10,7 +10,8 @@ Contract simulation data is kept as test input, not as product behavior.
 - `internal/contracts`: shared public API types, envelopes, and validation
   helpers.
 - `internal/provider`: provider SDK helpers for manifest, health, metrics, invoke,
-  simple schema validation, and provider response envelopes.
+  simple schema validation, provider response envelopes, and sync,
+  async-style, and artifact-producing handler helpers.
 - `internal/runner`: composition runner that claims jobs, acquires leases,
   starts node-managed providers by node ID, invokes providers, uploads
   artifacts, and completes or fails jobs through public APIs.
@@ -306,6 +307,14 @@ service at startup. Use `-policy-url`, `-policy-credential`, and
 non-empty invocation context values as `PACP_REQUEST_ID`,
 `PACP_SUBJECT_ID`, `PACP_JOB_ID`, `PACP_RESOURCE_LEASE_ID`, and
 `PACP_ARTIFACT_BASE_URL`.
+
+Provider-local async engines should stay hidden behind the provider adapter.
+When a provider needs to acknowledge accepted backend work as its own output,
+use `provider.AsyncHandler` to convert an `AcceptedHandle` into the normal
+`ProviderInvokeResponse.output` object and declare `handle_id` / `status` in
+the capability output schema. This remains a blocking provider invoke from the
+runner's perspective and does not create PACP jobs or provider status/cancel
+routes.
 
 The fixture server can also serve individual contract-simulation fixture
 owners when a test needs a fixed fake dependency. It matches method, path,
