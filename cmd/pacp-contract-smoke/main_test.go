@@ -137,6 +137,25 @@ components:
 	}
 }
 
+func TestRunDistributedSmokePasses(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := run([]string{"-distributed", "-timeout", "5s"}, &stdout, &stderr, http.DefaultClient)
+	if code != 0 {
+		t.Fatalf("code=%d stderr=%s stdout=%s", code, stderr.String(), stdout.String())
+	}
+	for _, expected := range []string{
+		"check=gateway.invoke status=pass",
+		"check=runner.run_once status=pass",
+		"check=node.service_running status=pass",
+		"check=provider.invoked status=pass",
+		"distributed-smoke=pass",
+	} {
+		if !strings.Contains(stdout.String(), expected) {
+			t.Fatalf("stdout missing %q:\n%s", expected, stdout.String())
+		}
+	}
+}
+
 func smokeProviderManifest(endpoint string) contracts.ProviderManifest {
 	return contracts.ProviderManifest{
 		SchemaVersion: "v1",

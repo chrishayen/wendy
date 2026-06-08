@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"pacp/internal/distributedsmoke"
 	"pacp/internal/openapicheck"
 	"pacp/internal/testkit"
 )
@@ -28,12 +29,16 @@ func run(args []string, stdout, stderr io.Writer, httpClient *http.Client) int {
 	capabilityID := flags.String("capability-id", "", "optional provider capability id to invoke")
 	inputRaw := flags.String("input", "{}", "JSON object input for provider invocation")
 	openAPIPaths := flags.String("openapi", "", "optional comma-separated OpenAPI files to validate")
+	distributed := flags.Bool("distributed", false, "run the primary-plus-node distributed smoke suite")
 	timeout := flags.Duration("timeout", 5*time.Second, "smoke check timeout")
 	if err := flags.Parse(args); err != nil {
 		return 2
 	}
 	if *openAPIPaths != "" {
 		return runOpenAPICheck(*openAPIPaths, stdout, stderr)
+	}
+	if *distributed {
+		return runDistributedSmoke(*timeout, stdout, stderr)
 	}
 	if *providerURL != "" {
 		return runProviderSmoke(*providerURL, *capabilityID, *inputRaw, *timeout, stdout, stderr, httpClient)
@@ -57,6 +62,38 @@ func run(args []string, stdout, stderr io.Writer, httpClient *http.Client) int {
 			continue
 		}
 		fmt.Fprintf(stderr, "%s:%s: %s: %s\n", finding.File, finding.Fixture, finding.Code, finding.Message)
+	}
+	return 1
+}
+
+func runDistributedSmoke(timeout time.Duration, stdout, stderr io.Writer) int {
+	ctx := context.Background()
+	if timeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, timeout)
+		defer cancel()
+	}
+	report := distributedsmoke.Run(ctx)
+	fmt.Fprintf(stdout, "distributed-smoke=checked checks=%d job_id=%s artifact_id=%s\n", len(report.Checks), report.JobID, report.ArtifactID)
+	for _, check := range report.Checks {
+		status := "fail"
+		if check.OK {
+			status = "pass"
+		}
+		if check.HTTPStatus != 0 {
+			fmt.Fprintf(stdout, "check=%s status=%s http_status=%d\n", check.Name, status, check.HTTPStatus)
+			continue
+		}
+		fmt.Fprintf(stdout, "check=%s status=%s\n", check.Name, status)
+	}
+	if report.Passed() {
+		fmt.Fprintln(stdout, "distributed-smoke=pass")
+		return 0
+	}
+	for _, check := range report.Checks {
+		if !check.OK {
+			fmt.Fprintf(stderr, "%s: %s\n", check.Name, check.Error)
+		}
 	}
 	return 1
 }
