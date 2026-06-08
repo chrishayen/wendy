@@ -167,6 +167,47 @@ func TestStorePolicyScopesAndExplicitRules(t *testing.T) {
 	if !worker.Allowed {
 		t.Fatalf("worker denied: %#v", worker)
 	}
+	for _, action := range []string{"lease.heartbeat", "lease.release", "lease.read", "lease.cancel"} {
+		decision, err := store.CheckPolicy(contracts.PolicyCheckRequest{
+			SubjectID: "sub_runner",
+			Action:    action,
+			Resource:  "lease_1",
+		})
+		if err != nil {
+			t.Fatalf("worker policy %s: %v", action, err)
+		}
+		if !decision.Allowed {
+			t.Fatalf("worker denied for %s: %#v", action, decision)
+		}
+	}
+	_, err = store.CreateAPIKey(contracts.CreateAPIKeyRequest{SubjectID: "sub_component", Scopes: []string{"component"}, Token: "token_component"})
+	if err != nil {
+		t.Fatalf("create component key: %v", err)
+	}
+	for _, action := range []string{"lease.read", "lease.cancel", "lease.resource.register"} {
+		decision, err := store.CheckPolicy(contracts.PolicyCheckRequest{
+			SubjectID: "sub_component",
+			Action:    action,
+			Resource:  "res_gpu_0",
+		})
+		if err != nil {
+			t.Fatalf("component policy %s: %v", action, err)
+		}
+		if !decision.Allowed {
+			t.Fatalf("component denied for %s: %#v", action, decision)
+		}
+	}
+	componentRelease, err := store.CheckPolicy(contracts.PolicyCheckRequest{
+		SubjectID: "sub_component",
+		Action:    "lease.release",
+		Resource:  "lease_1",
+	})
+	if err != nil {
+		t.Fatalf("component release policy: %v", err)
+	}
+	if componentRelease.Allowed {
+		t.Fatalf("component lease release allowed: %#v", componentRelease)
+	}
 
 	_, err = store.CreateRule(contracts.CreatePolicyRuleRequest{
 		SubjectID: "sub_runner",

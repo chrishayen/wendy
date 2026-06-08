@@ -42,8 +42,14 @@ func TestComponentServiceAudienceMetadataForRouteAwareAuth(t *testing.T) {
 
 	assertOperationAudience(t, doc, "/v1/jobs", "get", []string{"component", "worker"})
 	assertOperationAudience(t, doc, "/v1/jobs/{job_id}", "get", []string{"component", "worker"})
+	assertOperationAudience(t, doc, "/v1/resources", "post", []string{"component"})
+	assertOperationAudience(t, doc, "/v1/lease-requests", "post", []string{"worker"})
+	assertOperationAudience(t, doc, "/v1/leases/{lease_id}/release", "post", []string{"worker"})
 	assertOperationAudience(t, doc, "/v1/artifacts/register-local", "post", []string{"worker"})
 	assertOperationAudience(t, doc, "/v1/artifacts/{artifact_id}/content", "get", []string{"component"})
+	assertOperationPolicyAction(t, doc, "/v1/resources", "post", "lease.resource.register")
+	assertOperationPolicyAction(t, doc, "/v1/lease-requests", "post", "lease.request")
+	assertOperationPolicyAction(t, doc, "/v1/leases/{lease_id}/release", "post", "lease.release")
 	assertOperationPolicyAction(t, doc, "/v1/artifacts/register-local", "post", "artifact.register")
 	assertOperationPolicyAction(t, doc, "/v1/artifacts/{artifact_id}/content", "get", "artifact.read")
 }

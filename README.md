@@ -221,6 +221,10 @@ read policy context, and retrieve artifact content. Use
 `-policy-credential` when the policy service itself is protected by a component
 transport token.
 
+`pacp-leases` also supports C08-backed route-aware auth. Worker credentials can
+request leases, heartbeat active leases, and release leases; component
+credentials can register resources and inspect resource or lease state.
+
 Command provider bridge route files map each capability id to a command array.
 The command receives `ProviderInvokeRequest` JSON on stdin and must write
 `ProviderInvokeResponse` JSON on stdout. Route files can set literal

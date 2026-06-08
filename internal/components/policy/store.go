@@ -527,11 +527,22 @@ func builtinDecision(req contracts.PolicyCheckRequest, scopes []string) contract
 		if hasScope(scopes, "agent") {
 			return ownerScoped(req.SubjectID, req.Context, false)
 		}
+	case "lease.read", "lease.cancel":
+		if hasScope(scopes, "component") {
+			return allow("allowed_by_component_scope")
+		}
+		if hasScope(scopes, "worker") {
+			return allow("allowed_by_worker_scope")
+		}
+	case "lease.resource.register":
+		if hasScope(scopes, "component") {
+			return allow("allowed_by_component_scope")
+		}
 	case "auth.verify", "policy.check", "catalog.read", "catalog.route.read", "job.create":
 		if hasScope(scopes, "component") {
 			return allow("allowed_by_component_scope")
 		}
-	case "job.execute", "lease.request", "lease.release", "artifact.register", "node.read", "node.service.start", "provider.invoke":
+	case "job.execute", "lease.request", "lease.heartbeat", "lease.release", "artifact.register", "node.read", "node.service.start", "provider.invoke":
 		if hasScope(scopes, "worker") {
 			return allow("allowed_by_worker_scope")
 		}

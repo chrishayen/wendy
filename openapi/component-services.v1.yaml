@@ -410,6 +410,8 @@ paths:
     get:
       tags: [leases]
       operationId: listResources
+      x-operation-audience: [component, worker]
+      x-policy-action: lease.read
       parameters:
         - name: selector
           in: query
@@ -423,6 +425,8 @@ paths:
     post:
       tags: [leases]
       operationId: registerResource
+      x-operation-audience: component
+      x-policy-action: lease.resource.register
       requestBody:
         required: true
         content:
@@ -438,6 +442,8 @@ paths:
     get:
       tags: [leases]
       operationId: getResource
+      x-operation-audience: [component, worker]
+      x-policy-action: lease.read
       parameters:
         - $ref: "#/components/parameters/ResourceID"
       responses:
@@ -449,6 +455,8 @@ paths:
     get:
       tags: [leases]
       operationId: inspectResource
+      x-operation-audience: [component, worker]
+      x-policy-action: lease.read
       parameters:
         - $ref: "#/components/parameters/ResourceID"
       responses:
@@ -460,6 +468,8 @@ paths:
     post:
       tags: [leases]
       operationId: createLeaseRequest
+      x-operation-audience: worker
+      x-policy-action: lease.request
       requestBody:
         required: true
         content:
@@ -475,6 +485,8 @@ paths:
     get:
       tags: [leases]
       operationId: getLeaseRequest
+      x-operation-audience: [component, worker]
+      x-policy-action: lease.read
       parameters:
         - $ref: "#/components/parameters/RequestID"
       responses:
@@ -486,6 +498,8 @@ paths:
     post:
       tags: [leases]
       operationId: cancelLeaseRequest
+      x-operation-audience: [component, worker]
+      x-policy-action: lease.cancel
       parameters:
         - $ref: "#/components/parameters/RequestID"
       requestBody:
@@ -503,6 +517,8 @@ paths:
     get:
       tags: [leases]
       operationId: getLease
+      x-operation-audience: [component, worker]
+      x-policy-action: lease.read
       parameters:
         - $ref: "#/components/parameters/LeaseID"
       responses:
@@ -514,6 +530,8 @@ paths:
     post:
       tags: [leases]
       operationId: heartbeatLease
+      x-operation-audience: worker
+      x-policy-action: lease.heartbeat
       parameters:
         - $ref: "#/components/parameters/LeaseID"
       requestBody:
@@ -531,6 +549,8 @@ paths:
     post:
       tags: [leases]
       operationId: releaseLease
+      x-operation-audience: worker
+      x-policy-action: lease.release
       parameters:
         - $ref: "#/components/parameters/LeaseID"
         - $ref: "#/components/parameters/IdempotencyKeyRequired"
