@@ -18,15 +18,15 @@ import (
 	"testing"
 	"time"
 
-	"pacp/internal/components/artifacts"
-	"pacp/internal/components/jobs"
-	"pacp/internal/components/leases"
-	"pacp/internal/components/noderegistry"
-	"pacp/internal/components/policy"
-	"pacp/internal/contracts"
-	"pacp/internal/observability"
-	"pacp/internal/provider"
-	"pacp/internal/transportauth"
+	"wendy/internal/components/artifacts"
+	"wendy/internal/components/jobs"
+	"wendy/internal/components/leases"
+	"wendy/internal/components/noderegistry"
+	"wendy/internal/components/policy"
+	"wendy/internal/contracts"
+	"wendy/internal/observability"
+	"wendy/internal/provider"
+	"wendy/internal/transportauth"
 )
 
 func TestRunnerCompletesJobAndUploadsArtifact(t *testing.T) {

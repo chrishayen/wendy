@@ -6,7 +6,7 @@ import (
 	"net/http"
 	"strings"
 
-	"pacp/internal/contracts"
+	"wendy/internal/contracts"
 )
 
 func RequireBearer(next http.Handler, token string) http.Handler {

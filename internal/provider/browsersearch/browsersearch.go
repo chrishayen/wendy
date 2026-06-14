@@ -15,8 +15,8 @@ import (
 
 	"golang.org/x/net/html"
 
-	"pacp/internal/contracts"
-	"pacp/internal/provider"
+	"wendy/internal/contracts"
+	"wendy/internal/provider"
 )
 
 const (
@@ -225,7 +225,7 @@ func (p *browserSearchProvider) fetch(ctx context.Context, req contracts.Provide
 		return contracts.ProviderInvokeResponse{}, err
 	}
 	httpReq.Header.Set("Accept", "text/html,text/plain;q=0.9,*/*;q=0.1")
-	httpReq.Header.Set("User-Agent", "pacp-browser-search-provider/0.1")
+	httpReq.Header.Set("User-Agent", "wendy-browser-search-provider/0.1")
 	resp, err := p.client.Do(httpReq)
 	if err != nil {
 		return contracts.ProviderInvokeResponse{}, fmt.Errorf("%w: %s", provider.ErrBackend, err)

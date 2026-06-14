@@ -18,8 +18,8 @@ import (
 	"sync"
 	"time"
 
-	"pacp/internal/contracts"
-	"pacp/internal/provider"
+	"wendy/internal/contracts"
+	"wendy/internal/provider"
 )
 
 const (
@@ -885,7 +885,7 @@ func (g *generator) submitPrompt(ctx context.Context, req request, requestID str
 	}
 	body := map[string]any{"prompt": rendered}
 	if requestID != "" {
-		body["client_id"] = "pacp-" + requestID
+		body["client_id"] = "wendy-" + requestID
 	}
 	var response promptResponse
 	if err := g.postJSON(ctx, g.cfg.ComfyUIURL+"/prompt", body, &response); err != nil {

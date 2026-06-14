@@ -7,7 +7,7 @@ import (
 	"sync"
 	"time"
 
-	"pacp/internal/contracts"
+	"wendy/internal/contracts"
 )
 
 type HTTPMetrics struct {

@@ -68,7 +68,7 @@ This layout was approved by a read-only constraint validator before generation. 
 
 The same boundaries should map naturally to a Go implementation:
 
-- `cmd/pacp-gateway` or `internal/components/gateway`
+- `cmd/wendy-gateway` or `internal/components/gateway`
 - `internal/components/catalog`
 - `internal/components/jobs`
 - `internal/components/leases`
@@ -76,4 +76,4 @@ The same boundaries should map naturally to a Go implementation:
 - `internal/components/policy`
 - `internal/components/nodeagent`
 - `internal/providers/comfyui`
-- `cmd/pacp-runner` or `internal/runners/composition`
+- `cmd/wendy-runner` or `internal/runners/composition`

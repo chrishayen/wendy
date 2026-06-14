@@ -1,4 +1,4 @@
-module pacp
+module wendy
 
 go 1.25.0
 

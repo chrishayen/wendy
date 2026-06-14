@@ -13,9 +13,9 @@ import (
 	"net/url"
 	"strings"
 
-	"pacp/internal/contracts"
-	"pacp/internal/observability"
-	"pacp/internal/provider"
+	"wendy/internal/contracts"
+	"wendy/internal/observability"
+	"wendy/internal/provider"
 )
 
 type ProviderCheckOptions struct {

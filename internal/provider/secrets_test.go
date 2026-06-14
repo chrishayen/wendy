@@ -7,10 +7,10 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"pacp/internal/components/policy"
-	"pacp/internal/contracts"
-	"pacp/internal/observability"
-	"pacp/internal/transportauth"
+	"wendy/internal/components/policy"
+	"wendy/internal/contracts"
+	"wendy/internal/observability"
+	"wendy/internal/transportauth"
 )
 
 func TestPolicySecretResolverUsesPolicyAPI(t *testing.T) {

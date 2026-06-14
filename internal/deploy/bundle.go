@@ -7,7 +7,7 @@ import (
 	"strings"
 	"unicode"
 
-	"pacp/internal/contracts"
+	"wendy/internal/contracts"
 )
 
 const (

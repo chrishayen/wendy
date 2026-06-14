@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"pacp/internal/contracts"
+	"wendy/internal/contracts"
 )
 
 type ScopeRule struct {

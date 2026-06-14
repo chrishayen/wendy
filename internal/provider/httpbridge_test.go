@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"pacp/internal/contracts"
+	"wendy/internal/contracts"
 )
 
 func TestHTTPBridgeForwardsProviderInvokeRequest(t *testing.T) {
@@ -70,7 +70,7 @@ func TestHTTPBridgeForwardsProviderInvokeRequest(t *testing.T) {
 }
 
 func TestHTTPBridgeSupportsHeadersFromEnv(t *testing.T) {
-	t.Setenv("PACP_TEST_BACKEND_TOKEN", "Bearer env-token")
+	t.Setenv("WENDY_TEST_BACKEND_TOKEN", "Bearer env-token")
 	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Authorization") != "Bearer env-token" {
 			t.Fatalf("Authorization = %q", r.Header.Get("Authorization"))
@@ -85,7 +85,7 @@ func TestHTTPBridgeSupportsHeadersFromEnv(t *testing.T) {
 		Routes: map[string]HTTPBridgeRoute{
 			"cap_bridge_echo": {
 				URL:            backend.URL,
-				HeadersFromEnv: map[string]string{"Authorization": "PACP_TEST_BACKEND_TOKEN"},
+				HeadersFromEnv: map[string]string{"Authorization": "WENDY_TEST_BACKEND_TOKEN"},
 			},
 		},
 		Client: backend.Client(),
@@ -179,7 +179,7 @@ func TestHTTPBridgeRejectsMissingHeaderEnv(t *testing.T) {
 		Routes: map[string]HTTPBridgeRoute{
 			"cap_bridge_echo": {
 				URL:            "http://backend.invalid/invoke",
-				HeadersFromEnv: map[string]string{"Authorization": "PACP_TEST_MISSING_BACKEND_TOKEN"},
+				HeadersFromEnv: map[string]string{"Authorization": "WENDY_TEST_MISSING_BACKEND_TOKEN"},
 			},
 		},
 	})

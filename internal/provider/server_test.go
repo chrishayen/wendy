@@ -9,7 +9,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"pacp/internal/contracts"
+	"wendy/internal/contracts"
 )
 
 func TestServerManifestHealthAndInvoke(t *testing.T) {

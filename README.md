@@ -1,6 +1,6 @@
-# PACP
+# Wendy
 
-PACP is a pluggable agent control plane. It gives agents one gateway for
+Wendy is a pluggable agent control plane. It gives agents one gateway for
 discovering tools, invoking provider capabilities, running asynchronous jobs,
 leasing host resources, and collecting artifacts.
 
@@ -11,7 +11,7 @@ hosts:
 client -> gateway/control plane -> runner -> runtime node -> provider
 ```
 
-The fastest way to use it is the `pacp` CLI. The older component CLIs still
+The fastest way to use it is the `wendy` CLI. The older component CLIs still
 exist for debugging and custom deployments, but they are not required for the
 normal path.
 
@@ -28,28 +28,28 @@ normal path.
 Start a complete local stack:
 
 ```sh
-go run ./cmd/pacp up
+go run ./cmd/wendy up
 ```
 
 The first run creates:
 
-- `pacp.yaml`: local configuration with generated credentials.
-- `.pacp/`: state files and artifacts.
+- `wendy.yaml`: local configuration with generated credentials.
+- `.wendy/`: state files and artifacts.
 
 Both are ignored by git.
 
 In another terminal, call the gateway:
 
 ```sh
-go run ./cmd/pacp status
-go run ./cmd/pacp tools
-go run ./cmd/pacp invoke cap_dev_echo --input '{"message":"hello"}'
+go run ./cmd/wendy status
+go run ./cmd/wendy tools
+go run ./cmd/wendy invoke cap_dev_echo --input '{"message":"hello"}'
 ```
 
 Run an async tool and wait for completion:
 
 ```sh
-go run ./cmd/pacp invoke cap_dev_artifact \
+go run ./cmd/wendy invoke cap_dev_artifact \
   --input '{"prompt":"red mug"}' \
   --wait
 ```
@@ -57,20 +57,20 @@ go run ./cmd/pacp invoke cap_dev_artifact \
 Download artifacts from a completed job:
 
 ```sh
-go run ./cmd/pacp artifacts job_000001 --out-dir ./pacp-output
+go run ./cmd/wendy artifacts job_000001 --out-dir ./wendy-output
 ```
 
 If you prefer a binary:
 
 ```sh
 mkdir -p bin
-go build -o bin/pacp ./cmd/pacp
-./bin/pacp up
+go build -o bin/wendy ./cmd/wendy
+./bin/wendy up
 ```
 
 ## Configuration
 
-`pacp.yaml` is the main interface. A generated local config looks like this in
+`wendy.yaml` is the main interface. A generated local config looks like this in
 shape:
 
 ```yaml
@@ -89,15 +89,15 @@ primary:
     policy: 18085
     gateway: 18086
     provider: 18088
-  state_dir: .pacp/state
-  artifact_root: .pacp/artifacts
+  state_dir: .wendy/state
+  artifact_root: .wendy/artifacts
   embedded_runner: true
 
 credentials:
-  agent: ${PACP_AGENT_TOKEN}
-  component: ${PACP_COMPONENT_TOKEN}
-  runner: ${PACP_RUNNER_TOKEN}
-  node_admin: ${PACP_NODE_ADMIN_TOKEN}
+  agent: ${WENDY_AGENT_TOKEN}
+  component: ${WENDY_COMPONENT_TOKEN}
+  runner: ${WENDY_RUNNER_TOKEN}
+  node_admin: ${WENDY_NODE_ADMIN_TOKEN}
 
 providers:
   - service_id: svc_dev_provider
@@ -119,22 +119,22 @@ nodes:
         tags: [gpu, dev]
 ```
 
-Generated configs contain real token values. Keep `pacp.yaml` private, or use
-environment references like `${PACP_AGENT_TOKEN}` before sharing the file.
+Generated configs contain real token values. Keep `wendy.yaml` private, or use
+environment references like `${WENDY_AGENT_TOKEN}` before sharing the file.
 
 Useful config commands:
 
 ```sh
-go run ./cmd/pacp init
-go run ./cmd/pacp init --profile distributed
-go run ./cmd/pacp admin credentials
-go run ./cmd/pacp admin credentials --show
+go run ./cmd/wendy init
+go run ./cmd/wendy init --profile distributed
+go run ./cmd/wendy admin credentials
+go run ./cmd/wendy admin credentials --show
 ```
 
 Use `-c` to point at a different config:
 
 ```sh
-go run ./cmd/pacp -c ./deploy/pacp.yaml tools
+go run ./cmd/wendy -c ./deploy/wendy.yaml tools
 ```
 
 ## Multi-Host Setup
@@ -145,10 +145,10 @@ machines.
 On the primary host:
 
 ```sh
-go run ./cmd/pacp init --profile distributed
+go run ./cmd/wendy init --profile distributed
 ```
 
-Edit `pacp.yaml`:
+Edit `wendy.yaml`:
 
 - Set `primary.host` to an address other hosts can reach.
 - Set `primary.bind_host` to `0.0.0.0` if the primary should listen on all
@@ -163,26 +163,26 @@ Edit `pacp.yaml`:
 Start the primary role:
 
 ```sh
-go run ./cmd/pacp primary up
+go run ./cmd/wendy primary up
 ```
 
 On a runtime node host:
 
 ```sh
-go run ./cmd/pacp -c pacp.yaml node up --node node_local
+go run ./cmd/wendy -c wendy.yaml node up --node node_local
 ```
 
 On a provider host:
 
 ```sh
-go run ./cmd/pacp -c pacp.yaml provider up --service svc_generic_gpu_image
+go run ./cmd/wendy -c wendy.yaml provider up --service svc_generic_gpu_image
 ```
 
 From a client machine that can reach the primary gateway:
 
 ```sh
-go run ./cmd/pacp -c pacp.yaml tools
-go run ./cmd/pacp -c pacp.yaml invoke cap_image_generate \
+go run ./cmd/wendy -c wendy.yaml tools
+go run ./cmd/wendy -c wendy.yaml invoke cap_image_generate \
   --input '{"prompt":"red mug","width":512,"height":512}' \
   --wait
 ```
@@ -218,47 +218,47 @@ nodes:
         tags: [gpu]
 ```
 
-`addr` is where the PACP provider listens. `endpoint` is the URL the runner uses
+`addr` is where the Wendy provider listens. `endpoint` is the URL the runner uses
 to reach it.
 
 ## Command Reference
 
 ```text
-pacp init [--profile local|distributed] [--force]
-pacp up [--no-runner]
-pacp primary up
-pacp node up --node <node-id>
-pacp provider up --service <service-id>
-pacp status
-pacp tools
-pacp invoke <capability-id> [--input JSON] [--mode sync|async] [--wait]
-pacp artifacts <job-id> [--out-dir dir]
-pacp admin credentials [--show]
-pacp admin health
+wendy init [--profile local|distributed] [--force]
+wendy up [--no-runner]
+wendy primary up
+wendy node up --node <node-id>
+wendy provider up --service <service-id>
+wendy status
+wendy tools
+wendy invoke <capability-id> [--input JSON] [--mode sync|async] [--wait]
+wendy artifacts <job-id> [--out-dir dir]
+wendy admin credentials [--show]
+wendy admin health
 ```
 
 Role summary:
 
-- `pacp up`: local all-in-one stack with control plane, provider, and runner.
-- `pacp primary up`: control plane and runner, without starting a provider.
-- `pacp node up`: runtime node API for a configured node.
-- `pacp provider up`: provider API for a configured service.
+- `wendy up`: local all-in-one stack with control plane, provider, and runner.
+- `wendy primary up`: control plane and runner, without starting a provider.
+- `wendy node up`: runtime node API for a configured node.
+- `wendy provider up`: provider API for a configured service.
 
 ## Advanced Tools
 
 The lower-level binaries are still available when you need direct control:
 
-- `pacp-primary`: combined control-plane process with many explicit flags.
-- `pacp-node`: runtime node agent.
-- `pacp-runner`: standalone runner.
-- `pacp-control`: gateway client.
-- `pacp-admin`: operator client.
-- `pacp-bundle`: renders deployment bundle files.
-- `pacp-catalog`, `pacp-jobs`, `pacp-leases`, `pacp-artifacts`,
-  `pacp-policy`, `pacp-gateway`: individual control-plane components.
+- `wendy-primary`: combined control-plane process with many explicit flags.
+- `wendy-node`: runtime node agent.
+- `wendy-runner`: standalone runner.
+- `wendy-control`: gateway client.
+- `wendy-admin`: operator client.
+- `wendy-bundle`: renders deployment bundle files.
+- `wendy-catalog`, `wendy-jobs`, `wendy-leases`, `wendy-artifacts`,
+  `wendy-policy`, `wendy-gateway`: individual control-plane components.
 
 Use these for contract work, compatibility checks, or custom deployments. New
-users should start with `pacp`.
+users should start with `wendy`.
 
 ## Provider Development
 
@@ -268,18 +268,18 @@ artifact hints, input schemas, and output schemas.
 Validate a manifest:
 
 ```sh
-go run ./cmd/pacp-validate manifest testdata/manifests/comfyui-gpu.json
+go run ./cmd/wendy-validate manifest testdata/manifests/comfyui-gpu.json
 ```
 
 Validate invocation payloads:
 
 ```sh
-go run ./cmd/pacp-validate provider-invoke \
+go run ./cmd/wendy-validate provider-invoke \
   -manifest testdata/manifests/comfyui-gpu.json \
   -capability cap_sample_image_generate_gpu \
   testdata/validate/provider-invoke-image.json
 
-go run ./cmd/pacp-validate tool-invoke \
+go run ./cmd/wendy-validate tool-invoke \
   -manifest testdata/manifests/comfyui-gpu.json \
   -capability cap_sample_image_generate_gpu \
   testdata/validate/tool-invoke-image.json
@@ -290,9 +290,9 @@ command bridges, ComfyUI, speech, and AI Toolkit providers.
 
 ## Security Notes
 
-- `pacp.yaml` contains credentials when generated. Do not commit it.
-- `.pacp/` contains state and artifacts. Do not commit it.
-- `pacp admin credentials --show` prints secret values.
+- `wendy.yaml` contains credentials when generated. Do not commit it.
+- `.wendy/` contains state and artifacts. Do not commit it.
+- `wendy admin credentials --show` prints secret values.
 - For shared configs, prefer `${ENV_VAR}` references for credentials.
 - Use private interfaces, firewall rules, or a reverse proxy when exposing
   component ports outside a trusted network.
@@ -314,9 +314,9 @@ GOCACHE=/tmp/go-build-cache go test ./...
 Useful smoke checks:
 
 ```sh
-go run ./cmd/pacp-contract-smoke
-go run ./cmd/pacp-contract-smoke -distributed
-go run ./cmd/pacp-contract-smoke -process-distributed -timeout 30s
+go run ./cmd/wendy-contract-smoke
+go run ./cmd/wendy-contract-smoke -distributed
+go run ./cmd/wendy-contract-smoke -process-distributed -timeout 30s
 ```
 
 Important fixtures:

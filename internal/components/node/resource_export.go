@@ -1,6 +1,6 @@
 package node
 
-import "pacp/internal/contracts"
+import "wendy/internal/contracts"
 
 func LeaseResourceRegistrations(cfg contracts.NodeConfig) []contracts.RegisterResourceRequest {
 	resources := make([]contracts.RegisterResourceRequest, 0, len(cfg.Resources))

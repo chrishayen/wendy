@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"pacp/internal/contracts"
+	"wendy/internal/contracts"
 )
 
 func TestRenderBundleProducesNativeComponentInputs(t *testing.T) {

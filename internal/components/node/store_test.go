@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"pacp/internal/contracts"
+	"wendy/internal/contracts"
 )
 
 func TestStoreLifecycleAndAuth(t *testing.T) {

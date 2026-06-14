@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"pacp/internal/contracts"
+	"wendy/internal/contracts"
 )
 
 type CommandBridgeConfig struct {
@@ -117,19 +117,19 @@ func commandEnvironment(values map[string]string, invokeContext contracts.Provid
 		env = append(env, key+"="+value)
 	}
 	if invokeContext.RequestID != "" {
-		env = append(env, "PACP_REQUEST_ID="+invokeContext.RequestID)
+		env = append(env, "WENDY_REQUEST_ID="+invokeContext.RequestID)
 	}
 	if invokeContext.SubjectID != "" {
-		env = append(env, "PACP_SUBJECT_ID="+invokeContext.SubjectID)
+		env = append(env, "WENDY_SUBJECT_ID="+invokeContext.SubjectID)
 	}
 	if invokeContext.JobID != "" {
-		env = append(env, "PACP_JOB_ID="+invokeContext.JobID)
+		env = append(env, "WENDY_JOB_ID="+invokeContext.JobID)
 	}
 	if invokeContext.ResourceLeaseID != "" {
-		env = append(env, "PACP_RESOURCE_LEASE_ID="+invokeContext.ResourceLeaseID)
+		env = append(env, "WENDY_RESOURCE_LEASE_ID="+invokeContext.ResourceLeaseID)
 	}
 	if invokeContext.ArtifactBaseURL != "" {
-		env = append(env, "PACP_ARTIFACT_BASE_URL="+invokeContext.ArtifactBaseURL)
+		env = append(env, "WENDY_ARTIFACT_BASE_URL="+invokeContext.ArtifactBaseURL)
 	}
 	return env
 }

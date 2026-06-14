@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"pacp/internal/testkit"
+	"wendy/internal/testkit"
 )
 
 func TestDryRunValidatesWithoutContentRefs(t *testing.T) {

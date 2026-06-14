@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"sync"
 
-	"pacp/internal/contracts"
+	"wendy/internal/contracts"
 )
 
 type idempotencyStore struct {

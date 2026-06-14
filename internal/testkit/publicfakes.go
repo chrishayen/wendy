@@ -16,8 +16,8 @@ import (
 	"sync"
 	"time"
 
-	"pacp/internal/contracts"
-	"pacp/internal/provider"
+	"wendy/internal/contracts"
+	"wendy/internal/provider"
 )
 
 type FakeComponentConfig struct {

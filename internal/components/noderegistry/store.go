@@ -11,7 +11,7 @@ import (
 	"sync"
 	"time"
 
-	"pacp/internal/contracts"
+	"wendy/internal/contracts"
 )
 
 var (

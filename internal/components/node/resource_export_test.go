@@ -3,7 +3,7 @@ package node
 import (
 	"testing"
 
-	"pacp/internal/contracts"
+	"wendy/internal/contracts"
 )
 
 func TestLeaseResourceRegistrationsFromNodeConfig(t *testing.T) {

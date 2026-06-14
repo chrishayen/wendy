@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"pacp/internal/contracts"
+	"wendy/internal/contracts"
 )
 
 func TestLoadAndValidateS003Scenario(t *testing.T) {

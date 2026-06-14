@@ -4,11 +4,11 @@ import (
 	"context"
 	"strings"
 
-	"pacp/internal/contracts"
+	"wendy/internal/contracts"
 )
 
 // AsyncCapabilityHandler adapts provider-local async acceptance into ordinary
-// provider output. It does not create PACP jobs or expose provider-run APIs.
+// provider output. It does not create Wendy jobs or expose provider-run APIs.
 type AsyncCapabilityHandler func(context.Context, contracts.ProviderInvokeRequest) (AcceptedHandle, error)
 
 type AcceptedHandle struct {

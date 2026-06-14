@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"pacp/internal/contracts"
+	"wendy/internal/contracts"
 )
 
 type ManifestBuilder struct {

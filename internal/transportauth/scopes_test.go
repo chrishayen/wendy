@@ -6,7 +6,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"pacp/internal/contracts"
+	"wendy/internal/contracts"
 )
 
 func TestRequireVerifiedScopesAllowsMatchingScope(t *testing.T) {

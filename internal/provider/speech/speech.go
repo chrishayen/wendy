@@ -15,8 +15,8 @@ import (
 	"strings"
 	"time"
 
-	"pacp/internal/contracts"
-	"pacp/internal/provider"
+	"wendy/internal/contracts"
+	"wendy/internal/provider"
 )
 
 const (

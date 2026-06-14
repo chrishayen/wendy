@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"pacp/internal/contracts"
+	"wendy/internal/contracts"
 )
 
 func TestJobLifecycle(t *testing.T) {

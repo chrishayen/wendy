@@ -11,7 +11,7 @@ import (
 	"time"
 	"unicode"
 
-	"pacp/internal/contracts"
+	"wendy/internal/contracts"
 )
 
 var (

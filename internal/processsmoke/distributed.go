@@ -16,7 +16,7 @@ import (
 	"syscall"
 	"time"
 
-	"pacp/internal/contracts"
+	"wendy/internal/contracts"
 )
 
 type Config struct {
@@ -90,7 +90,7 @@ func RunDistributed(ctx context.Context, cfg Config) Report {
 		report.add(Check{Name: "process.repo_root", Error: err.Error()})
 		return report
 	}
-	workDir, err := os.MkdirTemp("", "pacp-process-distributed-*")
+	workDir, err := os.MkdirTemp("", "wendy-process-distributed-*")
 	if err != nil {
 		report.add(Check{Name: "process.workdir", Error: err.Error()})
 		return report
@@ -135,13 +135,13 @@ func RunDistributed(ctx context.Context, cfg Config) Report {
 	providerURL := "http://" + p.provider
 	nodeURL := "http://" + p.node
 	primaryURLs := primaryProcessURLs(p)
-	if !start("provider", "run", "./cmd/pacp-fake-provider", "-addr", p.provider, "-endpoint", providerURL, "-provider-credential", processRunnerToken) {
+	if !start("provider", "run", "./cmd/wendy-fake-provider", "-addr", p.provider, "-endpoint", providerURL, "-provider-credential", processRunnerToken) {
 		return report
 	}
 	if !waitHealth(runCtx, providerURL+"/v1/provider/health", "", "provider.health", &report) {
 		return report
 	}
-	if !start("primary", "run", "./cmd/pacp-primary",
+	if !start("primary", "run", "./cmd/wendy-primary",
 		"-catalog-addr", p.catalog,
 		"-jobs-addr", p.jobs,
 		"-leases-addr", p.leases,
@@ -167,7 +167,7 @@ func RunDistributed(ctx context.Context, cfg Config) Report {
 	if !waitHealth(runCtx, primaryURLs.nodeRegistry+"/v1/node-registry/health", "Bearer "+processComponentToken, "node_registry.health", &report) {
 		return report
 	}
-	if !start("node", "run", "./cmd/pacp-node",
+	if !start("node", "run", "./cmd/wendy-node",
 		"-addr", p.node,
 		"-config", files.nodeConfig,
 		"-node-registry-url", primaryURLs.nodeRegistry,
@@ -194,7 +194,7 @@ func RunDistributed(ctx context.Context, cfg Config) Report {
 	}
 	report.JobID = jobID
 
-	runnerProc, err := startGoProcess(runCtx, root, cfg.GoBinary, "runner", "run", "./cmd/pacp-runner",
+	runnerProc, err := startGoProcess(runCtx, root, cfg.GoBinary, "runner", "run", "./cmd/wendy-runner",
 		"-once",
 		"-worker-id", "runner_process_smoke",
 		"-actor-subject-id", processRunnerID,

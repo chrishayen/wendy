@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"pacp/internal/contracts"
+	"wendy/internal/contracts"
 )
 
 func TestStoreCreatesVerifiesAndRevokesAPIKeys(t *testing.T) {

@@ -1,62 +1,62 @@
 openapi: 3.1.0
 info:
-  title: PACP Component Services API
+  title: Wendy Component Services API
   version: v1
-  description: Internal distributed HTTP contracts between PACP components, runners, nodes, and operators.
+  description: Internal distributed HTTP contracts between Wendy components, runners, nodes, and operators.
 servers:
   - url: "{catalog_url}"
     description: Configured catalog service base URL.
     variables:
       catalog_url:
-        default: https://catalog.pacp.example
+        default: https://catalog.wendy.example
         description: Replace with the deployed catalog URL, or a local development URL.
   - url: "{jobs_url}"
     description: Configured jobs service base URL.
     variables:
       jobs_url:
-        default: https://jobs.pacp.example
+        default: https://jobs.wendy.example
         description: Replace with the deployed jobs URL, or a local development URL.
   - url: "{leases_url}"
     description: Configured leases service base URL.
     variables:
       leases_url:
-        default: https://leases.pacp.example
+        default: https://leases.wendy.example
         description: Replace with the deployed leases URL, or a local development URL.
   - url: "{artifacts_url}"
     description: Configured artifacts service base URL.
     variables:
       artifacts_url:
-        default: https://artifacts.pacp.example
+        default: https://artifacts.wendy.example
         description: Replace with the deployed artifacts URL, or a local development URL.
   - url: "{policy_url}"
     description: Configured policy service base URL.
     variables:
       policy_url:
-        default: https://policy.pacp.example
+        default: https://policy.wendy.example
         description: Replace with the deployed policy URL, or a local development URL.
   - url: "{node_registry_url}"
     description: Configured node registry service base URL.
     variables:
       node_registry_url:
-        default: https://node-registry.pacp.example
+        default: https://node-registry.wendy.example
         description: Replace with the deployed node registry URL, or a local development URL.
   - url: "{node_url}"
     description: Configured node service base URL.
     variables:
       node_url:
-        default: https://node.pacp.example
+        default: https://node.wendy.example
         description: Replace with the deployed node URL, or a local development URL.
   - url: "{provider_url}"
     description: Configured provider service base URL.
     variables:
       provider_url:
-        default: https://provider.pacp.example
+        default: https://provider.wendy.example
         description: Replace with the deployed provider URL, or a local development URL.
   - url: "{runner_url}"
     description: Configured runner monitor service base URL.
     variables:
       runner_url:
-        default: https://runner.pacp.example
+        default: https://runner.wendy.example
         description: Replace with the deployed runner monitor URL, or a local development URL.
 security:
   - componentBearer: []
@@ -1442,7 +1442,7 @@ components:
     runnerMonitorBearer:
       type: http
       scheme: bearer
-      description: Optional bearer credential configured with pacp-runner -monitor-token.
+      description: Optional bearer credential configured with wendy-runner -monitor-token.
   parameters:
     ActorSubjectID:
       name: X-Actor-Subject-ID

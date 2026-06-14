@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"pacp/internal/contracts"
+	"wendy/internal/contracts"
 )
 
 func TestCheckComponentValidatesHealthAndMetrics(t *testing.T) {

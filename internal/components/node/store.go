@@ -14,7 +14,7 @@ import (
 	"syscall"
 	"time"
 
-	"pacp/internal/contracts"
+	"wendy/internal/contracts"
 )
 
 var (

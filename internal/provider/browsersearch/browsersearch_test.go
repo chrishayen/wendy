@@ -67,7 +67,7 @@ func TestSearchHonorsSafetyOptions(t *testing.T) {
 func TestFetchExtractsAllowedHTMLPage(t *testing.T) {
 	page := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		_, _ = w.Write([]byte(`<html><head><title>Docs</title></head><body><main>Hello <strong>PACP</strong></main><a href="/next">Next page</a></body></html>`))
+		_, _ = w.Write([]byte(`<html><head><title>Docs</title></head><body><main>Hello <strong>Wendy</strong></main><a href="/next">Next page</a></body></html>`))
 	}))
 	defer page.Close()
 	parsed, err := url.Parse(page.URL)
@@ -85,7 +85,7 @@ func TestFetchExtractsAllowedHTMLPage(t *testing.T) {
 	if output["action"] != "extract" || output["status"].(float64) != 200 || output["title"] != "Docs" {
 		t.Fatalf("output = %#v", output)
 	}
-	if !strings.Contains(output["text"].(string), "Hello PACP") {
+	if !strings.Contains(output["text"].(string), "Hello Wendy") {
 		t.Fatalf("text = %q", output["text"])
 	}
 	links := output["links"].([]any)

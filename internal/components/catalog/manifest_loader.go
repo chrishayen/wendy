@@ -8,7 +8,7 @@ import (
 	"sort"
 	"strings"
 
-	"pacp/internal/contracts"
+	"wendy/internal/contracts"
 )
 
 func LoadManifestFile(path string) (contracts.ProviderManifest, error) {

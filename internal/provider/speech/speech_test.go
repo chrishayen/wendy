@@ -11,14 +11,14 @@ import (
 	"strings"
 	"testing"
 
-	"pacp/internal/contracts"
+	"wendy/internal/contracts"
 )
 
 func TestDryRunTTSGeneratesAudioArtifact(t *testing.T) {
 	server := newTestServer(t, Config{Endpoint: "http://provider.local", DryRun: true, VoiceCatalogPath: writeCatalog(t)})
 
 	data := invoke(t, server, DefaultTTSCapabilityID, map[string]any{
-		"text":   "hello from PACP",
+		"text":   "hello from Wendy",
 		"voice":  "narrator",
 		"format": "wav",
 		"speed":  1.25,
@@ -45,7 +45,7 @@ func TestDryRunTTSGeneratesAudioArtifact(t *testing.T) {
 func TestDryRunTTSDefaultsToCatalogVoice(t *testing.T) {
 	server := newTestServer(t, Config{Endpoint: "http://provider.local", DryRun: true, VoiceCatalogPath: writeCatalog(t)})
 
-	data := invoke(t, server, DefaultTTSCapabilityID, map[string]any{"text": "hello from PACP"}, http.StatusOK)
+	data := invoke(t, server, DefaultTTSCapabilityID, map[string]any{"text": "hello from Wendy"}, http.StatusOK)
 
 	output := data["output"].(map[string]any)
 	if output["voice"] != "narrator" || output["format"] != "wav" || output["speed"].(float64) != defaultTTSSpeed || output["pitch"].(float64) != defaultTTSPitch {

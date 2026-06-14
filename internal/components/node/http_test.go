@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"pacp/internal/contracts"
-	"pacp/internal/testkit"
+	"wendy/internal/contracts"
+	"wendy/internal/testkit"
 )
 
 func TestHandlerReplaysS003ReadAndAuthFixtures(t *testing.T) {

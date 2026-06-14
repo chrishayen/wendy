@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"os"
 
-	"pacp/internal/contracts"
+	"wendy/internal/contracts"
 )
 
 type SeedFile struct {

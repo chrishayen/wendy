@@ -1,14 +1,14 @@
 openapi: 3.1.0
 info:
-  title: PACP Agent Gateway API
+  title: Wendy Agent Gateway API
   version: v1
   description: Agent-facing public API for tool discovery, invocation, job status, logs, resource queues, artifacts, and artifact content.
 servers:
   - url: "{gateway_url}"
-    description: Configured PACP gateway base URL.
+    description: Configured Wendy gateway base URL.
     variables:
       gateway_url:
-        default: https://gateway.pacp.example
+        default: https://gateway.wendy.example
         description: Replace with the deployed gateway URL, or a local development URL.
 security:
   - bearerAuth: []

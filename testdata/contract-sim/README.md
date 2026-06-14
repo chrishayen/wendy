@@ -1,8 +1,8 @@
-# PACP Contract Simulation
+# Wendy Contract Simulation
 
 This folder applies the reusable `Agent contract role play framework` to the Pluggable Agent Control Plane requirements.
 
-The goal is to validate PACP as a distributed service host for arbitrary services, not only the example services named in the raw idea. Every scenario should preserve the component isolation rule: a component should provide standalone value, own its boundary, and avoid knowledge of siblings except through explicit contracts.
+The goal is to validate Wendy as a distributed service host for arbitrary services, not only the example services named in the raw idea. Every scenario should preserve the component isolation rule: a component should provide standalone value, own its boundary, and avoid knowledge of siblings except through explicit contracts.
 
 ## Folder Map
 

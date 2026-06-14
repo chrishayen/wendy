@@ -8,7 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"pacp/internal/contracts"
+	"wendy/internal/contracts"
 )
 
 type Manifest struct {

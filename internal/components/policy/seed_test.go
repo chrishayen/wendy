@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"pacp/internal/contracts"
+	"wendy/internal/contracts"
 )
 
 func TestLoadSeedFileAndApplySeedIdempotently(t *testing.T) {

@@ -19,14 +19,14 @@ import (
 	"strings"
 	"testing"
 
-	"pacp/internal/components/artifacts"
-	"pacp/internal/components/catalog"
-	"pacp/internal/components/jobs"
-	"pacp/internal/components/leases"
-	"pacp/internal/components/policy"
-	"pacp/internal/contracts"
-	"pacp/internal/provider"
-	"pacp/internal/testkit"
+	"wendy/internal/components/artifacts"
+	"wendy/internal/components/catalog"
+	"wendy/internal/components/jobs"
+	"wendy/internal/components/leases"
+	"wendy/internal/components/policy"
+	"wendy/internal/contracts"
+	"wendy/internal/provider"
+	"wendy/internal/testkit"
 )
 
 func TestGatewayHealthDoesNotRequireDownstreamServices(t *testing.T) {

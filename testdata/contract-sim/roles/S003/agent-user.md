@@ -8,7 +8,7 @@
 
 ## Purpose
 
-Represent an external automation agent using PACP through the public API. This role only knows the public OpenAPI-facing behavior supplied here.
+Represent an external automation agent using Wendy through the public API. This role only knows the public OpenAPI-facing behavior supplied here.
 
 ## Allowed Knowledge
 

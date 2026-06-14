@@ -11,8 +11,8 @@ import (
 	"strings"
 	"time"
 
-	"pacp/internal/contracts"
-	"pacp/internal/observability"
+	"wendy/internal/contracts"
+	"wendy/internal/observability"
 )
 
 type SecretResolver interface {

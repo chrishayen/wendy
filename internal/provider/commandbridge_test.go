@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"pacp/internal/contracts"
+	"wendy/internal/contracts"
 )
 
 func TestCommandBridgeRunsConfiguredCommand(t *testing.T) {
@@ -44,12 +44,12 @@ func TestCommandBridgeRunsConfiguredCommand(t *testing.T) {
 }
 
 func TestCommandBridgeSupportsEnvironmentFromEnv(t *testing.T) {
-	t.Setenv("PACP_TEST_COMMAND_TOKEN", "env-token")
+	t.Setenv("WENDY_TEST_COMMAND_TOKEN", "env-token")
 	server, err := NewCommandBridgeServer(bridgeManifest(), CommandBridgeConfig{
 		Routes: map[string]CommandBridgeRoute{
 			"cap_bridge_echo": {
 				Command:            helperCommand(t, "env"),
-				EnvironmentFromEnv: map[string]string{"BACKEND_TOKEN": "PACP_TEST_COMMAND_TOKEN"},
+				EnvironmentFromEnv: map[string]string{"BACKEND_TOKEN": "WENDY_TEST_COMMAND_TOKEN"},
 			},
 		},
 	})
@@ -110,12 +110,12 @@ func TestCommandBridgeSupportsProviderAuthCredential(t *testing.T) {
 }
 
 func TestCommandBridgeExposesInvokeContextEnvironment(t *testing.T) {
-	t.Setenv("PACP_TEST_COMMAND_TOKEN", "env-token")
+	t.Setenv("WENDY_TEST_COMMAND_TOKEN", "env-token")
 	server, err := NewCommandBridgeServer(bridgeManifest(), CommandBridgeConfig{
 		Routes: map[string]CommandBridgeRoute{
 			"cap_bridge_echo": {
 				Command:            helperCommand(t, "env"),
-				EnvironmentFromEnv: map[string]string{"BACKEND_TOKEN": "PACP_TEST_COMMAND_TOKEN"},
+				EnvironmentFromEnv: map[string]string{"BACKEND_TOKEN": "WENDY_TEST_COMMAND_TOKEN"},
 			},
 		},
 	})
@@ -215,7 +215,7 @@ func TestCommandBridgeRejectsMissingEnvSource(t *testing.T) {
 		Routes: map[string]CommandBridgeRoute{
 			"cap_bridge_echo": {
 				Command:            helperCommand(t, "echo"),
-				EnvironmentFromEnv: map[string]string{"BACKEND_TOKEN": "PACP_TEST_MISSING_COMMAND_TOKEN"},
+				EnvironmentFromEnv: map[string]string{"BACKEND_TOKEN": "WENDY_TEST_MISSING_COMMAND_TOKEN"},
 			},
 		},
 	})
@@ -302,11 +302,11 @@ func writeCommandBridgeHelperResponse(req contracts.ProviderInvokeRequest, token
 		response.Output["token"] = token
 	}
 	for outputName, envName := range map[string]string{
-		"request_id_env":        "PACP_REQUEST_ID",
-		"subject_id_env":        "PACP_SUBJECT_ID",
-		"job_id_env":            "PACP_JOB_ID",
-		"resource_lease_id_env": "PACP_RESOURCE_LEASE_ID",
-		"artifact_base_url_env": "PACP_ARTIFACT_BASE_URL",
+		"request_id_env":        "WENDY_REQUEST_ID",
+		"subject_id_env":        "WENDY_SUBJECT_ID",
+		"job_id_env":            "WENDY_JOB_ID",
+		"resource_lease_id_env": "WENDY_RESOURCE_LEASE_ID",
+		"artifact_base_url_env": "WENDY_ARTIFACT_BASE_URL",
 	} {
 		if value := os.Getenv(envName); value != "" {
 			response.Output[outputName] = value

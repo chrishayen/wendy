@@ -18,19 +18,19 @@ import (
 	"sync/atomic"
 	"time"
 
-	"pacp/internal/components/artifacts"
-	"pacp/internal/components/catalog"
-	"pacp/internal/components/gateway"
-	"pacp/internal/components/jobs"
-	"pacp/internal/components/leases"
-	"pacp/internal/components/node"
-	"pacp/internal/components/policy"
-	"pacp/internal/contracts"
-	"pacp/internal/provider"
-	"pacp/internal/routeauth"
-	"pacp/internal/runner"
-	"pacp/internal/testkit"
-	"pacp/internal/transportauth"
+	"wendy/internal/components/artifacts"
+	"wendy/internal/components/catalog"
+	"wendy/internal/components/gateway"
+	"wendy/internal/components/jobs"
+	"wendy/internal/components/leases"
+	"wendy/internal/components/node"
+	"wendy/internal/components/policy"
+	"wendy/internal/contracts"
+	"wendy/internal/provider"
+	"wendy/internal/routeauth"
+	"wendy/internal/runner"
+	"wendy/internal/testkit"
+	"wendy/internal/transportauth"
 )
 
 type rawSuccessEnvelope struct {
@@ -150,7 +150,7 @@ func Run(ctx context.Context) DistributedSmokeReport {
 		return report
 	}
 
-	artifactRoot, err := os.MkdirTemp("", "pacp-distributed-smoke-artifacts-*")
+	artifactRoot, err := os.MkdirTemp("", "wendy-distributed-smoke-artifacts-*")
 	if err != nil {
 		report.add(DistributedSmokeCheck{Name: "artifacts.root", Error: err.Error()})
 		return report

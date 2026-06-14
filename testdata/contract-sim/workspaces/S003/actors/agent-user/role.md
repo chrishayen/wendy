@@ -9,7 +9,7 @@
 
 ## Purpose
 
-Represent an external automation agent using only PACP public APIs.
+Represent an external automation agent using only Wendy public APIs.
 
 ## Owns
 

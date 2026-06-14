@@ -7,8 +7,8 @@ import (
 	"strconv"
 	"strings"
 
-	"pacp/internal/contracts"
-	"pacp/internal/observability"
+	"wendy/internal/contracts"
+	"wendy/internal/observability"
 )
 
 type Handler struct {

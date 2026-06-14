@@ -8,8 +8,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"pacp/internal/contracts"
-	"pacp/internal/testkit"
+	"wendy/internal/contracts"
+	"wendy/internal/testkit"
 )
 
 func TestHandlerReplaysS003AuthAndPolicyFixtures(t *testing.T) {

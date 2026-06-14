@@ -4,7 +4,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"pacp/internal/contracts"
+	"wendy/internal/contracts"
 )
 
 func sampleManifest(t *testing.T) contracts.ProviderManifest {

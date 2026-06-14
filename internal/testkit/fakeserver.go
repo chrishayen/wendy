@@ -13,7 +13,7 @@ import (
 	"strings"
 	"sync"
 
-	"pacp/internal/contracts"
+	"wendy/internal/contracts"
 )
 
 type FixtureServer struct {

@@ -7,8 +7,8 @@ import (
 	"net/http"
 	"strings"
 
-	"pacp/internal/contracts"
-	"pacp/internal/observability"
+	"wendy/internal/contracts"
+	"wendy/internal/observability"
 )
 
 type ComponentCheckOptions struct {

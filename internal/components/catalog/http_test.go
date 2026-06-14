@@ -11,8 +11,8 @@ import (
 	"reflect"
 	"testing"
 
-	"pacp/internal/contracts"
-	"pacp/internal/testkit"
+	"wendy/internal/contracts"
+	"wendy/internal/testkit"
 )
 
 func TestHTTPMatchesS003CatalogFixtures(t *testing.T) {

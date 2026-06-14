@@ -11,8 +11,8 @@ import (
 	"testing"
 	"time"
 
-	"pacp/internal/contracts"
-	"pacp/internal/testkit"
+	"wendy/internal/contracts"
+	"wendy/internal/testkit"
 )
 
 func TestHandlerUploadLifecycleAndContentRead(t *testing.T) {

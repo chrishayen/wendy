@@ -3,7 +3,7 @@ package routeauth
 import (
 	"net/http"
 
-	"pacp/internal/transportauth"
+	"wendy/internal/transportauth"
 )
 
 func CatalogScopeRules() []transportauth.ScopeRule {

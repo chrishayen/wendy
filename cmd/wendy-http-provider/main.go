@@ -1,0 +1,115 @@
+package main
+
+import (
+	"encoding/json"
+	"flag"
+	"log"
+	"net/http"
+	"os"
+	"strings"
+
+	"wendy/internal/contracts"
+	"wendy/internal/provider"
+)
+
+type routeConfigFile struct {
+	Routes map[string]provider.HTTPBridgeRoute `json:"routes"`
+}
+
+func main() {
+	addr := flag.String("addr", "localhost:18088", "listen address")
+	manifestPath := flag.String("manifest", "", "provider manifest JSON path")
+	routesPath := flag.String("routes", "", "HTTP route config JSON path")
+	endpoint := flag.String("endpoint", providerEndpointDefault(), "provider endpoint advertised in the manifest")
+	providerCredential := flag.String("provider-credential", envFirst("WENDY_PROVIDER_CREDENTIAL", "WENDY_PROVIDER_TOKEN"), "optional provider bearer credential required for invoke and content routes")
+	policyURL := flag.String("policy-url", os.Getenv("WENDY_PROVIDER_POLICY_URL"), "optional policy service base URL used to resolve route secret refs")
+	policyCredential := flag.String("policy-credential", envFirst("WENDY_PROVIDER_POLICY_CREDENTIAL", "WENDY_COMPONENT_TOKEN"), "optional policy service bearer credential used to resolve route secret refs")
+	secretSubjectID := flag.String("secret-subject-id", os.Getenv("WENDY_PROVIDER_SECRET_SUBJECT_ID"), "optional policy subject id used to resolve route secret refs")
+	flag.Parse()
+	if *manifestPath == "" {
+		log.Fatal("-manifest is required")
+	}
+	if *routesPath == "" {
+		log.Fatal("-routes is required")
+	}
+
+	var manifest contracts.ProviderManifest
+	if err := loadJSONFile(*manifestPath, &manifest); err != nil {
+		log.Fatal(err)
+	}
+	if *endpoint != "" {
+		manifest.Provider.Endpoint = *endpoint
+	} else if manifest.Provider.Endpoint == "" {
+		manifest.Provider.Endpoint = defaultEndpoint(*addr)
+	}
+	if manifest.Provider.HealthPath == "" {
+		manifest.Provider.HealthPath = "/v1/provider/health"
+	}
+
+	var routeConfig routeConfigFile
+	if err := loadJSONFile(*routesPath, &routeConfig); err != nil {
+		log.Fatal(err)
+	}
+	server, err := provider.NewHTTPBridgeServer(manifest, provider.HTTPBridgeConfig{
+		Routes:         routeConfig.Routes,
+		SecretResolver: secretResolver(*policyURL, *policyCredential, *secretSubjectID),
+		AuthCredential: *providerCredential,
+	})
+	if err != nil {
+		log.Fatal(err)
+	}
+	log.Printf("serving HTTP bridge provider addr=%s", *addr)
+	if err := http.ListenAndServe(*addr, server); err != nil {
+		log.Fatal(err)
+	}
+}
+
+func loadJSONFile(path string, out any) error {
+	body, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	return json.Unmarshal(body, out)
+}
+
+func providerEndpointDefault() string {
+	return os.Getenv("WENDY_PROVIDER_ENDPOINT")
+}
+
+func defaultEndpoint(addr string) string {
+	if strings.HasPrefix(addr, ":") {
+		addr = "localhost" + addr
+	}
+	return "http://" + addr
+}
+
+func secretResolver(policyURL, credential, subjectID string) provider.SecretResolver {
+	if policyURL == "" && subjectID == "" {
+		return nil
+	}
+	return provider.PolicySecretResolver{
+		PolicyURL:  policyURL,
+		Credential: authorizationHeader(credential),
+		SubjectID:  subjectID,
+	}
+}
+
+func authorizationHeader(token string) string {
+	token = strings.TrimSpace(token)
+	if token == "" {
+		return ""
+	}
+	if strings.HasPrefix(strings.ToLower(token), "bearer ") {
+		return token
+	}
+	return "Bearer " + token
+}
+
+func envFirst(names ...string) string {
+	for _, name := range names {
+		if value := os.Getenv(name); value != "" {
+			return value
+		}
+	}
+	return ""
+}

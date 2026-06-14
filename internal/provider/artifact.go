@@ -3,7 +3,7 @@ package provider
 import (
 	"context"
 
-	"pacp/internal/contracts"
+	"wendy/internal/contracts"
 )
 
 type ArtifactCapabilityHandler func(context.Context, contracts.ProviderInvokeRequest) (ArtifactResult, error)
